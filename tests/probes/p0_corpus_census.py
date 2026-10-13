@@ -3,10 +3,10 @@
 只读。不打开 PDF 内容，只统计路径、大小、时间戳与目录分布。
 
 用法:
-    python tests/probes/p0_corpus_census.py --roots "C:/Users/lavie" "H:/" --out .probe_work/p0.json --limit 600
+    python tests/probes/p0_corpus_census.py --roots "C:/Users/<用户名>" "H:/" --out .probe_work/p0.json --limit 600
 
 结果写 UTF-8 JSON 文件（不写 stdout：Windows 控制台是 GBK，重定向会把中文路径写成非 UTF-8 字节）。
-含个人路径，产物目录 .probe_work/ 已在 .gitignore 内，只有聚合数字进 docs/verification/。
+含个人路径，产物目录 .probe_work/ 已在 .gitignore 内，只有聚合数字进 docs/00-阶段0验证结论.md。
 """
 from __future__ import annotations
 
