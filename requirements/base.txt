@@ -1,7 +1,7 @@
 # 基础运行时 —— 装上就能做「扫描 + 全文检索 + 阅读 + 归档」。
 # 不含 OCR 与语义（那两个是可选增强，见 ocr.txt / semantic.txt）。
 #
-# 版本钉死的理由全部来自阶段 0 实测，见 docs/00-阶段0验证结论.md 第二节。
+# 版本钉死的理由全部来自阶段 0 实测，见 docs/VERIFICATION.md 第二节。
 # 改任何一行之前先读那段；不要改成 >=。
 
 # UI：6.12.0 在本机 Win10 19045 上 import 即 WinError 127（Qt6Core.dll 引用了本机没有的导出）
@@ -21,4 +21,4 @@ numpy==2.4.6
 psutil==7.2.2
 
 # SQLite / FTS5 用 Python 标准库 sqlite3（本机自带 3.41.2，满足 trigram 的 >=3.34 要求）。
-# 禁止改用系统 sqlite3.dll，也禁止引入 pysqlite3-binary —— 见 docs/00 第一节最后一行。
+# 禁止改用系统 sqlite3.dll，也禁止引入 pysqlite3-binary —— 见 docs/VERIFICATION 第一节最后一行。

@@ -10,7 +10,7 @@ coloredlogs
 flatbuffers
 
 # ---------------------------------------------------------------------------
-# 装包陷阱（阶段 0 实测，docs/00-阶段0验证结论.md 2.2）
+# 装包陷阱（阶段 0 实测，docs/VERIFICATION.md 2.2）
 #
 # 1. `rapidocr-onnxruntime` 声明依赖 `onnxruntime>=1.7.0`，而本项目用的是
 #    `onnxruntime-directml`。pip **不知道** directml 版也提供 onnxruntime，
@@ -31,6 +31,6 @@ flatbuffers
 # 之后任何一次 `pip install` 都可能把纯 onnxruntime 重新拽回来，
 # 所以 `tests/guards/test_dependency_pins.py` 是**每次开工先跑**的门禁（G21）。
 #
-# CUDA 不在任何选项里：本机 Pascal(sm_61) 实测无 CUDAExecutionProvider（docs/00 2.3）。
+# CUDA 不在任何选项里：本机 Pascal(sm_61) 实测无 CUDAExecutionProvider（docs/VERIFICATION 2.3）。
 # 不选 paddleocr / easyocr：体积与依赖面大得多，且没有 DirectML 后端。
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ src/pdfarchiver/
     models.py             #   表结构常量与行数据类
     repositories/         #   每张表/聚合的读写；只有这里能写 SQL
   fs/                     # 文件扫描与监测层
-    identity.py           #   路径规范化与文件身份（规则见 docs/00 4.8 与 docs/02 二·2.1）
+    identity.py           #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
     scanner.py            #   全量/增量扫描，产出变更集
     watcher.py            #   watchdog 封装，只产事件，不改库
     exclude.py            #   排除规则
@@ -46,7 +46,7 @@ src/pdfarchiver/
   services/               # 应用服务层：把上面各层编排成用例（ScanService 等）
   ui/                     # UI 层，只用 services/，不 import db.repositories
     main_window.py
-    pages/                #   每个界面一个文件，对应 docs/05-界面清单.md 的编号
+    pages/                #   每个界面一个文件，对应 docs/UI-SCREENS.md 的编号
     workers.py            #   QThread/Signal 桥；主线程绝不做扫描/索引/OCR
     models_qt.py          #   Qt 表格/树模型（虚拟化）
   diagnostics/            # crash.log / state.log / 自检页数据源
@@ -54,8 +54,9 @@ tests/
   probes/                 # 阶段 0 的技术验证探针（保留，可重跑）
   unit/                   # 纯逻辑，无 UI、无真实文件
   integration/            # 临时目录 + 真实 SQLite + 真实 PDF 样本
-  guards/                 # 门禁：架构依赖方向、性能红线、文档同步
-docs/                     # 设计文档、故障指导书、Bug 台账、工程整理记录
+  guards/                 # pytest 形态的守卫：依赖版本锁、架构依赖方向、性能红线
+gates/                    # 门禁链（01_deps_guard … 09_readback，串联取数→校验→发布，末行 VERDICT: ALL GREEN）
+docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表
 requirements/             # 分层依赖清单
 ```
 
@@ -117,7 +118,7 @@ OCR 文本        ──► 同一张 FTS5，source_kind='ocr'     依赖：ocr 
 | D5 | 主记录唯一性用 `path_key COLLATE NOCASE` 唯一索引 | P7：重叠根重复扫描 3 条记录不膨胀；大小写变体被索引拒绝 | 已验证 |
 | D6 | OCR/嵌入后端默认 DirectML，CPU 兜底 | P5：OCR **6.36×**（25,835→4,062ms/页均值）；P6：嵌入 **7.8×**（18.8→146.9 chunks/s）；CUDA 本机实测不可用 | 已验证 |
 | D6b | 量化（int8）**不作为提速手段**，只用于省体积 | P6：int8+DirectML 79.3 chunks/s **慢于** fp32 的 146.9 —— 「量化必提速」已被证伪 | 已验证 |
-| D6c | OCR 移出自动索引流程，改为显式触发 | P5：全量 101 万页需 1,144h(DML)，而无人值守预算反算是 284ms/页，实测 3,281ms | 已验证（范围待用户勾，docs/03 2.2） |
+| D6c | OCR 移出自动索引流程，改为显式触发 | P5：全量 101 万页需 1,144h(DML)，而无人值守预算反算是 284ms/页，实测 3,281ms | 已验证（范围待用户勾，docs/RISKS 2.2） |
 | D7 | onnxruntime 只装 directml 单一发行版 | 2.2：两个发行版共存导致 import 段错误 | 已验证 |
 | D8 | 全文与向量分库存放 | P1：trigram 索引 ≈ 原文 6.9×；P6：4.04M 向量 fp32 ≈ 7.7GB | 设计中 |
 | D9 | 阅读器用 PyMuPDF 渲染 + QtPdf 备选 | P3：两条通道都出图，fitz 135ms/页中位、QtPdf 43–50ms | 已验证 |

@@ -8,19 +8,19 @@
 | --- | --- | --- | --- | --- | --- |
 | I1 | 全量 OCR 在本机不可行：DirectML 单页中位 **3,281ms**，无人值守反算预算 **284ms**，差 11.6× | **OPEN** | `p5_ocr_result.json`；`VERDICT: RED` | 扫描版正文搜不到（抽样 37.5% 是纯扫描件） | 用户就 Q3 三选一，并把选定方案写回 SPEC 阶段 5 验收标准 |
 | I2 | 全文索引外推 **28–48GB**（×10 档 280–480GB 直接不可行） | **OPEN** | p2 中位 2,294.6 字/页 × 100.8 万文本页 × 实测膨胀 4.03–6.91× | 决定产品形态，不只是容量问题 | 用户就 Q2 三选一 |
-| I3 | `pip check` 报 `rapidocr-onnxruntime requires onnxruntime, which is not installed` | **MITIGATED** | 本轮 `pip check` 原文（见 docs/07 附） | 看着像坏了，其实是我们**故意**只留 directml 发行版 | 依赖守卫 G21 把这条精确措辞列为唯一允许的错误；任何其他 `pip check` 输出判失败。需在 README 写明「不要修这条」 |
-| I4 | `PySide6 6.12` / `onnxruntime>=1.21` 在本机装得上但用不了 | **MITIGATED** | docs/00 2.1、2.2 | 误升级会让应用起不来，且 ORT 共存是**段错误不是报错** | G21 已挡；升级任一者必须先重跑 p3/p5/p6/p8 |
+| I3 | `pip check` 报 `rapidocr-onnxruntime requires onnxruntime, which is not installed` | **MITIGATED** | 本轮 `pip check` 原文（见 docs/ISSUES 附） | 看着像坏了，其实是我们**故意**只留 directml 发行版 | 依赖守卫 G21 把这条精确措辞列为唯一允许的错误；任何其他 `pip check` 输出判失败。需在 README 写明「不要修这条」 |
+| I4 | `PySide6 6.12` / `onnxruntime>=1.21` 在本机装得上但用不了 | **MITIGATED** | docs/VERIFICATION 2.1、2.2 | 误升级会让应用起不来，且 ORT 共存是**段错误不是报错** | G21 已挡；升级任一者必须先重跑 p3/p5/p6/p8 |
 | I5 | 文件监听对「被监听根被改名/删除」完全盲（实测 **0 事件**） | **OPEN** | `p4_watchdog_result.json` `root_renamed.delta_events == 0` | 只靠事件 → 索引与磁盘长期不一致 | 阶段 2 实现 G12 根存在性自检 ≤ 60s；阶段 3 有 L4 压测证据 |
 | I6 | 停止监听期间的变更，事件流永远看不见 | **MITIGATED** | p4 `offline_change.detectable_only_by_scan == true` | 冷启动必须有一次全量对账 | 阶段 2 全量扫描 + 增量事件两条路都在，且有对账测试 |
 | I7 | FTS5 **没有** `offsets()`（`no such function`） | **CLOSED** | p1 `aux.offsets.works == false` | 命中高亮/偏移方案要改 | 已定 D2：Python 侧算偏移；断言已在 p1 固化 |
-| I8 | FTS5 外部内容表 `'delete'` 命令少带一列 → 静默留幽灵行，**SQLite 不报错** | **MITIGATED** | docs/02 三 · 硬规则 3；p1 `external_content_sync` | 删掉的文件还能搜到，且看不出来 | 阶段 2 起 G10（幽灵行数 = 0）常驻每阶段门禁 |
+| I8 | FTS5 外部内容表 `'delete'` 命令少带一列 → 静默留幽灵行，**SQLite 不报错** | **MITIGATED** | docs/DATABASE 三 · 硬规则 3；p1 `external_content_sync` | 删掉的文件还能搜到，且看不出来 | 阶段 2 起 G10（幽灵行数 = 0）常驻每阶段门禁 |
 | I9 | 8.3 短名把空格吃掉（`报告 A.pdf` → `报告A~1.PDF`），纯字符串规范化归一不了 | **CLOSED** | p7 `short_name` 全组 | 同一文件产生多条主记录 | 已定 D4：`os.path.realpath` 必走；p7 15 条断言全绿 |
 | I10 | 目标机 `LongPathsEnabled` 无法假设（本机 =1 是现状不是前提） | **OPEN** | p7 注册表实读 | 长路径中文目录归档可能失败 | 阶段 4 归档目标路径生成前自检 + 可读错误文案（不许抛 WinError 3） |
-| I11 | 语义质量只有 **8 对我自造的**相关/无关样本，不足以验收 | **OPEN** | docs/03 2.4 | 可能"模型跑通但检索难用" | 用户给 Q5 的 20 条真实查询 → 建 G15 Recall@10 |
+| I11 | 语义质量只有 **8 对我自造的**相关/无关样本，不足以验收 | **OPEN** | docs/RISKS 2.4 | 可能"模型跑通但检索难用" | 用户给 Q5 的 20 条真实查询 → 建 G15 Recall@10 |
 | I12 | 向量检索未选型：404 万块 fp32 = 7.71GB，暴力扫需要 8GB 级内存装不下 | **OPEN** | p6 `scale` | 阶段 6 起不来 | 用户就 Q6 三选一；选型后必须实测建库时间，不许照搬宣传数字 |
-| I13 | 语料实测 **7,768 份 / 120.6GB / 202 万页**，SPEC 写的是"约 5,000 份" | **MITIGATED** | p0 / p2 | 按错的量级算红线会全线失真 | 已按实测基线 + ×10 档重写 docs/04；SPEC 待用户确认后同步 |
+| I13 | 语料实测 **7,768 份 / 120.6GB / 202 万页**，SPEC 写的是"约 5,000 份" | **MITIGATED** | p0 / p2 | 按错的量级算红线会全线失真 | 已按实测基线 + ×10 档重写 docs/TESTING；SPEC 待用户确认后同步 |
 | I14 | 打包只验了 `--onedir`，`--onefile` 未测 | **OPEN** | p8 | 若最终要单文件分发，数据目录位置策略要重做 | 阶段 7 前明确是否要 onefile；不要就标 `WONTFIX` |
-| I15 | 界面屏数与线框**未经确认**，UI 代码一行不许写 | **OPEN** | docs/05 | 阻塞阶段 1 | 用户答 Q7；每屏 ≥2 个高差异黑白线框逐屏确认 |
+| I15 | 界面屏数与线框**未经确认**，UI 代码一行不许写 | **OPEN** | docs/UI-SCREENS | 阻塞阶段 1 | 用户答 Q7；每屏 ≥2 个高差异黑白线框逐屏确认 |
 | I16 | 组合起来的内存上限没压测过（各组件是单点测的） | **OPEN** | p2/p3/p5/p6 各自 RSS；且本轮实测机器 **load 85%、可用内存仅 2.33GB** | G8 的 1.2GB 目前是推算不是实测；机器不是空载的 | 阶段 2 L4 实测：UI + 索引 + 一个后台任务同时活的峰值；并在低可用内存时刻各跑一次 |
 
 ## 附 · I3 的 `pip check` 原文
@@ -30,13 +30,13 @@ rapidocr-onnxruntime 1.4.4 requires onnxruntime, which is not installed.
 ```
 
 **这一行是预期的，不要去"修"它。** 修它的办法是把纯 `onnxruntime` 装回来，而那正是
-docs/00 2.2 里 `import onnxruntime` 段错误（exit 139）的成因。
+docs/VERIFICATION 2.2 里 `import onnxruntime` 段错误（exit 139）的成因。
 
 ## 附 · 归并过的同类问题（防止逐个打补丁）
 
 | 类别 | 一次声明的规则 | 已覆盖的实例 |
 | --- | --- | --- |
 | 「库没坏，是我调错方法」 | 判定不可用之前必须先核对**真实签名**，再收紧断言 | p3 QtPdf 的 `render/close/metaData/getAllText(page)`；`QFontDatabase.families()` 是静态方法 |
-| 「断言能骗过」 | 每条新断言先用坏法真注入一次，做不到就删掉 | docs/04 四 · 10 条实例，含 2 条已删除的假断言 |
+| 「断言能骗过」 | 每条新断言先用坏法真注入一次，做不到就删掉 | docs/TESTING 四 · 10 条实例，含 2 条已删除的假断言 |
 | 「阈值拍脑袋」 | 阈值只有两种合法来源：实测单耗 × 量级反算，或标注 **[约定]** 待确认 | G1/G12 **[约定]**；其余 **[反算]** |
 | 「乱码不是 bug 是编码」 | 探针统一 `stdout.reconfigure(utf-8)` + 结果写 UTF-8 JSON | p0/p2/p5/p6 的中文输出 |

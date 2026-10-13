@@ -1,6 +1,6 @@
 """G21 依赖钉版守卫：版本装错不是报错，是段错误 —— 所以必须在 import 之前拦住。
 
-证据来源 docs/00-阶段0验证结论.md 第二节：
+证据来源 docs/VERIFICATION.md 第二节：
   - PySide6 6.12.0 在 Win10 19045 上 import 即 WinError 127
   - onnxruntime >=1.21 全部 WinError 1114 DLL 初始化失败
   - 纯 onnxruntime 与 onnxruntime-directml 共存 -> import 直接 exit 139（无异常可捕获）
@@ -18,6 +18,12 @@ import sys
 
 class PinError(AssertionError):
     """守卫失败。消息里必须写清「违反了哪条实测结论」。"""
+
+
+def _interp_note() -> str:
+    """版本守卫最常见的"假阳性"是用错解释器（项目外还有别的 Python，
+    里面装着 torch 之类被禁的包）。红的时候必须能一眼看出是哪台解释器。"""
+    return f"（当前解释器：{sys.executable}；本项目只认 .venv 里的依赖）"
 
 
 def _ver(s: str) -> tuple[int, ...]:
@@ -52,9 +58,11 @@ def _assert_pin(name: str, allowed_max: str | None = None, exact: str | None = N
     if got is None:
         return "-"
     if exact is not None and got != exact:
-        raise PinError(f"{name}=={exact} 是实测唯一可用版本，当前 {got}")
+        raise PinError(f"{name}=={exact} 是实测唯一可用版本，当前 {got} {_interp_note()}")
     if allowed_max is not None and _ver(got) > _ver(allowed_max):
-        raise PinError(f"{name} 必须 <= {allowed_max}（更高版本在本机 DLL 初始化失败），当前 {got}")
+        raise PinError(
+            f"{name} 必须 <= {allowed_max}（更高版本在本机 DLL 初始化失败），当前 {got} {_interp_note()}"
+        )
     return got
 
 
@@ -110,7 +118,9 @@ def test_no_gpu_framework_that_pulls_cuda() -> None:
     就会把「CUDA 可用与否」变成运行期隐式分支，本项目只允许 onnxruntime + DirectML。"""
     for banned in ("torch", "tensorflow", "paddlepaddle", "transformers", "sentence-transformers"):
         if _dist_version(banned) is not None:
-            raise PinError(f"依赖树里出现了 {banned}；本项目的推理路径只有 onnxruntime-directml")
+            raise PinError(
+                f"依赖树里出现了 {banned}；本项目的推理路径只有 onnxruntime-directml {_interp_note()}"
+            )
 
 
 def _self_check() -> int:

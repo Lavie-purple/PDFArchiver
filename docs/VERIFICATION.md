@@ -19,7 +19,7 @@
 | OS | Windows 10 build 19045（`sys.getwindowsversion()`） | 已确认 |
 | 机器名 / 架构 | `DESKTOP-7VQSACS` / AMD64，**8 逻辑核** | 已确认 |
 | 内存 | **15.86GB** 总（= 宣称的 16GB），本次实测时刻可用仅 **2.33GB（load 85%）** | 已确认；**注意**：开发时这台机不是空载的，内存红线必须在低可用时刻也测一遍 |
-| 磁盘剩余 | C: 267.6GB 空闲；**H: 133.5GB 空闲** | 已确认；H: 的剩余空间直接约束索引体积策略（见 docs/03 2.9：外推 28–48GB） |
+| 磁盘剩余 | C: 267.6GB 空闲；**H: 133.5GB 空闲** | 已确认；H: 的剩余空间直接约束索引体积策略（见 docs/RISKS 2.9：外推 28–48GB） |
 | GPU | GTX 1060 6GB，驱动 582.66，算力 6.1（Pascal）；`nvidia-smi` 实测**空闲显存只有 1369MiB**（p5 孤跑时刻） | 已确认 |
 | 工具链 | git 2.55.0.windows.5、pip 26.2.1、PyInstaller 6.22.3 | 已确认 |
 | Python（项目 venv） | **3.11.7 64bit** | 已确认 |
@@ -106,9 +106,9 @@
 | `trigram` | 13.74s（+原始表 4.07s） | 122.9MB / **6.91×** | **6.39ms** ✅ | 499ms（退化到 LIKE 回退） | 424ms（同上） |
 | `bigram`（自写预分词） | 17.37s | 263.9MB / **14.83×** | 6.95ms | 1.42ms | 0.14ms（命中 0，需 LIKE，542ms） |
 
-- trigram ≥3 字符走 FTS，1–2 字符必须显式 LIKE 回退，否则结果静默为空 —— **这是会骗人的坑，已写进 docs/02 的硬规则**
+- trigram ≥3 字符走 FTS，1–2 字符必须显式 LIKE 回退，否则结果静默为空 —— **这是会骗人的坑，已写进 docs/DATABASE 的硬规则**
 - 可用辅助函数实测只有 `rank, snippet, bm25, highlight`；**FTS5 没有 `offsets()`**（`no such function`），高亮只能靠 `highlight()`/`snippet()`
-- external-content 表同步：insert 命中 1、update 后旧标记 0 新标记 1、delete 后 0 —— 全绿，前提是三条触发器都写对、`'delete'` 命令带上被索引列（不带就静默留幽灵行，docs/02 已作为陷阱断言固化）
+- external-content 表同步：insert 命中 1、update 后旧标记 0 新标记 1、delete 后 0 —— 全绿，前提是三条触发器都写对、`'delete'` 命令带上被索引列（不带就静默留幽灵行，docs/DATABASE 已作为陷阱断言固化）
 - 规模化下 `bm25` 取 top20 = 6.54ms
 - WAL 下 1 写 12 并发读：读 p99 = 1.01ms，无错误；`Connection.backup()` 出 364,544B 快照，`integrity_check` = ok，行数一致
 
@@ -130,7 +130,7 @@
 - **QtPdf（PySide6.QtPdf）实测可用**：真实语料 PDF（94 页）`load` = `Error.None_`，打开 26.1ms，`render` 成 1000×1400 QImage 43.4ms，图像非空，`getAllText(0)` 能取到字
   - 注意真实 API 是 `load / render / close / metaData(field) / getAllText(pageIdx)`，**不是** `renderPage / unload / metadata`；第一轮"QtPdf 不可用"是我调错方法，不是库的问题
 - PyMuPDF → QImage 桥接：`pix.samples` + `Format_RGB888` + `.copy()`，转换 2.6ms（fitz 侧 open+render 51.5ms），图像非空
-- **QWebEngineView 可用但代价另算**：实例化 RSS +32.7MB、0.29s —— 是否引入仍是待决项（docs/03 未单列，见本文 六 · C4）
+- **QWebEngineView 可用但代价另算**：实例化 RSS +32.7MB、0.29s —— 是否引入仍是待决项（docs/RISKS 未单列，见本文 六 · C4）
 - 跨线程：`QThread` + `Signal` 走 `QueuedConnection`，5 个进度事件按序 + done 载荷回主线程，往返 85.0ms
 - 中文绘制：请求 `Microsoft YaHei` 实际解析到同一 family（`resolved_ok true`），出图非方块
 - 全进程 RSS 起 45.1 → 终 139.3MB
@@ -157,9 +157,9 @@ CPU 与 DirectML 各跑同 14 页，**识别文本逐字一致**（`text_identic
 | DirectML | 1.86s | **4,062ms** | **3,281ms** | 14.8 | +335.7MB |
 
 - 加速比 **6.36×**（对比过，不是自我安慰）
-- 显存实测消耗 **701MB**，DirectML 跑完剩 668MB（起始空闲 1369MB）→ GPU 余量本就紧张，这直接支撑了 docs/01 的「GPU 任务全局串行」
+- 显存实测消耗 **701MB**，DirectML 跑完剩 668MB（起始空闲 1369MB）→ GPU 余量本就紧张，这直接支撑了 docs/ARCHITECTURE 的「GPU 任务全局串行」
 - **门槛不是拍脑袋定的**：由「8 小时无人值守窗口至少推进 10% 待 OCR 页」反算 → 每页预算 **284ms**。DirectML 中位 3,281ms，**差 11.6 倍**。
-  该假设标为 `A-OCR-1`，**尚未与用户确认**（docs/03 · 2.2）。
+  该假设标为 `A-OCR-1`，**尚未与用户确认**（docs/RISKS · 2.2）。
 - 全量推算（按 p0/p2 真实数字）：待 OCR 页 **1,014,112** → CPU **7,277.7h** / DirectML **1,144.2h**（每天 8h 无人值守 = **143 个工作日**）
 
 → 已验证：DirectML 快 6.36× 但远达不到无人值守预算；未达标事实保留为 RED，不调阈值粉饰。
@@ -182,7 +182,7 @@ mean-pooling 用的是**真实 attention mask**（tokenizer 默认不 padding，
 - 方向性陷阱（不是只测数值大小，是测排序方向会不会反）：查「能源」margin **+0.1206**、查「课件」margin **+0.1817**，两条都 `direction_correct true`
 - 全量向量体积：fp32 **7.71GB** / int8 1.93GB（按 2 块/页、4,044,409 块）
 
-→ 语义层可行，且**比 OCR 便宜两个数量级**（7.6h vs 1144h）。但语义检索依赖"已有文本"，扫描页没有文本就只能空有向量 —— 依赖图见 docs/01 第五节。
+→ 语义层可行，且**比 OCR 便宜两个数量级**（7.6h vs 1144h）。但语义检索依赖"已有文本"，扫描页没有文本就只能空有向量 —— 依赖图见 docs/ARCHITECTURE 第五节。
 
 ### 4.8 路径与文件身份（p7，15 条断言全绿）
 
@@ -205,7 +205,7 @@ norm(path) = os.path.realpath(path) → normpath → 反斜杠转 /
 - 断链与不可达（伪盘符、UNC）：`stat` 抛异常，`os.walk` 返回空而不崩
 - NTFS `st_dev / st_ino` 可用，且透过短名仍然一致
 
-→ 待确认：`LongPathsEnabled=1` 是本机现状，**不是可以假设的目标机前提**（docs/03 三 · 已排除伪风险第 2 条已就此留了阶段 4 自检要求）。
+→ 待确认：`LongPathsEnabled=1` 是本机现状，**不是可以假设的目标机前提**（docs/RISKS 三 · 已排除伪风险第 2 条已就此留了阶段 4 自检要求）。
 
 ### 4.9 Windows 打包（p8，PyInstaller 6.22.3 `--onedir`）
 
@@ -244,7 +244,7 @@ DirectML provider（`.dll` 被收进来了）、Qt 6.8.3 控件创建。
 | # | 事项 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | C1 | trigram vs 自写 bigram 最终选型 | **候选，待用户勾** | 两者都跑通；trigram 库小一半（6.91× vs 14.83×），bigram 短查询快（1.42ms vs 499ms）。取舍取决于用户更在意体积还是 2 字词命中速度 |
-| C2 | OCR 范围策略 | **候选，待用户勾** | 3 个编号方案见 docs/03 · 2.2；A-OCR-1 阈值假设本身也未确认 |
+| C2 | OCR 范围策略 | **候选，待用户勾** | 3 个编号方案见 docs/RISKS · 2.2；A-OCR-1 阈值假设本身也未确认 |
 | C3 | 向量存储方案（暴力扫 vs ANN） | **候选** | 404 万块 ×512 维 fp32 = 7.71GB；暴力 cosine 一遍是 2GB 级 IO。未做检索延迟实测 |
 | C4 | 是否引入 QWebEngineView | **候选** | 可用、+32.7MB，但收益未定 |
 | C5 | 语义评测集 | **未决** | p6 的 4 对相关/无关是我自造的；SPEC 要求的 20 条真实查询还没有 |
@@ -254,7 +254,7 @@ DirectML provider（`.dll` 被收进来了）、Qt 6.8.3 控件创建。
 | C9 | `--onefile` 打包 | **未测** | 当前只验证 onedir |
 | C10 | 16GB 内存下的并发上限 | **未压测** | 各组件 RSS 单点测了，组合起来没测 |
 
-（更细的风险条目与验证方法在 `docs/03-风险清单与验证方法.md`。）
+（更细的风险条目与验证方法在 `docs/RISKS.md`。）
 
 ---
 

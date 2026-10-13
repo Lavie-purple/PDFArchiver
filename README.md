@@ -26,11 +26,26 @@
 ## 仓库结构
 
 ```
-docs/          设计文档（阶段 0 验证结论 / 架构 / 数据库 / 风险 / 测试门禁 / 界面清单 / 分阶段计划 / 已知问题台账 / 阶段 0 交付报告）
-requirements/  分层依赖清单 + 版本钉死理由
-tests/probes/  阶段 0 的 9 个技术验证探针（p0..p8），可重跑，末尾打印 VERDICT
-tests/guards/  依赖钉版守卫（G21）
-src/pdfarchiver/  产品代码（阶段 1 起填充；现在是空的目录骨架）
+PROJECT_SPEC.md    需求契约：产品功能范围与不可突破的边界（按 AGENTS.md 只留在本机，不入库）
+docs/
+  README.md          工程文档索引：哪个文件负责什么、什么时候必须改它
+  VERIFICATION.md    阶段 0 实测结论与数字（所有文档里的数字都要能在这里找到出处）
+  ARCHITECTURE.md    模块划分、依赖方向、线程模型、三层检索依赖关系
+  DATABASE.md        数据模型、FTS5 接法、迁移与文件操作状态机、存储与备份分级
+  RISKS.md           高风险决策 R1–R15 + 需要你拍板的未决问题
+  DECISIONS.md       技术决策记录（含被否的替代方案与理由）
+  TESTING.md         测试分层、硬门禁 G1–G21、反向测试规则、发布门禁链
+  UI-SCREENS.md      界面清单（AGENTS.md 门禁：线框未逐屏确认前不写界面代码）
+  ROADMAP.md         分阶段实施计划与每阶段准入门槛
+  ISSUES.md          已知问题台账 I1–I16（收尾必须逐条销账）
+  CHANGELOG.md       阶段变更与版本记录
+  REPO-JOURNAL.md    仓库结构/命名/忽略规则变更记录
+  stage-reports/     每阶段交付报告
+requirements/      分层依赖清单 + 版本钉死理由
+tests/probes/      阶段 0 的 9 个技术验证探针（p0..p8），可重跑，末尾打印 VERDICT
+tests/guards/      依赖钉版守卫（G21）
+gates/             发布门禁链脚本（阶段 7 起生效）
+src/pdfarchiver/   产品代码（阶段 1 起填充；现在是空的目录骨架）
 ```
 
 ## 上手
@@ -53,11 +68,11 @@ python -m venv .venv
 
 ## 已验证 vs 未定
 
-**已验证可以直接依赖的**：10 条（`docs/00-阶段0验证结论.md` 第五节 V1–V10）。
+**已验证可以直接依赖的**：10 条（`docs/VERIFICATION.md` 第五节 V1–V10）。
 
 **还是候选、没定下来的**：中文分词最终选型、OCR 范围策略、全文索引体积策略（外推 28–48GB）、
 向量检索方案、是否引入 QWebEngine、语义检索验收标准、界面屏数与线框、监测目录范围。
-逐条列在 `docs/03-风险清单与验证方法.md` 与 `docs/00` 第六节。
+逐条列在 `docs/RISKS.md` 与 `docs/VERIFICATION` 第六节。
 
 **一条已知的坏消息**：全量 OCR 不可行 —— 实测 101 万页需 DirectML 1,144 小时（8h/天 × 143 个工作日），
-所以 OCR 只能按需触发，不能当成索引的一个自动步骤。详见 `docs/00` 4.6。
+所以 OCR 只能按需触发，不能当成索引的一个自动步骤。详见 `docs/VERIFICATION` 4.6。

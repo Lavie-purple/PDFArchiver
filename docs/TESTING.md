@@ -45,9 +45,9 @@
 | G14 | 查询向量生成 | ≤ **50ms/条**（实测 108.9ms/16 条 = 6.8ms/条） | **[反算]** p6 fp32+DML | 6 |
 | G15 | 语义召回 Recall@10 | 需你先给 **20 条真实查询-期望文档** 才能建此门禁 | 未定 —— p6 只有我自造的 8 对 | 6 |
 | G16 | 全文索引体积上限 | ≤ **?GB** —— **必须先由你拍板**，见下第三节 | **[反算]** 外推 28–48GB | 2 |
-| G17 | 文件操作崩溃恢复 | 杀掉进程后重启，`file_operations` 里每条 `pending/copying/…` 状态都能被恢复矩阵归类，**未知状态数 = 0** | docs/02 状态机 | 4 |
+| G17 | 文件操作崩溃恢复 | 杀掉进程后重启，`file_operations` 里每条 `pending/copying/…` 状态都能被恢复矩阵归类，**未知状态数 = 0** | docs/DATABASE 状态机 | 4 |
 | G18 | 撤销正确性 | 归档→撤销后，源路径存在、字节数一致、sha256 一致，**且目标已消失** | SPEC 阶段 4 | 4 |
-| G19 | 跨盘移动绝不先删源 | 断言"删源之前目标校验必须已通过"，用注入故障证明它会红 | docs/02 状态机 | 4 |
+| G19 | 跨盘移动绝不先删源 | 断言"删源之前目标校验必须已通过"，用注入故障证明它会红 | docs/DATABASE 状态机 | 4 |
 | G20 | 打包冒烟 | exe 退出码 0 且 `pymupdf/fts5_trigram/onnxruntime/qt` 四项全非空 | p8 实测全绿 | 7 |
 | G21 | 依赖守卫 | `onnxruntime`（非 directml）出现在依赖树 → **直接失败**；PySide6 ≠ 6.8.x → **直接失败**；ORT > 1.20.x → **直接失败** | 2.1/2.2（装错不是报错，是段错误 exit 139） | 全程 |
 
@@ -99,6 +99,13 @@ AGENTS.md 要求：每写完一条断言，先用"能骗过它的坏法"真注�
 ## 五 · 发布门禁链（阶段 7 起生效）
 
 一次串联，任何一环非零退出即停止，**末行必须打印 `VERDICT: ALL GREEN`，否则发不出去**：
+
+**前置条件：全部命令必须用 `.venv` 里的解释器跑**（`.venv/Scripts/python.exe -m pytest ...`）。
+用系统 Python 会让 G21 变红 —— 那不是依赖坏了，是那台解释器里装着本项目禁止的包。
+实测本机 Anaconda（`D:\3.DevelopmentProgrammingTools\anaconda3\python.exe`）里有
+`torch 2.14.0` 与 `transformers 5.16.1`，直接触发 `test_no_gpu_framework_that_pulls_cuda` 和
+`test_project_has_onnxruntime_when_optional_layers_installed`（2 failed / 4 passed）。
+守卫的失败消息里现在会打印 `当前解释器：...`，就是为了让人一眼分辨这两种红。
 
 ```
 gates/

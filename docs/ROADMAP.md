@@ -9,20 +9,20 @@
 
 ## 阶段 0 · 环境检查与技术验证 —— 已完成（本文件所属）
 
-交付物：`docs/00`–`docs/08`、`requirements/`、`tests/probes/p0..p8`、`tests/guards/test_dependency_pins.py`。
+交付物：docs/ 全套（入口 `README` + VERIFICATION / ARCHITECTURE / DATABASE / RISKS / TESTING / UI-SCREENS / ROADMAP / DECISIONS / CHANGELOG / ISSUES / REPO-JOURNAL / stage-reports）、`requirements/`、`tests/probes/p0..p8`、`tests/guards/test_dependency_pins.py`、根 `README.md`。
 
 **遗留 8 项需你拍板**（不拍板就不能进阶段 1，因为改的都是产品定义不是实现细节）：
 
 | 编号 | 要决定的事 | 出处 |
 | --- | --- | --- |
-| Q1 | trigram 还是 bigram | docs/03 2.1 |
-| Q2 | **全文索引体积策略**：全量 ~40GB / 子集 / 降密度 | docs/03 2.9（新算出来的） |
-| Q3 | OCR 范围三选一 | docs/03 2.2 |
-| Q4 | 性能红线按 8,000 份还是 ×10 档 | docs/03 2.3、docs/04 二 |
-| Q5 | 给我 20 条真实语义查询做 Recall@10 | docs/03 2.4 |
-| Q6 | 向量检索方案（暴力分库 / ANN / 降密度） | docs/03 2.5 |
-| Q7 | 界面屏数 A / B / A′，及最小窗口宽度 | docs/05 |
-| Q8 | 监测目录范围 + 数据目录 + `01-开工令.md` 条款豁免 | docs/03 2.7、2.8 |
+| Q1 | trigram 还是 bigram | docs/RISKS 2.1 |
+| Q2 | **全文索引体积策略**：全量 ~40GB / 子集 / 降密度 | docs/RISKS 2.9（新算出来的） |
+| Q3 | OCR 范围三选一 | docs/RISKS 2.2 |
+| Q4 | 性能红线按 8,000 份还是 ×10 档 | docs/RISKS 2.3、docs/TESTING 二 |
+| Q5 | 给我 20 条真实语义查询做 Recall@10 | docs/RISKS 2.4 |
+| Q6 | 向量检索方案（暴力分库 / ANN / 降密度） | docs/RISKS 2.5 |
+| Q7 | 界面屏数 A / B / A′，及最小窗口宽度 | docs/UI-SCREENS |
+| Q8 | 监测目录范围 + 数据目录 + `01-开工令.md` 条款豁免 | docs/RISKS 2.7、2.8 |
 
 ---
 
@@ -58,7 +58,7 @@
 | G9 | GPU 任务并发 = 1 | p5：空闲 1369MiB，OCR 单进程吃 701MiB |
 | G10 | FTS 幽灵行数 = 0 | p1 证明漏列**不报错**，只能靠这条断言发现 |
 | 新 | 重叠监测根不产生重复主记录 | p7：3 条不膨胀 |
-| 新 | ×10 合成档压测出报告（不是跑通就行） | docs/04 L4 |
+| 新 | ×10 合成档压测出报告（不是跑通就行） | docs/TESTING L4 |
 
 ---
 
@@ -105,7 +105,7 @@
 | G13 | 单页耗时预算 284ms（A-OCR-1 反算）—— **当前实测 3,281ms，判 RED**。选 3（限额后台）则改为"每日预算跑满即停且进度可见"，G13 作废重定 |
 | 新 | CPU 后端在**无 GPU 机器**上能独立完成同一批 OCR（结果与 DirectML 逐字一致，p5 已验 `text_identical`） |
 | 新 | OCR 文本进 FTS 后 `source_kind='ocr'` 可筛选、可整批删除且不留幽灵行 |
-| 新 | OCR 结果按 **B 档**纳入备份（804–1680h→实测 1,144h，事实上不可再生，docs/02 一） |
+| 新 | OCR 结果按 **B 档**纳入备份（804–1680h→实测 1,144h，事实上不可再生，docs/DATABASE 一） |
 
 ---
 
