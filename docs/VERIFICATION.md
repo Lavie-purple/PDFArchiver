@@ -79,6 +79,8 @@
 | p6 | 语义向量 | ✅ | 512 维；fp32+DML 146.9 chunks/s（全量 7.6h）；int8 **反而更慢** |
 | p7 | 路径与文件身份 | ✅ | `realpath` + `COLLATE NOCASE` 唯一索引，15 条断言全绿 |
 | p8 | Windows 打包 | ✅ | 构建 267.3s / 产物 247.6MB；冻结 exe 冒烟全绿 |
+| **p9** | **断言有没有约束力**（反向注入，阶段 1 新增） | ✅ **18/18** | 18 种"能骗过断言的坏法"全部被抓到；每次注入都在系统临时目录的**仓库副本**里做，工作区产品代码一行未改 |
+| 守卫 | `tests/guards/`：G21 依赖、架构（AST）、迁移不丢数据 | ✅ | 三条都能独立跑并打印 `VERDICT`；阶段 1 起进 `gates/stage1.py` |
 
 ---
 
@@ -222,6 +224,55 @@ norm(path) = os.path.realpath(path) → normpath → 反斜杠转 /
 DirectML provider（`.dll` 被收进来了）、Qt 6.8.3 控件创建。
 → 结论：`--onedir` 可行；`--onefile` 未测（解压到临时目录会让"数据目录在哪"变复杂，暂不选）。
 
+### 4.10 阶段 1 骨架与数据库实测（2026-10-14，`gates/stage1.py`）
+
+原始输出（`.venv/Scripts/python.exe gates/stage1.py`，本机，非转述；阶段 1 收尾那一次）：
+
+```
+门禁运行于 H:\AI project\demo19｜python 3.11.7
+  PASS  G21 依赖守卫                     实测：VERDICT: ALL GREEN
+  PASS  架构守卫（依赖方向 / SQL 位置 / 无静默吞异常 / 无本机路径字面量 / 导航分组）  实测：VERDICT: ALL GREEN
+  PASS  全量回归                         实测：106 passed / 0 failed / 0 error / 1 skipped
+  PASS  G1 冷启动 ≤ 1.5s [约定] + 关窗对账 实测：冷启动 0.453s｜进程总耗时 1.015s｜关窗对账 1 条
+  PASS  反向注入探针（断言有没有约束力）   实测：18/18 条坏法被抓到
+VERDICT: ALL GREEN
+```
+
+- **冷启动读数：本阶段共 18 次，全部在 `QT_QPA_PLATFORM=offscreen` 下**（口径：被测进程自报
+  `state.log` 的 `window.ready.cold_start_seconds`，见 D-021）：
+
+  | 入口 | 次数 | 读数（秒） |
+  | --- | --- | --- |
+  | 门禁 `gate_cold_start()`（`python main.py --data-dir <临时> --exit-after 0.3`） | 13 | 0.409 / 0.419 / 0.440 / 0.451 / 0.453 / 0.465 / 0.486 / 0.489 / 0.526 / 0.603 / 0.612 / 0.777 / 0.910 |
+  | 临时副本里的进程级测试 `test_进程级冷启动实测符合G1约定` | 2 | 0.344 / 0.376 |
+  | 开发期与内联 `python -c` 入口 | 3 | 0.693 / 1.008 / 1.031 |
+
+  **18 次全部 ≤ 1.031s ≤ 阈值 1.5s [约定]**，门禁入口 13 次的中位 **0.486s**。
+  **读数分散但没有已查明的成因**，本阶段不再对成因下结论：
+  ① 一度写成"`-c` 入口跳过 `sitecustomize` 所以慢 0.6s"—— 随后同一 `-c` 入口复测 0.403s，机制不成立，已撤回；
+  ② 0.910s 那一次本机同时有一个 Python 进程在扫 8MB 日志 —— 并发是**候选**解释，没做对照；
+  ③ 同一入口先后三批分别是 0.409–0.526s、0.603–0.777s、又回到 0.453/0.489s —— 连"时间漂移"都不是解释。
+  留下来的事实只有一条：**分布 0.344–1.031s，最大仍在阈值内**。
+  这 18 处读数**都不是真实桌面平台** —— 见 ISSUES I17，真机首屏必须由你亲眼看一次并给数字。
+- **13 张表**：`documents / monitored_roots / categories / document_categories / tags / document_tags /
+  document_metadata / collections / processing_jobs / file_operations / operation_items / app_settings /
+  schema_version`。**故意不建** `text_pages / content_fts / duplicate_groups`，而且有断言反过来证明它们不存在
+  （Q1/Q2 未答，建了阶段 2 就是返工）。
+- **迁移的安全边界**：`backup_dir` 缺失 → 直接拒绝迁移（不动结构）；迁移中途失败 → 回滚 + 异常里带
+  `pre-migration-0002-*.db` 快照路径；带 3 标签 / 5 文档 / 1 分类的旧库升级到新版本 →
+  逐表行数不变、内容读得回、`integrity_check = ok`、`PRAGMA foreign_key_check` 空。
+- **跳过的那 1 条是事实不是失败**：8.3 短名实测在测试用的临时卷上不产生短名，按实际结果 `skip` 并说明原因，
+  真凭据在 p7（同一台机器、真实语料目录上 15 条断言全绿）。
+
+**门禁链自己有没有牙齿**（在系统临时目录的副本里做，工作区未改）：
+
+```
+A 弄坏 casefold      → exit=1｜变红的门禁项：['全量回归']｜实测：105 passed / 1 failed / 0 error / 1 skipped
+B G1 阈值改成 0.001s → exit=1｜变红的门禁项：G1 冷启动｜实测：冷启动 1.031s
+```
+
+即：门禁不是把测试结果抄一遍的橡皮章 —— 产品代码坏一条，回归项就红；阈值不可达到，读数自己就红。
+
 ---
 
 ## 五 · 已验证的决策（可以直接依赖）
@@ -238,6 +289,10 @@ DirectML provider（`.dll` 被收进来了）、Qt 6.8.3 控件创建。
 | V8 | 语义嵌入 fp32 + DirectML（146.9 chunks/s，全量 7.6h），量化不用于提速 | 4.7 |
 | V9 | 打包 `PyInstaller --onedir`，247.6MB，冻结后功能实测可用 | 4.9 |
 | V10 | 量级基线 8,000 份 / 120GB / 200 万页；红线按 ×10 反算 | 4.1 |
+| V11 | 迁移必须"先快照后动结构"，失败靠 `BEGIN IMMEDIATE` 回滚回到原样 | 4.10、`test_迁移中途失败回到原样` + 注入 I7 |
+| V12 | 主记录幂等写用 `INSERT … ON CONFLICT(path_key) DO UPDATE`，不用"先查后写" | 4.10、注入 I8（多刷一个 `parse_status` 立刻变红） |
+| V13 | 时间只有一个口径：库里 UTC unix 秒、日志 UTC ISO 带 `Z`、性能数字由进程自报 | D-021、D-022、注入 I13/I14/I16/I17 |
+| V14 | `PySide6` 控件必须在 `QApplication` 存在之后构造 —— 否则**进程直接 abort（exit 127，无 traceback）** | 阶段 1 开发期实测；测试夹具因此统一依赖 `qapp` |
 
 ## 六 · 候选 / 未决（**不许当成已定事实**）
 
@@ -248,11 +303,13 @@ DirectML provider（`.dll` 被收进来了）、Qt 6.8.3 控件创建。
 | C3 | 向量存储方案（暴力扫 vs ANN） | **候选** | 404 万块 ×512 维 fp32 = 7.71GB；暴力 cosine 一遍是 2GB 级 IO。未做检索延迟实测 |
 | C4 | 是否引入 QWebEngineView | **候选** | 可用、+32.7MB，但收益未定 |
 | C5 | 语义评测集 | **未决** | p6 的 4 对相关/无关是我自造的；SPEC 要求的 20 条真实查询还没有 |
-| C6 | 界面清单与线框 | **未决，阻塞阶段 1** | AGENTS.md 明令：线框未逐屏确认前禁止写界面代码 |
-| C7 | 监控根目录与数据目录最终路径 | **未决** | p0 扫出的 6 个根里明显混有用户不想被索引的内容 |
+| C6 | 界面清单与线框 | **未决，仍阻塞阶段 2 的界面** | AGENTS.md 明令：线框未逐屏确认前禁止写界面代码。阶段 1 只交付了不含布局决策的运行时外壳（D-018），**A/B/A′ 一个都没画**，产品屏数、最小窗口宽度、导航分组方式全部还是你的决定 |
+| C7 | 监控根目录与数据目录最终路径 | **未决** | p0 扫出的 6 个根里明显混有用户不想被索引的内容；阶段 1 的默认数据目录 `%LOCALAPPDATA%\PdfArchiver` 只是可用回落，不是你认可的落点（Q8） |
 | C8 | 目标机 `LongPathsEnabled` | **未决** | 本机 =1 是现状不是前提；需安装时自检 + 引导 |
 | C9 | `--onefile` 打包 | **未测** | 当前只验证 onedir |
 | C10 | 16GB 内存下的并发上限 | **未压测** | 各组件 RSS 单点测了，组合起来没测 |
+| C11 | **G1 的 1.5s 阈值与"offscreen 读数能不能代表真机"** | **未决** | 1.5s 是 **[约定]**；18 次实测 0.344–1.031s 全在 `QT_QPA_PLATFORM=offscreen` 下取，真实 windows 平台要加窗口合成与字体加载，只能等你在桌面上看一次（ISSUES I17） |
+| C12 | 默认分类模板的形状 | **候选，待确认** | SPEC 3.3 的 14 项已按原文落成数据（`default_catalog.py`）。**标签一个没 seed** —— SPEC 没给清单，编就是假数据（D-020）。要不要给标签模板、给哪些，是你的决定 |
 
 （更细的风险条目与验证方法在 `docs/RISKS.md`。）
 
@@ -271,6 +328,14 @@ python tests/probes/p5_ocr.py                # GPU 任务，跑的时候别并�
 python tests/probes/p6_embedding.py
 python tests/probes/p7_path_identity.py
 python tests/probes/p8_packaging.py          # ~4.5 分钟构建
+python tests/probes/p9_reverse_injection.py  # ~1 分钟，18 条反向注入（在临时副本里做）
+
+# 阶段 1 起：验收门禁一条命令（含上面 p9），末行必须 VERDICT: ALL GREEN
+.venv/Scripts/python.exe gates/stage1.py
+.venv/Scripts/python.exe gates/stage1.py --no-injection   # 快速复查（约 15 秒）
+
+# 真跑一次应用：起来、显示窗口、0.3 秒后自己关窗（--data-dir 指到空目录就是全新库）
+.venv/Scripts/python.exe main.py --data-dir "<空目录>" --exit-after 0.3
 ```
 
 依赖安装（含 2.1/2.2 的锁死）见 `requirements/`。

@@ -4,20 +4,29 @@
 
 ## 一 · 存储布局：什么放哪、能不能丢
 
-数据根目录默认 `%LOCALAPPDATA%\PdfArchiver\`（与用户 PDF 分离，SPEC 3.8）。
+数据根目录：显式 `--data-dir` > 环境变量 `PDFARCHIVER_DATA_DIR` > `%LOCALAPPDATA%\PdfArchiver\`
+（与用户 PDF 分离，SPEC 3.8；非 Windows 走 `XDG_DATA_HOME` / `~/.local/share`）。
+**没有一处写死的盘符**，来源会打印在日志、状态栏和状态页上（`AppPaths.describe()`）。
+
+阶段 1 实际建出来的目录树（`AppPaths.mkdirs()`，5 个；★ = 阶段 1 已有真实内容）：
 
 ```
-%LOCALAPPDATA%\PdfArchiver\
-  data\
-    catalog.db          主库：文档主记录、元数据、分类、标签、集合、任务、操作日志
-    catalog.db-wal      运行期存在，退出/检查点后消失
-    content.db          FTS5 全文索引（外部内容表指向 catalog.db 的 text_pages）
-    vectors.bin         语义向量索引（semantic 层私有；可整目录删除后重建）
-    cache\              渲染缩略图等可再生缓存
-  config\settings.json  用户设置
-  logs\                 app.log / crash.log / state.log
-  models\               按需下载的模型（embedding）；OCR 模型随程序包，不在此处
+<数据根>\
+  data\★
+    catalog.db★         主库：13 张表（documents / monitored_roots / categories / document_categories /
+                        tags / document_tags / document_metadata / collections / processing_jobs /
+                        file_operations / operation_items / app_settings / schema_version）
+    backups\★           迁移前的 Backup API 一致性快照 pre-migration-NNNN-<ts>.db
+    cache\★             空着 —— 渲染缩略图缓存属阶段 3
+    content.db          FTS5 全文索引（外部内容表指向 catalog.db 的 text_pages）**未建，阶段 2 的 0002**
+    vectors.bin         语义向量索引（semantic 层私有；可整目录删除后重建）**未建，阶段 6**
+  config\settings.json★ 用户设置（唯一口径，见 D-019；应用内部状态一律进 app_settings 表，不放这里）
+  logs\★                app.log（轮转）/ crash.log（未捕获+线程异常）/ state.log（一行一条 JSON 对账）
+  models\               按需下载的模型（embedding）；OCR 模型随程序包。**阶段 1 不建这个目录**
 ```
+
+`catalog.db-wal` / `-shm` 运行期存在，干净退出后消失 —— 看到它们不代表库坏了。
+迁移失败留下的快照**只增不删**，回退靠它（`docs/DATABASE` 四）。
 
 分类原则 —— **每个文件属于哪一档，决定备份和丢失后果**：
 
@@ -94,7 +103,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `operation_items` | 逐文件条目 | `src`/`dst`/`kind`(move\|rename\|copy)/`state` pending\|done\|failed\|skipped + `error` + `reversible` |
 | `processing_jobs` | 任务队列 | `kind` scan\|index\|ocr\|vector\|archive；`state` queued\|running\|paused\|done\|failed\|cancelled；`attempts`、`progress` |
 | `duplicate_groups` | 内容重复 | 按 `sha256` 分组；只报告不删除 |
-| `app_settings` | 设置 | key/value + `schema_version` |
+| `app_settings` | **应用内部状态**（导航记忆、列宽、"默认模板已种过"标记） | key/value，value 存 JSON。**不存用户设置** —— 用户设置唯一口径是 `config/settings.json`（D-019）。坏 JSON 回落默认值但必须留 warning，不许静默 |
 | `schema_version` | 迁移水位 | 单行；`version`、`applied_at` |
 
 ## 三 · FTS5 的正确接法（三条踩过坑的硬规则）
@@ -116,14 +125,31 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
   页码靠 `text_pages` 的行本身定位，片段高亮位置在 Python 侧算。
 - trigram 分词对 1–2 字查询召回差，索引层对短查询**退回 LIKE**，并在结果里标明用了哪种口径（P1 实测已按此实现）。
 
-## 四 · 迁移机制
+## 四 · 迁移机制（阶段 1 已落地）
+
+本节是**实现细节的唯一存放处**；为什么这样选、否掉了哪些方案（alembic / 内嵌 SQL 数组 / 失败后拿备份恢复）
+登记在 `DECISIONS.md` **D-023**，两边改其一必须同步另一处。
 
 - `db/migrations/` 下按 `0001_initial.py`、`0002_...` 顺序编号，每个导出 `VERSION` 和 `apply(conn)`。
-- 启动时读 `schema_version`，只跑未应用的迁移；**每个迁移自带备份前置检查**：迁移前强制做一次
-  SQLite Backup API 快照到 `data\backups\pre-migration-<version>-<ts>.db`，失败可回退。
-- 禁止"改结构就让用户删库重来"（SPEC 4.2 明确要求）。
-- 守卫测试：`tests/guards/test_migrations.py` 用旧版本库跑一遍全量迁移，断言迁移后
-  `PRAGMA integrity_check` = ok 且行数不丢。
+  发现方式是 `importlib` **按路径加载**（模块名以数字开头不能 `import`），文件名不合 `NNNN_slug.py`、
+  `VERSION` 与文件名序号不一致、序号重复 —— 三种情况都直接抛 `ValueError`，不"尽量解释一下"。
+- 启动时读 `schema_version`（单行水位：`version` + `applied_at`），只跑未应用的迁移；
+  **迁移前强制**做一次 SQLite Backup API 快照到 `backups/pre-migration-<NNNN>-<ts>.db`。
+  **没有 `backup_dir` 就拒绝迁移**（抛 `MigrationError`，一个字段的 DDL 都不执行）——
+  "先改结构再想办法备份"在这个项目里不是一种取舍，是一种破坏。
+- 禁止"改结构就让用户删库重来"（SPEC 4.2）。`test_真实迁移目录从空库一路能跑到最新版` 就是这条的可执行版本。
+- 实现时踩到的一条必须写在这：**`conn.isolation_level` 要设成 `None`**。
+  sqlite3 的旧式隐式事务会让 DDL 的提交时机不可控（你以为在事务里，其实已经落地了），
+  所以 `migrate.py` 手动 `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`，一个迁移一个事务。
+- 失败时异常对象带着 `.snapshot`（回退用那份副本的路径）与 `db=`（哪个库），
+  并且同时留在 `app.log`（含 sqlite 原文）与 `state.log`（`startup.migration_failed`）。
+- 守卫测试：`tests/guards/test_migrations.py` 用**带数据的旧版本库**跑一遍全量迁移，5 条断言已实测通过 ——
+  逐表行数不变（新表除外）、旧内容读得回来、`PRAGMA integrity_check` = ok、`PRAGMA foreign_key_check` 空、
+   WAL 与外键设置在库里持久。反向注入 I7（把回滚改成 `COMMIT`）确实让它变红。
+- **阶段 1 只有 `0001_initial`（13 张表）**。`text_pages` / `content_fts` / `duplicate_groups`
+  是**有意没建**，不是遗漏：分词器（Q1）与索引体积策略（Q2）未答，duplicate 分组口径属阶段 4。
+  有断言反向钉住它们不存在（`test_阶段1刻意不建的表确实不存在`）。
+  → 阶段 2 会以 **`0002`** 第一次真跑"带数据升级"，届时 `test_migrations.py` 里的合成 0002 要换成真实 0002 再验一次。
 
 ## 五 · 文件操作：预览 / 执行 / 日志 / 恢复 / 撤销
 

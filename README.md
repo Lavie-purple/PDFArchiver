@@ -4,8 +4,12 @@
 只做本地的事：扫描目录、抽取正文、建全文索引、阅读、按规则归档实体文件。
 **不上传任何文档内容、提取文本、向量或元数据**；模型推理只在本地，且**不是文件搜索的必要依赖**。
 
-> 当前进度：**阶段 0（环境检查与技术验证）已完成**，尚无产品代码。
-> 阶段 0 的实测结论、被证伪的假设、以及仍需产品所有者拍板的 8 个问题，见 `docs/`。
+> 当前进度：**阶段 1（应用骨架 + 数据库）已完成，门禁全绿**（106 passed / 0 failed / 1 skipped，
+> G1 冷启动：18 次读数 **0.344–1.031s**（门禁入口 13 次 0.409–0.910s，中位 0.486s），阈值 1.5s **[约定]**；
+> **全部为 `offscreen` 平台，真机首屏未核对（ISSUES I17）**。18/18 反向注入被抓到）。
+> **现在能跑的只有**：启动窗口、点导航切页、看"运行状态与自检"页、把分类/标签/设置/监测根/任务写进库并跨重启读回、
+> 数据库结构迁移与失败回退。**还没有**：目录扫描、全文搜索、OCR、语义搜索、任何文件移动或归档。
+> 界面只到不含布局决策的外壳，A/B/A′ 三案与 8 个未决问题仍等你拍板，见 `docs/`。
 
 ## 技术栈（全部为实测钉死，不是选型偏好）
 
@@ -37,15 +41,19 @@ docs/
   TESTING.md         测试分层、硬门禁 G1–G21、反向测试规则、发布门禁链
   UI-SCREENS.md      界面清单（AGENTS.md 门禁：线框未逐屏确认前不写界面代码）
   ROADMAP.md         分阶段实施计划与每阶段准入门槛
-  ISSUES.md          已知问题台账 I1–I16（收尾必须逐条销账）
+  ISSUES.md          已知问题台账 I1–I18（收尾必须逐条销账）
   CHANGELOG.md       阶段变更与版本记录
   REPO-JOURNAL.md    仓库结构/命名/忽略规则变更记录
-  stage-reports/     每阶段交付报告
+  stage-reports/     每阶段交付报告（阶段 0、阶段 1）
 requirements/      分层依赖清单 + 版本钉死理由
-tests/probes/      阶段 0 的 9 个技术验证探针（p0..p8），可重跑，末尾打印 VERDICT
-tests/guards/      依赖钉版守卫（G21）
-gates/             发布门禁链脚本（阶段 7 起生效）
-src/pdfarchiver/   产品代码（阶段 1 起填充；现在是空的目录骨架）
+main.py            应用入口（先记 T0 再 import，冷启动才量得准）
+conftest.py        把 src/ 挂进 sys.path，测试与 python main.py 用同一份源码
+src/pdfarchiver/   产品代码：config / db(13 表+迁移) / fs / diagnostics / services / ui / app.py
+tests/probes/      p0..p8 技术验证探针 + p9 反向注入（证明断言能变红），可重跑，末尾打印 VERDICT
+tests/unit/        纯逻辑：路径解析、设置校验、文件身份、迁移发现
+tests/integration/ 真实 SQLite + 真 Qt 控件：装配与迁移、仓储层、异常处理、应用外壳
+tests/guards/      常驻守卫：依赖钉版（G21）、架构方向与 SQL 位置（AST）、迁移不丢数据
+gates/stage1.py    阶段 1 验收门禁链，末行 VERDICT: ALL GREEN
 ```
 
 ## 上手
@@ -58,13 +66,24 @@ python -m venv .venv
 # 2. 开发工具链
 .venv/Scripts/python.exe -m pip install -r requirements/dev.txt
 
-# 3. 每次开工先跑依赖守卫（唯一能挡住段错误的那一步）
-.venv/Scripts/python.exe -m pytest tests/guards/test_dependency_pins.py -q
+# 3. 跑起来（首次启动会建库并写入 SPEC 3.3 的 14 个默认分类）
+.venv/Scripts/python.exe main.py                        # 数据目录 = %LOCALAPPDATA%\PdfArchiver
+.venv/Scripts/python.exe main.py --data-dir D:\pdfdata  # 或明确指一个目录
+.venv/Scripts/python.exe main.py --data-dir <空目录> --exit-after 0.3   # 起得来也关得掉，给门禁用
 
-# 4. 重跑技术验证（换机器 / 升级依赖后必做；p5 需要独占 GPU）
+# 4. 每次收尾跑这条门禁链（约 1 分钟；任何一环红就 exit=1，不许开下一阶段）
+.venv/Scripts/python.exe gates/stage1.py
+
+# 5. 每次开工先单跑依赖守卫（唯一能挡住段错误 exit 139 的那一步）
+.venv/Scripts/python.exe -m pytest tests/guards -q
+
+# 6. 重跑技术验证（换机器 / 升级依赖后必做；p5 需要独占 GPU）
 .venv/Scripts/python.exe tests/probes/p1_fts5.py
 .venv/Scripts/python.exe tests/probes/p7_path_identity.py
 ```
+
+**启动或运行失败时看这里**：`<数据根>\logs\crash.log`（完整堆栈）与 `app.log`；
+生命周期对账在 `logs\state.log`（一行一条 JSON，UTC 带 `Z`）。应用**目前没有错误弹窗**（ISSUES I18）。
 
 ## 已验证 vs 未定
 

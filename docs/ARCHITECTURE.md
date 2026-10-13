@@ -5,19 +5,23 @@
 
 ## 一 · 目录结构
 
+★ = 阶段 1 已落地且有测试覆盖；没标的仍是**设计落点**，现在不存在（不是遗漏，见 `docs/ROADMAP`）。
+
 ```
 src/pdfarchiver/
-  __init__.py
-  app.py                  # 组合根：建容器、接线、启动/退出。不含业务规则
+  __init__.py★
+  app.py★                 # 组合根：建容器、接线、启动/退出。不含业务规则
   config/                 # 设置读写、数据目录解析、默认值表
-    settings.py           #   唯一口径：设置项名字 + 默认值 + 校验
+    paths.py★             #   数据目录三级解析（参数 > 环境变量 > %LOCALAPPDATA%）+ describe() 带来源
+    settings.py★          #   唯一口径：设置项名字 + 默认值 + 校验 + describe 三列
   db/                     # 数据库与索引层
-    engine.py             #   连接工厂（每线程独立连接）、WAL、busy_timeout
-    migrations/           #   顺序编号的迁移脚本 + schema_version 表
-    models.py             #   表结构常量与行数据类
-    repositories/         #   每张表/聚合的读写；只有这里能写 SQL
+    engine.py★            #   连接工厂（每线程独立连接）、WAL、busy_timeout、Backup 快照、integrity_check
+    migrate.py★           #   先快照后动结构；一个迁移一个事务（isolation_level=None + BEGIN IMMEDIATE）
+    models.py★            #   表结构常量与行数据类
+    migrations/★          #   0001_initial.py（13 张表）；FTS 相关表留给阶段 2 的 0002
+    repositories/★        #   documents/catalog/roots/jobs/settings；只有这里能写 SQL
   fs/                     # 文件扫描与监测层
-    identity.py           #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
+    identity.py★          #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
     scanner.py            #   全量/增量扫描，产出变更集
     watcher.py            #   watchdog 封装，只产事件，不改库
     exclude.py            #   排除规则
@@ -44,18 +48,30 @@ src/pdfarchiver/
   jobs/                   # 后台任务队列：暂停/恢复/重试/进度/并发上限
   backup/                 # 备份、恢复、迁移
   services/               # 应用服务层：把上面各层编排成用例（ScanService 等）
+    bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检
+    status_service.py★    #   界面唯一取数口；只读、不缓存
+    session_service.py★   #   导航记忆等内部状态，让 UI 不必 import 仓储层
+    default_catalog.py★   #   SPEC 3.3 的 14 个分类模板（数据不是代码）；靠标记"种一次"
   ui/                     # UI 层，只用 services/，不 import db.repositories
-    main_window.py
-    pages/                #   每个界面一个文件，对应 docs/UI-SCREENS.md 的编号
+    nav.py★               #   导航注册表，按 SPEC 条款号登记；阶段 1 唯一的"界面知识"
+    main_window.py★       #   外壳：左导航 + 右堆叠页 + 状态栏；关窗真关连接并留对账行
+    pages/★               #   status_page（自检页，全是从库里算出的事实）/ pending_page（未实现说明页）
+                          #   其余每屏一个文件、对应 docs/UI-SCREENS.md 的编号 —— 等 Q7
     workers.py            #   QThread/Signal 桥；主线程绝不做扫描/索引/OCR
     models_qt.py          #   Qt 表格/树模型（虚拟化）
-  diagnostics/            # crash.log / state.log / 自检页数据源
+  diagnostics/
+    logs.py★              #   app.log（轮转）/ crash.log（sys+threading excepthook）/ state.log（一行一条 JSON）
+                          #   时间戳唯一口径 log_stamp() = UTC ISO 带 Z（D-022）
 tests/
-  probes/                 # 阶段 0 的技术验证探针（保留，可重跑）
-  unit/                   # 纯逻辑，无 UI、无真实文件
-  integration/            # 临时目录 + 真实 SQLite + 真实 PDF 样本
-  guards/                 # pytest 形态的守卫：依赖版本锁、架构依赖方向、性能红线
-gates/                    # 门禁链（01_deps_guard … 09_readback，串联取数→校验→发布，末行 VERDICT: ALL GREEN）
+  probes/                 # p0..p8 阶段 0 技术前提探针（保留可重跑）+ p9★ 反向注入（验断言有没有牙齿）
+  unit/★                  # 纯逻辑，无 UI、无真实文件
+  integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
+  guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
+  #                         本机路径字面量 / 导航分组（AST）、迁移不丢数据
+  e2e/ load/              # 阶段 2 起才建：真小语料全链 + ×10 量级压测
+gates/
+  stage1.py★              # 阶段 1 门禁链：G21→架构守卫→全量回归→冷启动实测→反向注入，末行 VERDICT
+  # 01_deps_guard … 09_readback 那份拆分是阶段 7 的形态；没到对应阶段不建空门禁（R-007）
 docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表
 requirements/             # 分层依赖清单
 ```
@@ -126,6 +142,11 @@ OCR 文本        ──► 同一张 FTS5，source_kind='ocr'     依赖：ocr 
 | D-016 | 全文与向量分库存放 | P1：trigram 索引 ≈ 原文 6.9×；P6：4.04M 向量 fp32 ≈ 7.7GB | 设计中 |
 | D-017 | 阅读器用 PyMuPDF 渲染 + QtPdf 备选 | P3：两条通道都出图，fitz 135ms/页中位、QtPdf 43–50ms | 已验证 |
 | D-009 | 不依赖文件监听作为唯一变更来源 | P4：被监听目录自身被重命名 → 0 事件；必须定期全量校验 | 已验证 |
+| D-018 | 阶段 1 的 UI 只交付**运行时外壳**：导航由注册表驱动，产品屏一律 `implemented=False` | 线框未逐屏确认（AGENTS.md 禁止写界面代码）+ Q7 未答；`test_没有占位控件` 与注入 I11 钉住"外壳里没有假控件" | 已验证（产品屏数仍等 Q7） |
+| D-019 | 用户设置存 `config/settings.json`，应用内部状态存 `app_settings` 表，**两处各一个口径** | 阶段 1 实测：`test_设置持久化跨重启`；启动打印"默认值/覆盖值/来源文件"，注入 I9 证明种子标记有约束力 | 已验证 |
+| D-021 | 性能数字由**被测进程自己**写进 `state.log`，门禁与界面读同一条字段 | 避免"门禁掐一次表、界面显示另一个数"两个口径；注入 I13/I14 证明读数真参与判定 | 已验证 |
+| D-022 | 日志时间戳唯一口径 = UTC ISO 8601 带 `Z`（`log_stamp()`），含 `app.log` 行首 | 反向注入 I16：裸本地时间标 `Z` 格式合法、时刻差 8 小时，只有跨表比时刻抓得住 | 已验证 |
+| D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 5 条、注入 I6/I7 | 已验证 |
 
 ## 六 · 明确不做（阶段 0 决定，不是遗漏）
 

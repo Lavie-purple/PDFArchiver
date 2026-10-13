@@ -10,9 +10,11 @@
 | 层 | 位置 | 跑什么 | 何时跑 |
 | --- | --- | --- | --- |
 | L0 探针（技术前提） | `tests/probes/p0..p8` | 独立可运行脚本，末尾打印 `VERDICT` | 换机器 / 换依赖版本 / 怀疑环境时 |
-| L1 单元 | `tests/unit/` | 纯函数：路径归一、分词预切、文件名解析、规则引擎、体积/耗时预算计算 | 每次改动 |
-| L2 集成 | `tests/integration/` | 真实 SQLite（内存库或临时文件，**不 mock**）：建表 + 触发器 + FTS 一致性 + 迁移 | 每次改动 |
-| L3 端到端 | `tests/e2e/` | 真小语料（`tests/fixtures/corpus/` ≤30 份）跑「扫描→索引→搜索→归档→撤销」全链 | 每阶段收尾 |
+| L0b 断言自证 | `tests/probes/p9_reverse_injection.py` | 把 18 种坏法注进**临时副本**，逐条确认对应测试真会变红 | 每阶段收尾（已进 `gates/stage1.py`） |
+| LG 守卫（结构规则） | `tests/guards/` | `test_dependency_pins.py`（G21）、`test_architecture.py`（AST 扫依赖方向 / SQL 位置 / 静默吞异常 / 本机路径字面量 / 导航分组）、`test_migrations.py`（旧库带数据升级不丢行） | 每次改动；架构守卫可独立跑并打印 `VERDICT` |
+| L1 单元 | `tests/unit/` | 纯函数：路径归一、分词预切、文件名解析、规则引擎、体积/耗时预算计算。**阶段 1 已有**：路径解析、设置校验、文件身份、迁移发现 | 每次改动 |
+| L2 集成 | `tests/integration/` | 真实 SQLite（内存库或临时文件，**不 mock**）：建表 + 触发器 + FTS 一致性 + 迁移。**阶段 1 已有**：装配与迁移、仓储层、异常处理、应用外壳（真 Qt 控件） | 每次改动 |
+| L3 端到端 | `tests/e2e/` | 真小语料（`tests/fixtures/corpus/` ≤30 份）跑「扫描→索引→搜索→归档→撤销」全链。**尚未建目录**（要等阶段 2 有扫描才能跑通链路） | 每阶段收尾 |
 | L4 量级压测 | `tests/load/` | 合成 N 份 PDF 灌进管线，测吞吐/体积/内存曲线 | 阶段 2、阶段 7 |
 | L5 冻结冒烟 | `tests/probes/p8_packaging.py` | 打包产物里真实跑 PDF/FTS5/ORT/Qt | 发布前 |
 
@@ -22,6 +24,10 @@
 - UI 测试用 `pytest-qt` + `QT_QPA_PLATFORM=offscreen`，**不打扰用户桌面**。
 - 每个探针/测试产物写 UTF-8 JSON 到 `.probe_work/` 或 `tests/_out/`，两者都已 gitignore。
 - Windows 控制台一律 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`，否则中文断言输出不可读。
+- **`subprocess` 的收发都要显式 `encoding="utf-8", errors="replace"`**（本机控制台默认 GBK）：
+  子进程回显的是中文报错原文，用默认编码解码会在测试里抛 `UnicodeDecodeError`，把"应用启动失败"这个真现场销毁。
+- 测试的数据目录一律是 `tmp_path` 下的临时目录，**不读也不写 `%LOCALAPPDATA%`** —— 阶段 1 验收第 6 条
+  （不依赖开发者机器的固定绝对路径）就是靠"所有断言都在临时目录里成立"来证的，不是靠搜代码里没有 `H:\` 来证的。
 
 ---
 
@@ -29,7 +35,7 @@
 
 | # | 断言（可计数） | 阈值 | 来源 | 阶段 |
 | --- | --- | --- | --- | --- |
-| G1 | 冷启动到首屏可交互 | ≤ **1.5s** | **[约定]** 待你确认 | 1 |
+| G1 | 冷启动到首屏可交互 | ≤ **1.5s** | **[约定]** 待你确认。阶段 1 共 **18 次读数 0.344–1.031s**（门禁入口 13 次 0.409–0.910s、中位 0.486s），**均为 `offscreen` 平台，真机未测 → ISSUES I17**；分散成因未查明，两条已被撤回的错误解释记在 `VERIFICATION` 4.10。口径：由进程自己写进 `state.log` 的 `window.ready.cold_start_seconds`，门禁与界面读同一条（D-021） | 1 |
 | G2 | 搜索 P95 端到端（含 bm25 排序 + snippet，返回 200 条候选） | 基线 ≤ **500ms**；×10 ≤ **1.5s** | **[反算]** p1 实测 `bm25_top50=134ms@30万行`；线性外推到 202 万行 ≈ 900ms → **说明基线也可能顶不住，必须先做 L4 实测定分片策略** | 2 |
 | G3 | 首建全量文本索引总耗时 | ≤ **6h**（实测投影 3.80h） | **[反算]** p2 抽取中位 **147.9 页/s** × 202 万页 | 2 |
 | G4 | 全量哈希一遍 | ≤ **1h**（实测投影 9–39min） | **[反算]** p2 sha256 中位 240MB/s、最差 54.8MB/s × 120.6GB | 3 |
@@ -94,6 +100,40 @@ AGENTS.md 要求：每写完一条断言，先用"能骗过它的坏法"真注�
 - 每条新断言提交前，先在本地把它**改坏一次**并确认真的变红；做不到就删掉这条断言。
 - 阈值只有两种合法来源：实测单耗 × 量级反算，或写明 **[约定]** 并等你确认。
 
+### 阶段 1 的反向注入（18 条，全部可重跑）
+
+上面那张表是手记，容易被抄漏；阶段 1 把它变成**脚本**：`tests/probes/p9_reverse_injection.py`。
+每条注入都在系统临时目录里的**仓库副本**上做（工作区代码一行不改），先跑未注入基线（11 条目标测试全绿），
+再逐条注入并**要求**对应测试 `failed>=1 且 error==0` —— 用错误(collection/fixture error)冒充失败不算抓到。
+结果：**18/18 被抓到，VERDICT: ALL GREEN**。
+
+| # | 坏法（假装做对了什么） | 该变红的断言 | 抓到时的原始报错 |
+| --- | --- | --- | --- |
+| I1 | UI 越过 services 直接 `import pdfarchiver.db` | 架构守卫 | `ArchitectureError` |
+| I2 | 把 SQL 字符串写进 `services/` | 架构守卫 | `ArchitectureError` |
+| I3 | `except Exception: pass` 咽掉故障 | 架构守卫 | `ArchitectureError` |
+| I4 | 导航注册表塞重复 `page_id` | 架构守卫 | `ArchitectureError` |
+| I5 | 阶段 1 就提前建 `content_fts` | `test_阶段1刻意不建的表确实不存在` | `assert not ({'content_fts',…} & …)` |
+| I6 | 取消"没有快照目录就拒绝迁移"护栏 | `test_没有快照目录就拒绝迁移` | 没拿到预期的 `MigrationError` |
+| I7 | 迁移失败时不回滚，直接 `COMMIT` | `test_迁移中途失败回到原样` | `半个迁移留下了表 —— 事务没兜住` |
+| I8 | 重复扫描连 `parse_status` 一起覆盖 | `test_同一路径重复写只留一条且只刷新文件事实` | `重新扫描不能把索引状态冲掉` |
+| I9 | 忽略"已种过"标记，只看表空不空 | `test_默认模板种过就不再长回来` | `assert False is True`（用户的删除被复活） |
+| I10 | 状态页标签数写死成 0 | `test_刷新按钮重查数据库` | `刷新必须是重新查库，不是重排一遍旧文本` |
+| I11 | 在未实现的屏上摆 `QPushButton` 充数 | `test_未实现页不放任何假控件` | `assert [<QPushButton>] == []` |
+| I12 | 关窗只关窗口，不关连接、不留对账行 | `test_关窗真的关掉连接并留下对账行` | `assert <sqlite3.Connection> is None` |
+| I13 | 不往 `state.log` 写 `window.ready` | `test_进程级冷启动实测符合G1约定` | `没有 window.ready 事件：[…]` |
+| I14 | 把阈值改成 0.001s（验证读数参与判定） | 同上 | `G1 [约定] ≤1.5s，实测 0.344s` |
+| I15 | 身份键少做一次 `casefold` | `test_身份键全小写` | `'…报告 A.pdf' != '…报告 a.pdf'` |
+| I16 | **裸本地时间却标 `Z`**（格式合法、时刻差 8 小时） | `test_三个日志出口用同一个时间口径` | `app.log 1791921130 vs state.log 1791949930` |
+| I17 | `app.log` 行首退回标准库的本地无偏移时间 | 同上 | `app.log 行首不是 UTC+Z：2026-10-14T03:52:11.332 INFO` |
+| I18 | 把开发机自己的路径当默认值写进 `services/`（`"C:/Users/dev/PDF归档库"`） | 架构守卫 | `…字符串常量里有本机路径…路径必须由 config/paths.resolve_data_root() 解析，不许写死（验收 6）` |
+
+I16 是这批里最有价值的一条：**光看格式永远查不出来**。它证明"跨表比对同一瞬间"那条断言不是装饰，
+所以 D-022 的两条断言（同格式 + 同时刻）一条都不能省。
+
+另外单独验证过**门禁链自己不是橡皮章**（同样在副本里做，见 `docs/VERIFICATION` 4.10）：
+弄坏 `identity.py` → 门禁的"全量回归"项变红、`exit=1`；把 G1 阈值改成 0.001s → G1 自己变红、`exit=1`。
+
 ---
 
 ## 五 · 发布门禁链（阶段 7 起生效）
@@ -109,15 +149,27 @@ AGENTS.md 要求：每写完一条断言，先用"能骗过它的坏法"真注�
 
 ```
 gates/
-  01_deps_guard.py     # G21：版本钉死 + 双 ORT 检测
-  02_lint.py           # ruff + （可选）mypy 关键模块
-  03_unit.py           # L1
-  04_integration.py    # L2（真实 SQLite）
-  05_e2e.py            # L3（真小语料全链）
-  06_scale.py          # L4：8,000 份基线 + ×10 合成档，出 G2/G3/G5/G6/G7/G8/G16 数字
-  07_build.py          # PyInstaller --onedir
-  08_frozen_smoke.py   # G20：跑产物 exe
-  09_readback.py       # 线上/产物回读版本号与体积
+  stage1.py              # ✅ 已落地（阶段 1 收尾用这条）：G21 → 架构守卫 → 全量回归 → 冷启动实测 → 反向注入
+  # 以下按阶段推进再建，不提前摆空文件：
+  02_lint.py             # ruff + （可选）mypy 关键模块            —— 阶段 2
+  03_unit.py             # L1                                     —— 阶段 2
+  04_integration.py      # L2（真实 SQLite）                       —— 阶段 2
+  05_e2e.py              # L3（真小语料全链）                       —— 阶段 2 起
+  06_scale.py            # L4：8,000 份基线 + ×10 合成档，出 G2/G3/G5/G6/G7/G8/G16 数字 —— 阶段 2
+  07_build.py            # PyInstaller --onedir                    —— 阶段 7
+  08_frozen_smoke.py     # G20：跑产物 exe                          —— 阶段 7
+  09_readback.py         # 产物回读版本号与体积                     —— 阶段 7
+```
+
+`gates/stage1.py` 的两条口径值得单独说清，因为它们最容易被写成"看起来在验"：
+
+1. **冷启动不在门禁里掐表**。被测进程自己把 `cold_start_seconds` 写进 `state.log` 的 `window.ready`，
+   门禁只读那一条；界面状态页显示的也是同一条字段。两处各量一次必然出现两个数（D-021）。
+2. **数据目录用系统临时目录**。门禁不碰 `%LOCALAPPDATA%`，也不碰任何真实语料 —— 它跑一次不该留下任何副作用。
+
+```bash
+.venv/Scripts/python.exe gates/stage1.py                 # 全跑，约 1 分钟
+.venv/Scripts/python.exe gates/stage1.py --no-injection  # 约 15 秒，但"断言有约束力"这一条未被验证（输出里会明写）
 ```
 
 每条门禁输出统一字段：`name / expected / actual / pass`，汇总成 `gates_result.json`，
