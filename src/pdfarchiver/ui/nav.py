@@ -1,0 +1,41 @@
+"""导航注册表 —— 阶段 1 外壳唯一的"界面知识"。
+
+**这里刻意不做任何布局决策。** SPEC 的功能项都要有一行，是因为没有这一行的话，
+"应用能启动但看不见还剩什么没做"就变成要靠文档脑补；有这一行，界面就是一个诚实的进度表。
+具体每一屏长什么样由 Q7（docs/UI-SCREENS.md 的 A/B/A′ 三选一）决定，未确认前
+`implemented=False` 的项一律只给一张"未实现"说明页，不画任何控件布局。
+
+条目按 **SPEC 条款号**命名而不是 A1/A2/B1 编号 —— 屏数都还没定，提前用 A 方案编号就是替用户做了决定。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+PAGE_STATUS = "status"
+
+
+@dataclass(frozen=True)
+class NavItem:
+    page_id: str
+    title: str
+    spec: str  # 对应的 SPEC 条款，用于说明"这一屏为什么在清单上"
+    implemented: bool
+    blocked_by: str = ""  # 未实现时，写清卡在哪个决定上
+
+
+NAV_ITEMS: list[NavItem] = [
+    NavItem(PAGE_STATUS, "运行状态与自检", "阶段 1 验收 1–4", True),
+    NavItem("library", "文档库", "3.2 / 3.3", False, "Q7 线框未确认（docs/UI-SCREENS.md）"),
+    NavItem("search", "检索", "3.4", False, "Q7 线框未确认；且全文索引属阶段 2"),
+    NavItem("reader", "PDF 阅读", "3.5", False, "Q7 线框未确认；渲染通道已定（D-017）"),
+    NavItem("archive", "归档预览与确认", "3.6", False, "Q7 线框未确认；fileops 属阶段 4"),
+    NavItem("duplicates", "重复检测", "3.7", False, "Q7 线框未确认；分组口径属阶段 4"),
+    NavItem("monitor", "监测与索引设置", "3.1 / 3.2", False, "Q7 线框未确认；扫描与索引属阶段 2"),
+    NavItem("backup", "备份与恢复", "3.8", False, "Q7 线框未确认；备份向导属阶段 4"),
+]
+
+NAV_BY_ID: dict[str, NavItem] = {i.page_id: i for i in NAV_ITEMS}
+
+
+def find(page_id: str) -> NavItem | None:
+    return NAV_BY_ID.get(page_id)
