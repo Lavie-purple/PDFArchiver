@@ -254,6 +254,8 @@ VERDICT: ALL GREEN
   ③ 同一入口先后三批分别是 0.409–0.526s、0.603–0.777s、又回到 0.453/0.489s —— 连"时间漂移"都不是解释。
   留下来的事实只有一条：**分布 0.344–1.031s，最大仍在阈值内**。
   这 18 处读数**都不是真实桌面平台** —— 见 ISSUES I17，真机首屏必须由你亲眼看一次并给数字。
+  另：commit 之后又跑了一次 `gates/stage1.py --no-injection` 做提交后确认，读数 **0.401s**（第 19 次，
+  不计入上表的交付读数集，只证明提交出去的树是绿的；全量回归同样 106 passed / 1 skipped）。
 - **13 张表**：`documents / monitored_roots / categories / document_categories / tags / document_tags /
   document_metadata / collections / processing_jobs / file_operations / operation_items / app_settings /
   schema_version`。**故意不建** `text_pages / content_fts / duplicate_groups`，而且有断言反过来证明它们不存在
