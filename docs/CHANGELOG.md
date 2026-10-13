@@ -52,11 +52,16 @@
 
 - **决策编号只留一个口径**：`ARCHITECTURE.md` 五 原来自己编 D1–D10，`DECISIONS.md` 又编 D-001…，
   同一件事两套号（AGENTS.md 禁止一个概念多个口径）。现在架构表只引用 `DECISIONS.md` 的 `D-0NN`，
-  并为其补登记 **D-015**（FTS5 三条硬规则）、**D-016**（全文/向量分库）、**D-017**（阅读器渲染双通道）。
+  并为其补登记 **D-015**（FTS5 外部内容表硬规则，规则清单本体在 `DATABASE.md` 三）、
+  **D-016**（全文/向量分库）、**D-017**（阅读器渲染双通道）。
 - **G21 守卫的失败消息现在打印当前解释器路径**。起因是本轮用系统 Anaconda Python 跑守卫得到 2 failed，
   消息写着"依赖树里出现了 torch"，看起来像依赖被破坏，实际是用错了解释器
   （Anaconda 里有 `torch 2.14.0`、`transformers 5.16.1`，都被 SPEC 第五节禁止）。
   `.venv` 里仍是 6 passed、独立自检 `VERDICT: ALL GREEN`。口径写进 `docs/TESTING.md` 五。
+- **清掉 p7 留下的 60 层中文目录树**（最深文件路径 533 字符）。它在 `.probe_work/` 里可再生（p7 每次自己重建），
+  但会让 **Git 自身的目录扫描**报 `Filename too long`，`git status` 带 `--ignored` 时直接吐警告；
+  删除必须走 `\\?\` 前缀。这条实测证据已并进 `docs/ISSUES.md` I10 ——
+  它说明"本机开了 LongPathsEnabled"不等于"所有工具都看得见这些路径"。
 
 ### 提交记录
 

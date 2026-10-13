@@ -15,7 +15,7 @@
 | I7 | FTS5 **没有** `offsets()`（`no such function`） | **CLOSED** | p1 `aux.offsets.works == false` | 命中高亮/偏移方案要改 | 已定 D2：Python 侧算偏移；断言已在 p1 固化 |
 | I8 | FTS5 外部内容表 `'delete'` 命令少带一列 → 静默留幽灵行，**SQLite 不报错** | **MITIGATED** | docs/DATABASE 三 · 硬规则 3；p1 `external_content_sync` | 删掉的文件还能搜到，且看不出来 | 阶段 2 起 G10（幽灵行数 = 0）常驻每阶段门禁 |
 | I9 | 8.3 短名把空格吃掉（`报告 A.pdf` → `报告A~1.PDF`），纯字符串规范化归一不了 | **CLOSED** | p7 `short_name` 全组 | 同一文件产生多条主记录 | 已定 D4：`os.path.realpath` 必走；p7 15 条断言全绿 |
-| I10 | 目标机 `LongPathsEnabled` 无法假设（本机 =1 是现状不是前提） | **OPEN** | p7 注册表实读 | 长路径中文目录归档可能失败 | 阶段 4 归档目标路径生成前自检 + 可读错误文案（不许抛 WinError 3） |
+| I10 | 目标机 `LongPathsEnabled` 无法假设（本机 =1 是现状不是前提）；**且 =1 也只救 Win32 API，不救第三方工具** | **OPEN** | p7 注册表实读 =1、最深文件路径 **533 字符**、普通 API 与 `\\?\` 前缀都创建成功（`plain_api_created: true`）；本轮新证据：同一棵树让 **Git 自身的目录扫描**报 `warning: could not open directory... Filename too long`（`git status --ignored`），删除它必须走 `\\?\` 前缀的 `shutil.rmtree` | 长路径中文目录归档可能失败；打包、清理临时目录、任何外部工具（Git/资源管理器）都可能看不见深层内容 | 阶段 4 归档目标路径生成前自检 + 可读错误文案（不许抛 WinError 3）；**路径长度作为归档方案预览的显示项**；清理逻辑统一走扩展长度前缀 |
 | I11 | 语义质量只有 **8 对我自造的**相关/无关样本，不足以验收 | **OPEN** | docs/RISKS 2.4 | 可能"模型跑通但检索难用" | 用户给 Q5 的 20 条真实查询 → 建 G15 Recall@10 |
 | I12 | 向量检索未选型：404 万块 fp32 = 7.71GB，暴力扫需要 8GB 级内存装不下 | **OPEN** | p6 `scale` | 阶段 6 起不来 | 用户就 Q6 三选一；选型后必须实测建库时间，不许照搬宣传数字 |
 | I13 | 语料实测 **7,768 份 / 120.6GB / 202 万页**，SPEC 写的是"约 5,000 份" | **MITIGATED** | p0 / p2 | 按错的量级算红线会全线失真 | 已按实测基线 + ×10 档重写 docs/TESTING；SPEC 待用户确认后同步 |
