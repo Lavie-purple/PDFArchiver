@@ -1,0 +1,36 @@
+# OCR 可选层。装上才有扫描版检索能力。
+# 装法必须按下面顺序，不能只 `pip install -r ocr.txt` —— 原因见本文件末尾「装包陷阱」。
+
+rapidocr-onnxruntime==1.4.4
+pyclipper==1.4.0
+Shapely          # rapidocr 依赖，未钉版本（它只做几何后处理，非性能路径）
+six
+tqdm
+coloredlogs
+flatbuffers
+
+# ---------------------------------------------------------------------------
+# 装包陷阱（阶段 0 实测，docs/00-阶段0验证结论.md 2.2）
+#
+# 1. `rapidocr-onnxruntime` 声明依赖 `onnxruntime>=1.7.0`，而本项目用的是
+#    `onnxruntime-directml`。pip **不知道** directml 版也提供 onnxruntime，
+#    所以直接 `pip install rapidocr-onnxruntime` 会把**纯 CPU 的 onnxruntime 最新版（1.31.0）**拉进来。
+# 2. 两个发行版**往同一个 `onnxruntime/` 包目录写**。共存的结果不是报错，
+#    是 `import onnxruntime` **直接段错误 exit 139**（无任何异常可捕获）。
+# 3. 纯 `onnxruntime` 的 1.21+ 在本机 100% `WinError 1114` DLL 初始化失败。
+#
+# 正确顺序（在项目 venv 内）：
+#   python -m pip install -r requirements/base.txt
+#   python -m pip install rapidocr-onnxruntime==1.4.4 pyclipper==1.4.0 Shapely six tqdm coloredlogs flatbuffers
+#   python -m pip uninstall -y onnxruntime onnxruntime-directml      # 两个都卸，清干净
+#   python -m pip install "onnxruntime-directml==1.20.1"            # 只留这一个，它自带 CPU EP
+#   python -m pip check
+#   python -c "import onnxruntime as o; print(o.__version__, o.get_available_providers())"
+# 期望输出：1.20.1 ['DmlExecutionProvider', 'CPUExecutionProvider']
+#
+# 之后任何一次 `pip install` 都可能把纯 onnxruntime 重新拽回来，
+# 所以 `tests/guards/test_dependency_pins.py` 是**每次开工先跑**的门禁（G21）。
+#
+# CUDA 不在任何选项里：本机 Pascal(sm_61) 实测无 CUDAExecutionProvider（docs/00 2.3）。
+# 不选 paddleocr / easyocr：体积与依赖面大得多，且没有 DirectML 后端。
+# ---------------------------------------------------------------------------

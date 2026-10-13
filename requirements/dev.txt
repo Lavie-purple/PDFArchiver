@@ -1,0 +1,4 @@
+# 开发 / 测试 / 打包工具链（不进产品运行时）。
+pytest==9.1.1
+pytest-qt==4.5.0            # UI 测试；必须配 QT_QPA_PLATFORM=offscreen 跑（p3 实测可用）
+pyinstaller==6.22.3         # p8 实测 --onedir 构建 267.3s / 247.6MB，冻结后四项依赖真实可用

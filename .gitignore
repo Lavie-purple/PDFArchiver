@@ -1,0 +1,49 @@
+# ── 个人工作文件：只在本机，不入库 ──────────────────────────────
+# 工作模板：换机器时从「项目经验整理\模板\」手动投放
+AGENTS.md
+agents.md
+00-README-怎么用.md
+01-开工令.md
+02-触发式清单.md
+03-收尾核对.md
+04-流程路线图.md
+05-构建原理.md
+06-待验证条款池.md
+个人用的启动方式.md
+# 过程与经验沉淀（需求契约 / 工时埋点 / AI 记忆文件）
+SPEC.md
+PROJECT_SPEC.md
+project_stats.md
+*.local.md
+
+# ── 临时与生成物 ──
+_shot/
+preview/
+*.tmp
+tmp_*
+*.log
+.pytest_cache/
+__pycache__/
+*.py[cod]
+build/
+.venv/
+venv/
+env/
+.cov
+htmlcov/
+
+# ── 本机运行时数据（绝不入库：数据库 / 索引 / 模型 / 探针中间产物）──
+data/
+models/
+.cache/
+.probe_work/
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 依赖与构建 ──
+node_modules/
+dist/
+*.zip

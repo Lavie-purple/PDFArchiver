@@ -1,0 +1,23 @@
+# 语义检索可选层。装上才有「意思相近也能找到」的能力。
+# 依赖 requirements/ocr.txt 装的 onnxruntime-directml==1.20.1 —— 不要在这里再装一次 ORT。
+
+tokenizers==0.23.3          # 只做分词，不引入 torch
+huggingface_hub==2.2.0      # 只用于首次下载模型权重，运行期不联网
+numpy==2.4.6                # 与 base.txt 同版本，不要在这里钉出第二个数
+
+# ---------------------------------------------------------------------------
+# 为什么不选 sentence-transformers / langchain / llama.cpp：
+#   - sentence-transformers 会拖进 torch + transformers（>2GB，且本机 16GB 内存里
+#     torch CUDA 版与我们的 DirectML 路线互不相干）。p6 实测直接用 onnxruntime +
+#     tokenizers 就能跑通同一个模型（512 维，fp32+DML 146.9 chunks/s）。
+#   - 项目边界：模型只在**离线**状态下推理；只有「首次下载权重」是一次真实外部调用，
+#     必须给超时 + 可取消 + 失败回显服务端原文（AGENTS.md 排障条）。
+#
+# 模型与体积（p6 实测，权重不进 git，落 data/models/，已在 .gitignore）：
+#   model_optimized.onnx  fp32  90.4MB   <- 默认
+#   model_int8.onnx       int8  22.8MB   <- 只省体积；DirectML 上**反而更慢**
+#                                            (79.3 vs 146.9 chunks/s)，不许当提速手段用。
+#   全量向量库：4,044,409 chunk × 512 维 = fp32 7.71GB / int8 1.93GB
+#
+# ANN 索引（hnswlib 等）**尚未选型** —— 见 docs/03 2.5，属于候选不是已定。
+# ---------------------------------------------------------------------------
