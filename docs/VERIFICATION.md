@@ -79,7 +79,8 @@
 | p6 | 语义向量 | ✅ | 512 维；fp32+DML 146.9 chunks/s（全量 7.6h）；int8 **反而更慢** |
 | p7 | 路径与文件身份 | ✅ | `realpath` + `COLLATE NOCASE` 唯一索引，15 条断言全绿 |
 | p8 | Windows 打包 | ✅ | 构建 267.3s / 产物 247.6MB；冻结 exe 冒烟全绿 |
-| **p9** | **断言有没有约束力**（反向注入，阶段 1 新增） | ✅ **18/18** | 18 种"能骗过断言的坏法"全部被抓到；每次注入都在系统临时目录的**仓库副本**里做，工作区产品代码一行未改 |
+| **p9** | **断言有没有约束力**（反向注入，阶段 1 新增，阶段 2 扩到 46 条） | ✅ **46/46** | 46 种"能骗过断言的坏法"全部被抓到（1–18 阶段 1，19–46 阶段 2）；每次注入都在系统临时目录的**仓库副本**里做，工作区产品代码一行未改 |
+| e2e | 阶段 2 真链路验收（真 PDF / 真 worker / 真 watchdog，`tests/e2e/`） | ✅ **11/11** | 5 份重叠根语料跑完整链路；四条通道真实命中；正文页码 2、3 是真页码；全程不动磁盘（sha256 指纹前后相等）；crash.log 零线程异常 |
 | 守卫 | `tests/guards/`：G21 依赖、架构（AST）、迁移不丢数据 | ✅ | 三条都能独立跑并打印 `VERDICT`；阶段 1 起进 `gates/stage1.py` |
 
 ---
@@ -277,6 +278,68 @@ B G1 阈值改成 0.001s → exit=1｜变红的门禁项：G1 冷启动｜实测
 
 ---
 
+### 4.11 阶段 2 扫描 / 索引 / 检索链路实测（2026-10-14，`gates/stage2.py`）
+
+原始输出（`.venv/Scripts/python.exe gates/stage2.py`，本机，非转述）：
+
+```
+门禁运行于 H:\AI project\demo19｜python 3.11.7
+  PASS  G21 依赖守卫
+        实测：VERDICT: ALL GREEN
+  PASS  架构守卫（依赖方向 / SQL 位置 / 无静默吞异常 / 无本机路径字面量 / 导航分组）
+        实测：VERDICT: ALL GREEN
+  PASS  G1 冷启动 ≤ 1.5s [约定] + 关窗对账
+        实测：冷启动 0.464s｜进程总耗时 1.028s｜关窗对账 1 条
+  PASS  G2 后台生命周期（worker + 监听 + 关窗对账，冷启动 ≤ 1.5s [约定]）
+        实测：冷启动 0.455s｜进程总耗时 1.619s｜worker 2 线程｜回收中断 0
+  PASS  G2 端到端验收（真 PDF / 真 worker / 真监听，展示真实搜索结果）
+        实测：11 条端到端通过｜真实检索结论 6 行｜带页码的命中 6 行
+  PASS  全量回归
+        实测：255 passed / 0 failed / 0 error / 1 skipped
+  PASS  反向注入探针（断言有没有约束力）
+        实测：46/46 条坏法被抓到
+VERDICT: ALL GREEN
+```
+
+**测的是什么、没测什么，先说清**：
+
+- 端到端 11 条全部跑在 `tmp_path` 下的**真造 PDF** 上：真 drafted-then-rasterized 的纯扫描件（只有图没有字）、
+  真截断文件（`%PDF-1.7` + 4096 个 0 字节）、真 AES-256 用户口令加密件、真重叠监测根、真 `WindowsApiObserver` 线程。
+  链路里**没有人手调 `scan_root` / `index_document`** —— 只有 `bootstrap()` + `start_background()` + 落盘动作。
+  真实语料（7,768 份 / 120.6GB / 202 万页）**一次都没扫过**：Q8 未答，`ROADMAP` 末行禁令在生效（记 **I20**）。
+- **G3 / G7 / G8 / L4 仍然是反算，不是实测**（p2 单耗 × 量级）。本阶段没有产出任何内存与吞吐数字。
+
+真实检索读数（`pytest tests/e2e -s` 打印、门禁原样搬回，非转述；耗时随负载浮动，另一次跑的是 0–4ms）：
+
+```
+查询「人工智能」    ｜口径：只检索文件名 / 路径 / 元数据（本次没有搜正文）｜符合筛选的文档 5 份｜取回 文件名 1 行｜本页 1 行｜耗时 0ms
+查询「子目录」      ｜同上｜取回 路径 1 行｜本页 1 行｜耗时 0ms          ← 文件名通道 0 行，两条通道确实分开
+查询「政策研究室」  ｜同上｜取回 元数据 1 行，并说明命中的是 `author` 列｜耗时 0ms
+查询「违约责任的举证」｜口径：trigram 短语检索（7 字）｜取回 正文 1 行｜ [第 2 页] 合同审阅要点汇编.pdf｜耗时 0ms
+查询「附则的生效日期」｜口径：trigram 短语检索（7 字）｜取回 正文 1 行｜ [第 3 页] 合同审阅要点汇编.pdf｜耗时 0ms
+查询「审阅要点」    ｜口径：trigram 短语检索（4 字）｜取回 文件名 1 行、元数据 1 行、路径 1 行、正文 1 行｜本页 4 行｜耗时 0ms
+```
+
+页码是**真页码**：语料 B 有 3 页，两个检索词分别只出现在第 2、第 3 页，写死 `page_no=1` 的实现骗不过断言
+（反向注入 I21「正文命中的页码写死成第 1 页」确实让它变红）。
+
+**抓出的两个静默失灵**（详见 `docs/stage-reports/阶段2-交付报告.md` 第五节，两者都已修 + 各有反向注入）：
+
+1. `fs/watcher.py` 的 `_BufferHandler` 没继承 `FileSystemEventHandler` → watchdog 调 `handler.dispatch(event)`
+   时 `AttributeError`，**observer 线程在第一条事件上就死掉**，而 `watched_roots` 照旧显示 1、界面毫无察觉。
+   修法三处一起：继承基类 + 词表过滤 `dispatch`、`WatchManager.is_alive()`、`BackgroundState.watcher_alive`
+   + 状态页 `⚠ 文件监听线程已不在`。为什么阶段 1 没发现：p4 探针自带处理器类，从没走生产代码 —— 已归并入
+   `docs/ISSUES.md` 附「接第三方库的回调」一条规则。
+2. `diagnostics/logs.py` 的 `threading.excepthook` 读 `args.exc_info`，而 `ExceptHookArgs` 的字段是
+   `exc_type / exc_value / exc_traceback` —— **钩子自己抛异常，worker 崩溃现场一行都不剩**。
+   同时把那条"用假对象造 `exc_info`"的假断言换成真起一个会崩的线程再轮询 `crash.log`。
+
+**FTS5 侧新实测**：`content_fts` 外部内容表 + 三条触发器在 0002 里第一次带数据落地，
+G10（幽灵行 = 0）在迁移侧与运行侧都常驻断言；trigram 对 ≥3 字中文查询在本机 5 份小语料上 0–4ms，
+与 p1 的 6.39ms（10 万行级）同量级，1–2 字查询仍按 D-004 显式退回 LIKE 并在结果里标注口径。
+
+---
+
 ## 五 · 已验证的决策（可以直接依赖）
 
 | # | 决策 | 证据 |
@@ -330,11 +393,15 @@ python tests/probes/p5_ocr.py                # GPU 任务，跑的时候别并�
 python tests/probes/p6_embedding.py
 python tests/probes/p7_path_identity.py
 python tests/probes/p8_packaging.py          # ~4.5 分钟构建
-python tests/probes/p9_reverse_injection.py  # ~1 分钟，18 条反向注入（在临时副本里做）
+python tests/probes/p9_reverse_injection.py  # 阶段 1 起；~5 分钟，46 条反向注入（在临时副本里做）
 
 # 阶段 1 起：验收门禁一条命令（含上面 p9），末行必须 VERDICT: ALL GREEN
 .venv/Scripts/python.exe gates/stage1.py
 .venv/Scripts/python.exe gates/stage1.py --no-injection   # 快速复查（约 15 秒）
+
+# 阶段 2 起：在 stage1 之上加「后台生命周期」与「e2e 真链路验收（打印真实搜索结果）」两步
+.venv/Scripts/python.exe gates/stage2.py
+.venv/Scripts/python.exe gates/stage2.py --no-injection   # 约 1 分钟，但「断言有约束力」这一步没被验证
 
 # 真跑一次应用：起来、显示窗口、0.3 秒后自己关窗（--data-dir 指到空目录就是全新库）
 .venv/Scripts/python.exe main.py --data-dir "<空目录>" --exit-after 0.3

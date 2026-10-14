@@ -5,6 +5,84 @@
 
 ---
 
+## 0.2.0 · 阶段 2 文件扫描、PDF 识别与全文索引 —— 2026-10-14
+
+验收口径来自 SPEC 阶段 2 的 5 条 + 你的阶段 2 指令 10 条，逐条实测结论在
+`docs/stage-reports/阶段2-交付报告.md`。**仍然没有产品界面**：只扩展了已批准的「运行状态与自检」页，
+Q7 未答，线框未确认，所以一屏新界面都没画（AGENTS.md 禁令）。
+
+### 新增
+
+- **一条真跑通的链路**：`fs`（scanner / digest / exclude / watcher）→ `parsing`（pdf / classify）→
+  `indexing`（fts / normalize / snippets）→ `jobs`（WorkQueue + ProgressMonitor）→
+  `services`（scan_service / index_service / patrol / status_service）→ `search`（四通道编排）。
+  产品代码从 32 个文件 1,943 行长成 **54 个文件 5,560 行**。
+- **迁移 0002**：`text_pages` + `content_fts`（FTS5 外部内容表，`tokenize='trigram'`）+ 三条触发器，
+  `documents` 加 `device_id`、`text_bearing_rate`。这是本项目第一次**在带数据的库上**加结构。
+- **四条检索通道各自可断言**：文件名 / 路径 / 元数据 / 正文。正文命中给**真页码**与可高亮片段；
+  没勾正文时结果里明说"本次没有搜正文"，不许谎称走了 trigram；1–2 字查询退回 LIKE 并标注口径。
+- **e2e 层**（`tests/e2e/test_stage2_acceptance.py`，11 条）：只调 `bootstrap()` + `start_background()`，
+  然后只做磁盘动作，**全程不手调 `scan_root` / `index_document`**。语料现造：真扫描件（只有图没有字）、
+  真截断 PDF、真 AES-256 加密件、重叠根、非 PDF 文件。
+- **门禁 `gates/stage2.py`**：在 stage1 之上加两步 —— 后台生命周期（`state.log` 里
+  `window.ready` → `background.started` → `shutdown` 三行齐全）与 e2e 验收（把子进程打印的真实检索行搬回门禁）。
+- **状态页新增后台读数**：worker 线程数 / 监听根数 / 事件缓冲待处理 / 每条最多 N 次尝试 /
+  ⚠ 文件监听线程已不在。
+
+### 已验证（可以直接依赖）
+
+- 全量回归 **255 passed / 0 failed / 1 skipped**（guards 14｜unit 42｜integration 189｜e2e 11）。
+- 反向注入 **46/46**（1–18 阶段 1，19–46 阶段 2），明细见 `docs/TESTING.md` 四。
+- **G10 FTS 幽灵行 = 0** 已常驻门禁（迁移侧 + 运行侧）。
+- **扫描与索引全程不动磁盘**：整棵语料树 sha256 指纹前后相等（e2e）。
+- 崩溃恢复：真把一条 `index` 任务留在 `running` 中间态，重开进程后 `recover()` 接着跑完（e2e）。
+- 冷启动 0.455s / 0.464s（门禁 2 次读数，仍 `offscreen` → I17）。
+
+### 改方向（与设计稿不一致的地方，全部有据）
+
+- **`text_pages` 不用 `(doc_id,page_no)` 主键**，改成 `rowid INTEGER PRIMARY KEY` + 同名唯一索引：
+  FTS5 外部内容表只能指向同库同连接里有 rowid 的表（p1 实测）。见 **D-024**、`DATABASE.md` 2.3。
+- **`fts_status` 从不写 `running`**。"正在索引"抄进文档表就造出一个"进程一崩永远出不来"的状态；
+  现在崩溃时文档停在 `pending`/`stale`，`resume_pending()` 自然捞回来。见 `index_service` 文件头口径 2。
+- **永久故障只消耗 1 次尝试**（`PermanentFailure` → 直接 `failed`），3 次重试预算留给瞬时故障。见 **D-026**。
+- **界面定时器上不扫目录**：`patrol` 只排任务，重活交给 worker。见 **D-025** 与 `ARCHITECTURE.md` 三。
+- **正文与全文索引同库、向量另库**：D-016 的"分库"只落实了向量那一半，全文那一半被外部内容表的
+  硬约束钉在主库里。见 **D-024**。
+
+### 更正（收尾复测时发现的，不改写上面的记录，只追加）
+
+- **修掉两个"看起来通了、其实一次都没通过"的产品 bug**（详见阶段 2 报告第五节 + **D-027**）：
+  ① `fs/watcher.py` 的处理器没继承 `FileSystemEventHandler`、没有 `dispatch` → observer 线程
+  在**第一条事件**上就死掉，而 `watched_roots` 照旧显示 1；
+  ② `diagnostics/logs.py` 的 `threading.excepthook` 读 `args.exc_info`（`ExceptHookArgs` 没这字段）→
+  钩子自己抛异常，worker 崩溃现场一行不剩。
+- **删掉两条假断言**：旧版 `test_后台线程里的异常也会留痕` 自己造假对象喂 `exc_info`，永远绿；
+  阶段 1 的 p4 探针自带处理器类，从没调用过生产代码。两者都重写成"真的走一遍会坏的路"。
+- **撤回一条写错的因果**：一度以为 e2e 的"重扫不重抽"测的是索引侧哈希短路，实测那条路走的是
+  **扫描侧根本不排任务**。于是拆成两条坏法（I45 索引侧 / I46 扫描侧）分别钉住。
+- **I43 第一版抓不到**：把 `watcher_alive=True` 注在"后台正在跑"的断言上，而那时监听确实是活的。
+  补一条"半路真让它死一次"的测试（`ctx.watch.stop()` 后再读快照）才有约束力 —— 这正是
+  AGENTS.md「不会变红的断言直接删或重写」的正面案例。
+- 顺手清掉仓库根一个已废弃的临时脚本 `_reverse_inject_tmp.py`（被 `tests/probes/p9_reverse_injection.py` 取代）。
+
+### 提交记录
+
+| commit | 时间 | 内容 |
+| --- | --- | --- |
+| `643c21e` | 2026-10-14 19:26 | 扫描 / 索引 / 检索链路 + 迁移 0002 + 两个静默失灵的产品级修复（`src` 现 54 个文件 5,560 行） |
+| `035efb3` | 2026-10-14 19:27 | 三层测试 255 条、e2e 11 条、监听接线 10 条、反向注入扩到 46 条、`gates/stage2.py` |
+
+本表同步到 `035efb3`；文档那一条（本文件 + `docs/stage-reports/阶段2-交付报告.md` + 决策 D-024…D-027）
+按既有做法在下一次收尾时用 `git log` 追加，不预留空行。
+
+### 已知遗留
+
+`docs/ISSUES.md`：**I15**（界面屏数未确认，现在是阶段 3 唯一硬阻塞）、**I16**（量级红线全部仍是反算）、
+**I17**（所有读数来自 offscreen）、**新增 I19**（事件词表与 watchdog 版本耦合）、
+**新增 I20**（真实用户目录首扫的失败面未知：长路径 / 权限 / 网络盘 / 链接环只在 `tmp_path` 验过）。
+
+---
+
 ## 0.1.0 · 阶段 1 桌面应用骨架与数据库 —— 2026-10-14
 
 验收口径来自你的阶段 1 指令 6 条，逐条实测结论在 `docs/ROADMAP.md` 阶段 1 表与

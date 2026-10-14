@@ -18,20 +18,24 @@ src/pdfarchiver/
     engine.py★            #   连接工厂（每线程独立连接）、WAL、busy_timeout、Backup 快照、integrity_check
     migrate.py★           #   先快照后动结构；一个迁移一个事务（isolation_level=None + BEGIN IMMEDIATE）
     models.py★            #   表结构常量与行数据类
-    migrations/★          #   0001_initial.py（13 张表）；FTS 相关表留给阶段 2 的 0002
-    repositories/★        #   documents/catalog/roots/jobs/settings；只有这里能写 SQL
+    migrations/★          #   0001_initial.py（13 张表）+ 0002_text_and_fts.py★（阶段 2：正文表 + 外部内容 FTS + 三触发器）
+    repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata；只有这里能写 SQL
+    sqltext.py★           #   SQL 片段的唯一拼装处（占位符与 IN 列表），仓储层共用
   fs/                     # 文件扫描与监测层
     identity.py★          #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
-    scanner.py            #   全量/增量扫描，产出变更集
-    watcher.py            #   watchdog 封装，只产事件，不改库
+    scanner.py★           #   全量/增量扫描，产出变更集（流式 os.scandir，绝不整本读进内存）
+    digest.py★            #   分块 sha256（HASH_CHUNK_BYTES=1MiB），最大单文件 1.1GB 也不能 read() 一把
+    watcher.py★           #   watchdog 封装，只产事件，不改库；处理器必须继承 FileSystemEventHandler（D-027）
+                          #   EventBuffer 是界与 worker 之间唯一的传话处；is_alive() 是断流的唯一读数出口
     exclude.py            #   排除规则
   parsing/                # 文档解析层
-    pdf.py                #   PyMuPDF：元数据、页数、文本抽取、渲染、search_for
-    classify.py           #   原生/扫描/混合判定（text_bearing_rate）
+    pdf.py★               #   PyMuPDF：元数据、页数、文本抽取、渲染、search_for（阶段 3 才用渲染）
+    classify.py★          #   原生/扫描/混合判定（text_bearing_rate，阈值 0.5 / 0.1，每页 ≥40 字算带字）
   indexing/               # 全文搜索层
-    fts.py                #   trigram FTS5 外部内容表 + 触发器
-    snippets.py           #   命中片段与页码（Python 侧算偏移，FTS5 无 offsets()）
-  search/                 # 搜索编排：文件名/元数据/全文/筛选/排序
+    fts.py★               #   trigram MATCH 表达式构造（含转义）+ 1–2 字退回 LIKE 的口径分界
+    snippets.py★          #   命中片段与页码（Python 侧算偏移，FTS5 无 offsets()）
+    normalize.py★         #   入库前只做一件事：连续空白压成一个空格。不改大小写、不删标点、不裁长度
+  search/★                # 搜索编排：文件名/元数据/全文/筛选/排序（四通道各自可断言，合并去重限量）
   ocr/                    # OCR 任务层
     engine.py             #   RapidOCR 封装；后端可选 cpu/directml，失败可降级
     queue_ops.py          #   任务拆分、进度、重试
@@ -45,9 +49,12 @@ src/pdfarchiver/
     journal.py            #   操作日志：执行前写盘，崩溃可恢复
     execute.py            #   执行 + 校验 + 失败记录
     undo.py               #   撤销计划
-  jobs/                   # 后台任务队列：暂停/恢复/重试/进度/并发上限
+  jobs/★ queue.py         # 暂停/恢复/重试/进度/并发上限；ProgressMonitor 是处理函数唯一的进度笔
   backup/                 # 备份、恢复、迁移
-  services/               # 应用服务层：把上面各层编排成用例（ScanService 等）
+  services/               # 应用服务层：把上面各层编排成用例
+    scan_service.py★      #   scan 任务体 + 单条事件对账（快路）；唯一写 documents 文件事实的地方
+    index_service.py★     #   index 任务体；四条口径见文件头（sha256 短路 / fts_status 不写 running）
+    patrol.py★            #   界面定时器上的巡检：只排任务，自己绝不扫目录（慢路 = 周期全量校验）
     bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检
     status_service.py★    #   界面唯一取数口；只读、不缓存
     session_service.py★   #   导航记忆等内部状态，让 UI 不必 import 仓储层
@@ -66,11 +73,14 @@ tests/
   probes/                 # p0..p8 阶段 0 技术前提探针（保留可重跑）+ p9★ 反向注入（验断言有没有牙齿）
   unit/★                  # 纯逻辑，无 UI、无真实文件
   integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
+                          # 阶段 2 新增：扫描 34 / 队列 27 / 索引 23 / 检索 20 / 状态 16 / 监听接线 10
   guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
   #                         本机路径字面量 / 导航分组（AST）、迁移不丢数据
-  e2e/ load/              # 阶段 2 起才建：真小语料全链 + ×10 量级压测
+  e2e/★                   # 阶段 2 已建：真 worker + 真 watchdog + 真 PDF，11 条全链验收
+  load/                   # ×10 量级压测仍未建（等 Q8 给出真实监测范围，见 ISSUES I16/I20）
 gates/
   stage1.py★              # 阶段 1 门禁链：G21→架构守卫→全量回归→冷启动实测→反向注入，末行 VERDICT
+  stage2.py★              # 阶段 2 在其上加两步：后台生命周期（state.log 三行齐全）+ e2e 验收（搬回真实检索行）
   # 01_deps_guard … 09_readback 那份拆分是阶段 7 的形态；没到对应阶段不建空门禁（R-007）
 docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表
 requirements/             # 分层依赖清单
@@ -102,6 +112,22 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
 模型：
 - 主线程：只做 UI 与轻量状态更新。
 - `jobs/` 维护 N 个 worker 线程（默认 2，可调），每个 worker 一条 DB 连接、一个 `DocContext`。
+
+**阶段 2 落地后这条链上真跑的线程**（`gates/stage2.py` 的 `state.log` 读数可核对：
+`background.started` 里 `threads=2` + 1 条 observer）：
+
+| 线程 | 谁起 | 干什么 | 死了会怎样 |
+| --- | --- | --- | --- |
+| 主线程 | Qt | 渲染 + 状态栏 + **巡检定时器** | 应用没了 |
+| worker × `worker_threads`（默认 2） | `WorkQueue.start()` | 领 `scan` / `index` 任务；每线程一条 sqlite 连接（`engine.thread_connection()`） | `threading.excepthook` 落 `crash.log`（阶段 2 修好的一条，见 D-027） |
+| `WindowsApiObserver` | `WatchManager.start()` | 把磁盘事件塞进 `EventBuffer`，**不碰库** | **以前没人知道**：`watched_roots` 照旧是 1。现在有 `is_alive()` → `BackgroundState.watcher_alive` → 状态页 ⚠ 行 |
+
+两条纪律是阶段 2 实测逼出来的：
+- **界面定时器上绝不扫目录**。`patrol` 只做两件事：排空事件缓冲逐条对账（一个 `stat`），
+  以及"脏根或到点了 → 排一条 `scan` 任务"。8,000 份的一次全量走查放在主线程就是冻界面几秒到几十秒
+  （AGENTS.md 禁止全量加载）。
+- **处理函数拿不到 `JobRepository`**，只有 `ProgressMonitor`（写进度 + 问该不该停）。
+  它一旦能直接写状态，就能写出状态流转表里不存在的边（D-025）。
 - **GPU 任务全局串行**：P5 孤跑实测单个 OCR(DirectML) 进程吃掉 **701MiB** 显存，把本机空闲从 1369MiB 压到 668MiB；
   而嵌入模型（P6 fp32）也要在同一块卡上跑。两个 GPU 任务同时启动就是 1400MiB > 1369MiB，直接 OOM。
   队列必须保证「同一时刻最多一个 GPU 任务」，
@@ -147,6 +173,10 @@ OCR 文本        ──► 同一张 FTS5，source_kind='ocr'     依赖：ocr 
 | D-021 | 性能数字由**被测进程自己**写进 `state.log`，门禁与界面读同一条字段 | 避免"门禁掐一次表、界面显示另一个数"两个口径；注入 I13/I14 证明读数真参与判定 | 已验证 |
 | D-022 | 日志时间戳唯一口径 = UTC ISO 8601 带 `Z`（`log_stamp()`），含 `app.log` 行首 | 反向注入 I16：裸本地时间标 `Z` 格式合法、时刻差 8 小时，只有跨表比时刻抓得住 | 已验证 |
 | D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 5 条、注入 I6/I7 | 已验证 |
+| D-024 | 正文 + `content_fts` 进 `catalog.db` 本体；向量另库 | FTS5 外部内容表只能指向同库有 rowid 的表（p1）；分库等于放弃外部内容表、正文再拷一份（p2 膨胀 4.03–6.91×） | 已验证（迁移 0002 + G10 常驻） |
+| D-025 | 处理函数只有 `ProgressMonitor` 两支笔；`done` 的进度补齐在 `JobRepository.succeed()` 里做；收尾按库里状态判流转 | 阶段 2 实测：`test_进度按步长攒着写最后补齐`、`test_试满上限后不再算重试而是留下失败终态`、e2e 残尸回收；注入 I19/I23 | 已验证 |
+| D-026 | `PermanentFailure` 只消耗 1 次尝试，重试预算（3 次）留给瞬时故障 | 阶段 2 实测：损坏/加密文件各 1 次即终态，好文件不受牵连（e2e）；重试上限的唯一持有者是 `WorkQueue.max_attempts` | 已验证 |
+| D-027 | 接第三方库回调的测试必须 import 产品里那个类；每个可能静默死掉的部件要有唯一只读数字 | 阶段 2 两个真实事故：watchdog 缺 `dispatch`（observer 死掉而界面显示 1 个根在听）、`threading.excepthook` 读不存在的 `args.exc_info`（现场全丢）；注入 I38–I44，其中 I43 第一版抓不到、补"半路死亡"测试后才有牙 | 已验证 |
 
 ## 六 · 明确不做（阶段 0 决定，不是遗漏）
 

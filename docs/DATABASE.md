@@ -96,8 +96,8 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `categories` | 分类树 | `parent_id` 自引用；`name_path` 冗余列便于导出与筛选；不许代码里写死分类（SPEC 3.3） |
 | `tags` / `document_tags` | 多标签 | 文档↔标签多对多 |
 | `document_categories` | 文档↔分类 | 多对多；带 `origin`(manual\|ai) + `confirmed` |
-| `text_pages` | 正文按页 | `(doc_id,page_no)` 主键；`source_kind` native\|ocr；`char_count`；**FTS 外部内容表指向它** |
-| `content_fts` | FTS5 | `tokenize='trigram'`，`content='text_pages'`，配 3 个触发器（见 2.3） |
+| `text_pages` | 正文按页 | `(doc_id,page_no)` **唯一索引**（rowid 另用，见 2.3）；`source_kind` native\|ocr；`char_count`；**FTS 外部内容表指向它**；只有 `index_service` 一处写 |
+| `content_fts` | FTS5 | `tokenize='trigram'`，`content='text_pages'`，配 3 个触发器（实际形状见 2.3，硬规则见第三节） |
 | `collections` | 智能集合 | 存**查询条件 JSON**，不复制文件（SPEC 3.3.5） |
 | `file_operations` | 操作批次 | `status` planned\|previewed\|running\|partially_done\|done\|failed\|undone；`journal_path` |
 | `operation_items` | 逐文件条目 | `src`/`dst`/`kind`(move\|rename\|copy)/`state` pending\|done\|failed\|skipped + `error` + `reversible` |
@@ -105,6 +105,28 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `duplicate_groups` | 内容重复 | 按 `sha256` 分组；只报告不删除 |
 | `app_settings` | **应用内部状态**（导航记忆、列宽、"默认模板已种过"标记） | key/value，value 存 JSON。**不存用户设置** —— 用户设置唯一口径是 `config/settings.json`（D-019）。坏 JSON 回落默认值但必须留 warning，不许静默 |
 | `schema_version` | 迁移水位 | 单行；`version`、`applied_at` |
+
+### 2.3 迁移 0002 实际落地的差异（以实现为准，不是设计稿）
+
+0002 是第一次**在带数据的库上加结构**（`src/pdfarchiver/db/migrations/0002_text_and_fts.py`）。
+与上面"首版设计"的三处差异，都是被硬约束逼出来的，改结构前先读它们：
+
+| 项 | 首版设计 | 实际落地 | 为什么 |
+| --- | --- | --- | --- |
+| `text_pages` 主键 | `(doc_id,page_no)` 主键 | `rowid INTEGER PRIMARY KEY`（rowid 别名）+ **唯一索引** `ux_text_pages_doc_page(doc_id,page_no)` | FTS5 外部内容表只能指向**同库同连接里有 rowid 的表**（p1 实测）。表约束没少，只是换了表达方式 |
+| `documents` 加列 | — | `device_id`、`text_bearing_rate` | 改名采纳要靠 device+file_id+size+mtime 四元组，`file_id(st_ino)` 只在单卷内唯一；`text_bearing_rate` 是"这份是不是扫描件"的**唯一口径**（与 p2 探针同算法），阅读器与 OCR 都读它，所以落库而不是每次重算 |
+| 触发器 | "配 3 个触发器" | `tx_pages_ai` / `tx_pages_ad` / `tx_pages_au`，`'delete'` 命令带 `old.body` | 第三节硬规则 3；漏列**不报错**，只留幽灵行 |
+
+**`fts_status` 的写入口径（阶段 2 定的，改索引链路前必须知道）**：
+这一列只用 `pending` / `stale` → `done` / `failed` 四个值，**从不写 `running`**。
+"任务在不在跑"由 `processing_jobs` 那一行说，它是进程内状态；把"正在索引"抄进文档表，
+就造出一个"进程一崩就永远出不来"的状态 —— 重启后既没人当它未完成（`NEEDS_INDEX_STATUSES` 里没有它），
+也没人当它完成。现在崩溃时文档仍停在 `pending`/`stale`，`resume_pending()` 自然把它捞回来。
+**唯一口径**：`documents.NEEDS_INDEX_STATUSES = ("pending","stale")`，扫描侧、重启侧、状态页三处都读这一份。
+
+**`processing_jobs.progress` 的口径**：由 `ProgressMonitor` 按 `PROGRESS_STEP_PAGES=64` 攒着写，
+终态补齐在 `JobRepository.succeed()` 里做（`done=total`、`progress=1.0`、清 `last_error`），
+不靠处理函数记得 `flush()`。见 D-025。
 
 ## 三 · FTS5 的正确接法（三条踩过坑的硬规则）
 
