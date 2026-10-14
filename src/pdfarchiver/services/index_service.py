@@ -132,19 +132,21 @@ class IndexService:
         """按需重建全文索引（阶段 5 第 7 条）：`content_fts` 整表按 `text_pages` 重算。
 
         什么时候真需要它：外部内容表只是投影，触发器漏写、手工动过库、从备份恢复之后
-        投影会与真身不一致 —— 而 G10 的幽灵行数是唯一能被查出来的证据。
-        返回三个可核对的数，让调用方能把"重建前 vs 重建后"说出来，而不是只回一句"重建完成"。
+        投影会与真身不一致 —— 而 `check_fts_consistency()` 的两个方向是能被数出来的证据
+        （实测：坏状态下 rebuild 之后 `MATCH` 命中数与索引花名册全部重新对齐，这条是真补救）。
+        返回六个可核对的数，让调用方能把"重建前 vs 重建后"说出来，而不是只回一句"重建完成"。
         OCR 文本不需要单独的重建入口：它和原生文本住在同一张 `text_pages` 里，
         重算投影时一起进去，来源仍按行上的 `source_kind` 区分。
         """
         stats = self.texts.stats()
-        before = self.texts.ghost_row_count()
+        before = self.texts.check_fts_consistency()
         self.texts.rebuild_all()
-        after = self.texts.ghost_row_count()
-        log.info("全文索引重建：正文 %d 行（%d 份）｜幽灵行 %d → %d",
-                 stats["pages"], stats["docs"], before, after)
+        after = self.texts.check_fts_consistency()
+        log.info("全文索引重建：正文 %d 行（%d 份）｜%s → %s",
+                 stats["pages"], stats["docs"], before.describe(), after.describe())
         return {"pages": stats["pages"], "docs": stats["docs"],
-                "ghost_before": before, "ghost_after": after}
+                "unindexed_before": before.unindexed, "unindexed_after": after.unindexed,
+                "stale_before": before.stale_docsize, "stale_after": after.stale_docsize}
 
     # —— 单份文档的抽取 ——————————————————————————————————
 

@@ -6,7 +6,9 @@
    所以写入必须走 `text_pages`，由三条触发器同步索引；直接写 `content_fts` 会把两边写歪。
 2. **删一份文档的正文 = 删 `text_pages` 的行**，触发器负责从索引里摘干净。
    `delete` 命令漏带 `old.body` 时 SQLite 不报错，只留幽灵行（p1 `delete_trigger_trap`）——
-   所以这里配了 `ghost_row_count()`，G10 每次门禁都数一遍。
+   这种幽灵**没有免词的可测口径**（见 `check_fts_consistency()` 里那张实测表），所以它由
+   触发器的行为断言守着（G10 用例：删完再搜必须搜不到），能测的两向由 `check_fts_consistency()`
+   每次门禁都数一遍。
 3. **短查询走 LIKE**。trigram 需要 ≥3 个字符才能构成一个 gram（p1：2 字词 trigram 命中 0），
    1–2 字查询由 `search` 层显式选 LIKE 通道，并在结果里标明用的是哪种口径，不许静默返回 0 条。
 """
@@ -32,10 +34,35 @@ class PageHit:
     score: float
 
 
+@dataclass(frozen=True)
+class FtsConsistency:
+    """全文索引与正文表的可测对账结果。口径只有两条，都是**能数出来**的：
+    `unindexed`=正文在库里但索引花名册没有它；`stale_docsize`=花名册里还挂着已被删的正文行。
+    倒排里的幽灵条目不在这里（测不到，理由见 `check_fts_consistency()`），别把它当"幽灵行计数"。
+    """
+
+    pages: int
+    indexed: int
+    unindexed: int
+    stale_docsize: int
+
+    @property
+    def aligned(self) -> bool:
+        return self.unindexed == 0 and self.stale_docsize == 0 and self.pages == self.indexed
+
+    def as_dict(self) -> dict[str, int]:
+        """探针/门禁把它整个塞进报告 JSON，读数要能远程对着看。"""
+        return {"pages": self.pages, "indexed": self.indexed,
+                "unindexed": self.unindexed, "stale_docsize": self.stale_docsize}
+
+    def describe(self) -> str:
+        return (f"正文 {self.pages} 行｜索引花名册 {self.indexed} 行｜"
+                f"未进索引 {self.unindexed}｜花名册残留 {self.stale_docsize}")
+
+
 class TextRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
-
     def replace_pages(self, doc_id: int, pages: list[TextPage]) -> int:
         """整体替换某文档的正文页。删旧 + 插新在**一个事务**里：
         中途失败要么全不做，要么全做完，不许留下"半本正文 + fts_status=done"。"""
@@ -162,11 +189,39 @@ class TextRepository:
             (*w.params, like_contains(needle), limit)).fetchall()
         return [PageHit(**dict(r)) for r in rows]
 
-    def ghost_row_count(self) -> int:
-        """G10：索引里指向已不存在的正文行的条目数。正确实现下必须是 0。"""
+    def check_fts_consistency(self) -> FtsConsistency:
+        """G10：全文索引与正文表对不对得齐。只报**测得到**的两件事，并说清测不到什么。
+
+        外部内容表（`content_fts` 只存倒排，正文在 `text_pages`）能免词枚举的口径只有影子表
+        `content_fts_docsize` 的花名册。四种坏法实测（`tests/probes/p14_fts_instrument.py`，
+        每次跑都重新验一遍）：
+
+        | 坏法 | `count(*) FROM content_fts` | docsize 双向 | 带词的 `MATCH` |
+        | --- | --- | --- | --- |
+        | 删正文时 delete 触发器列清单写错（p1 的真实陷阱，SQLite 不报错） | **看不见**（恒等于正文行数） | **看不见** | **看得见** |
+        | insert 触发器不在（正文进库、索引没有） | 看不见 | `unindexed` 看见 | 少一条命中 |
+        | 正文删了、delete 触发器也没有（纯幽灵） | 看不见 | `stale_docsize` 不一定看见 | **看得见** |
+        | 一切正常 | 0 | 0 | 相等 |
+
+        所以：**倒排里的幽灵条目在本产品里测不到**（空前缀 `MATCH ''` 直接报语法错，
+        FTS5 的 `integrity-check` 对外部内容表在四种坏状态下全部"通过"，等于没有检查）。
+        这一面由两条别的东西兜住：
+        ① 迁移里那三条触发器是**行为**验的（`tests/guards/test_migrations.py` 的 G10 用例：
+        删完正文再 `MATCH` 必须为 0 —— 触发器写坏它会红，实测过）；
+        ② 检索通路每次都 `JOIN text_pages`（`search_fts`），幽灵条目进不了结果集，
+        用户不会看到"已删文件的正文命中"，代价只是索引体积与 bm25 的排序。
+        补救入口是 `rebuild_all()`：实测坏状态下 rebuild 之后 `MATCH` 与 docsize 全部对齐。
+        """
         conn = self.engine.thread_connection()
-        return conn.execute(
-            "SELECT count(*) FROM content_fts WHERE rowid NOT IN (SELECT rowid FROM text_pages)").fetchone()[0]
+        pages = conn.execute("SELECT count(*) FROM text_pages").fetchone()[0]
+        indexed = conn.execute("SELECT count(*) FROM content_fts_docsize").fetchone()[0]
+        unindexed = conn.execute(
+            "SELECT count(*) FROM text_pages tp WHERE tp.rowid NOT IN (SELECT id FROM content_fts_docsize)"
+        ).fetchone()[0]
+        stale = conn.execute(
+            "SELECT count(*) FROM content_fts_docsize WHERE id NOT IN (SELECT rowid FROM text_pages)"
+        ).fetchone()[0]
+        return FtsConsistency(pages=pages, indexed=indexed, unindexed=unindexed, stale_docsize=stale)
 
     def rebuild_all(self) -> None:
         """让外部内容表与内容表重新对齐（`text_pages` 是真身，索引只是投影）。"""

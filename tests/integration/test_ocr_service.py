@@ -27,6 +27,7 @@ import pytest
 
 from pdfarchiver.db.repositories.jobs import TERMINAL_STATES
 from pdfarchiver.fs.identity import identity_key
+from pdfarchiver.indexing.fts import match_expression
 from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure, WorkQueue
 from pdfarchiver.ocr.budget import OcrBudget, page_timeout_ms
 from pdfarchiver.ocr.engine import OcrPage
@@ -228,16 +229,26 @@ def test_OCR文本进全文索引且标明出处(ctx, root, make_scanned_pdf) ->
 
 
 def test_删掉OCR行全文索引不留幽灵行(ctx, root, make_scanned_pdf) -> None:
-    """G10 的 OCR 侧：按 `source_kind='ocr'` 批量清除必须连索引一起清掉。"""
+    """G10 的 OCR 侧：按 `source_kind='ocr'` 批量清除必须连索引一起清掉。
+
+    两条断言各管一面，缺一面就有一个坏法溜过去（实测口径见 `check_fts_consistency`）：
+    计数口径能抓"正文进库、索引没收录"，抓不到 p1 那个 `delete` 触发器列清单写错——
+    那种幽灵只有**拿词直接问索引**才看得见（搜索通路自带 JOIN，问它是问不出来的）。
+    """
     ctx.ocr.engine = _FakeEngine(texts={1: "撤回通知函原件丢失"})
     doc_id = _scanned(ctx, root, make_scanned_pdf)
     ctx.ocr.ocr_document(doc_id)
-    assert ctx.texts.ghost_row_count() == 0
+    assert ctx.texts.check_fts_consistency().aligned
 
     deleted = ctx.texts.delete_ocr_pages(doc_id)
 
     assert deleted == 2, "整本清除按份算：两页 OCR 行都得删掉"
-    assert ctx.texts.ghost_row_count() == 0, "幽灵行 = 搜得到但点开没内容"
+    check = ctx.texts.check_fts_consistency()
+    assert check.aligned, f"索引与正文两张皮：{check.describe()}"
+    raw = ctx.texts.engine.thread_connection().execute(
+        "SELECT count(*) FROM content_fts WHERE content_fts MATCH ?",
+        (match_expression("撤回通知函"),)).fetchone()[0]
+    assert raw == 0, f"倒排里还挂着 {raw} 条已删正文的条目 —— 搜索靠 JOIN 挡住了用户，但索引没摘干净"
     assert SearchService(ctx.documents, ctx.metadata, ctx.texts).search(
         Criteria(text="撤回通知函", in_fields=(FIELD_BODY,))).hits == []
 
@@ -250,10 +261,39 @@ def test_索引重建把OCR文本一起重算(ctx, root, make_scanned_pdf) -> No
 
     report = ctx.indexer.rebuild_fts()
 
-    assert report["ghost_before"] == 0 == report["ghost_after"]
+    assert report["unindexed_before"] == 0 == report["unindexed_after"], report
+    assert report["stale_before"] == 0 == report["stale_after"], report
     assert report["pages"] >= 2 and report["docs"] >= 1
     assert SearchService(ctx.documents, ctx.metadata, ctx.texts).search(
         Criteria(text="海洋牧场", in_fields=(FIELD_BODY,))).hits, "重建之后照样要搜得回来"
+
+
+def test_索引漏了一页时重建把它补回倒排(ctx, root, make_pdf) -> None:
+    """`rebuild_fts()` 是**真补救**不是句空话：先造出"正文在库里、倒排里没有"的实际缺口，
+    再用重建把它销掉，前后两个数都得在报告里说得出名字。
+
+    缺口是关掉 insert 触发器后直写 `text_pages` 造出来的（外部内容表的索引只由触发器维护），
+    这一步同时证明：计数口径确实抓得住这类坏法（`unindexed` 从 1 变 0），不是永不变的瞎数。
+    """
+    doc_id = _textual(ctx, root, make_pdf)
+    conn = ctx.texts.engine.thread_connection()
+    conn.execute("DROP TRIGGER tx_pages_ai")
+    conn.execute("INSERT INTO text_pages(doc_id, page_no, source_kind, char_count, body, indexed_at)"
+                 " VALUES(?, 99, 'native', 5, '重建补回的页', 1)", (doc_id,))
+    conn.commit()
+
+    broken = ctx.texts.check_fts_consistency()
+    assert broken.unindexed == 1, broken.describe()
+    assert SearchService(ctx.documents, ctx.metadata, ctx.texts).search(
+        Criteria(text="重建补回的页", in_fields=(FIELD_BODY,))).hits == [], "漏索引的那页此时搜不到（这才是要修的状态）"
+
+    report = ctx.indexer.rebuild_fts()
+
+    assert (report["unindexed_before"], report["unindexed_after"]) == (1, 0), report
+    after = ctx.texts.check_fts_consistency()
+    assert after.aligned, after.describe()
+    assert SearchService(ctx.documents, ctx.metadata, ctx.texts).search(
+        Criteria(text="重建补回的页", in_fields=(FIELD_BODY,))).hits, "重建之后这页必须搜得回来"
 
 
 # —— 第 8 条：幂等 ————————————————————————————————————

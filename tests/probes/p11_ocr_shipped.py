@@ -474,7 +474,7 @@ def main() -> int:
                           "source_kind": p.source_kind, "cjk_ratio": cjk_ratio(p.body)}
                          for p in pages],
             "doc_ocr_status": doc.ocr_status, "doc_ocr_pages_done": doc.ocr_pages_done,
-            "last_ocr_at": doc.last_ocr_at, "ghost_rows": ctx.texts.ghost_row_count(),
+            "last_ocr_at": doc.last_ocr_at, "fts": ctx.texts.check_fts_consistency().as_dict(),
             "sample_text_first_page": (bodies[min(bodies)][:240] if bodies else ""),
             "per_page_lines_from_engine": report["run"]["per_page_lines"],
             "line_count_note": "库里 body 已过 normalize（连续空白压成一个空格），落库后数不出行，"
@@ -566,7 +566,8 @@ def judge(report: dict) -> dict[str, bool]:
         and store["all_pages_have_current_version"],
         "主记录状态、页数与完成时刻都写了": store["doc_ocr_status"] == "done"
         and store["doc_ocr_pages_done"] == sample["pages"] and store["last_ocr_at"] is not None,
-        "外部内容表没有游离行": store["ghost_rows"] == 0,
+        "OCR 正文与全文索引花名册对得齐（漏索引/残留都为 0）": store["fts"]["unindexed"] == 0
+        and store["fts"]["stale_docsize"] == 0 and store["fts"]["pages"] == store["fts"]["indexed"],
         "第二次点名不再推理": report["idempotency"]["second_enqueued"] == 0
         and report["idempotency"]["skipped_current"] is True
         and report["idempotency"]["pages_recognized_second_time"] == 0

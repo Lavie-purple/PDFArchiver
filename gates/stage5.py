@@ -110,8 +110,10 @@ def gate_shipped_measurement() -> Row:
         bad = [name for name, ok in r["verdicts"].items() if not ok]
         # 门禁自己再核四件：探针哪天不再断言这些，这里得先红，而不是跟着一起绿。
         cross = []
-        if store["ghost_rows"] != 0:
-            cross.append(f"外部内容表有 {store['ghost_rows']} 条游离行")
+        if store["fts"]["unindexed"] or store["fts"]["stale_docsize"]:
+            cross.append("正文 {} 行 vs 索引花名册 {} 行：漏索引 {}、残留 {}".format(
+                store["fts"]["pages"], store["fts"]["indexed"],
+                store["fts"]["unindexed"], store["fts"]["stale_docsize"]))
         if idem["inferences_second_request"] != 0:
             cross.append(f"重复点名仍在推理 {idem['inferences_second_request']} 次")
         if ctrl["inferences_added"] != 0:

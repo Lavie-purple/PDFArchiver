@@ -327,7 +327,7 @@ def test_内容变了必须重抽且旧正文不残留(ctx, root, make_pdf) -> N
     assert ctx.texts.count_pages(doc_id) == 2
     bodies = " ".join(p.body for p in ctx.texts.pages_of(doc_id))
     assert "新措辞" in bodies and "老措辞" not in bodies, bodies
-    assert ctx.texts.ghost_row_count() == 0, "外部内容表的删除触发器没跑，FTS 里会留下搜得到的孤行"
+    assert ctx.texts.check_fts_consistency().aligned, "外部内容表与正文表两张皮（漏索引或花名册残留）"
 
 
 def test_入库正文只压空白其余一字不改(ctx, root, make_pdf) -> None:

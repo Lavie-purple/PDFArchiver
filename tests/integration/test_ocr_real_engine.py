@@ -155,4 +155,4 @@ def test_真引擎经真队列落库并把状态写回主记录(ctx, root, tmp_p
     assert (doc.ocr_status, doc.ocr_pages_done) == ("done", 1)
     assert doc.last_ocr_at is not None, "状态页要回答「这份是什么时候识别完的」"
     assert ctx.texts.count_ocr_pages(doc_id) == 1
-    assert ctx.texts.ghost_row_count() == 0, "OCR 写进外部内容表后索引必须跟着对齐"
+    assert ctx.texts.check_fts_consistency().aligned, "OCR 写进外部内容表后索引必须跟着对齐"
