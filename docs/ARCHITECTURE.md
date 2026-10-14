@@ -36,9 +36,11 @@ src/pdfarchiver/
     snippets.py★          #   命中片段与页码（Python 侧算偏移，FTS5 无 offsets()）
     normalize.py★         #   入库前只做一件事：连续空白压成一个空格。不改大小写、不删标点、不裁长度
   search/★                # 搜索编排：文件名/元数据/全文/筛选/排序（四通道各自可断言，合并去重限量）
-  ocr/                    # OCR 任务层
-    engine.py             #   RapidOCR 封装；后端可选 cpu/directml，失败可降级
-    queue_ops.py          #   任务拆分、进度、重试
+  ocr/                    # OCR 引擎层（**可选层整体缺席**：没装 rapidocr 时应用照常起，只报"OCR 不可用"）
+    engine.py★            #   RapidOCR 封装：版本指纹（故意不含 provider，D-029）、串行锁（D-008）、
+                          #   逐页返回错误对象而不抛（I 类事故：一本坏书拖死 worker）
+    budget.py★            #   两条资源限量的唯一出处：单页超时（按 provider 分档）+ 每日页预算（UTC 日记账，D-028/D-032）
+                          #   推导关系由 tests/unit/test_ocr_limits.py 钉住 —— 改数必须同时改实测出处
   semantic/               # 语义搜索与本地 AI 层（**可整体缺席**）
     embedder.py           #   ONNX 向量；模型缺失时抛 ModelUnavailable
     vector_store.py       #   独立向量索引文件
@@ -54,6 +56,8 @@ src/pdfarchiver/
   services/               # 应用服务层：把上面各层编排成用例
     scan_service.py★      #   scan 任务体 + 单条事件对账（快路）；唯一写 documents 文件事实的地方
     index_service.py★     #   index 任务体；四条口径见文件头（sha256 短路 / fts_status 不写 running）
+    ocr_service.py★       #   ocr 任务体：入场券（ocr_ready）→ 页级幂等待办 → 逐页识别 → 按页落库带版本 →
+                          #   进同一张 FTS；回执分四类（点名/该跑/新增/为什么没进，D-031）；限量在这里判停（D-028）
     patrol.py★            #   界面定时器上的巡检：只排任务，自己绝不扫目录（慢路 = 周期全量校验）
     bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检
     status_service.py★    #   界面唯一取数口；只读、不缓存
@@ -71,9 +75,11 @@ src/pdfarchiver/
                           #   时间戳唯一口径 log_stamp() = UTC ISO 带 Z（D-022）
 tests/
   probes/                 # p0..p8 阶段 0 技术前提探针（保留可重跑）+ p9★ 反向注入（验断言有没有牙齿）
-  unit/★                  # 纯逻辑，无 UI、无真实文件
+                          # 阶段 5 新增：p10★ OCR 反向注入 45 条、p11★ 产品路径端到端实测（真语料扫描件）
+  unit/★                  # 纯逻辑，无 UI、无真实文件；阶段 5 新增 ocr_engine 18 / ocr_idempotency 22 / ocr_limits 6
   integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
-                          # 阶段 2 新增：扫描 34 / 队列 27 / 索引 23 / 检索 20 / 状态 16 / 监听接线 10
+                          # 阶段 2 新增：扫描 34 / 队列 29（含三种"停"各一条）/ 索引 23 / 检索 20 / 状态 16 / 监听接线 10
+                          # 阶段 5 新增：ocr_service 33 / ocr_budget 8 / ocr_real_engine 4（真推理，装了可选层才跑）
   guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
   #                         本机路径字面量 / 导航分组（AST）、迁移不丢数据
   e2e/★                   # 阶段 2 已建：真 worker + 真 watchdog + 真 PDF，11 条全链验收
@@ -81,6 +87,8 @@ tests/
 gates/
   stage1.py★              # 阶段 1 门禁链：G21→架构守卫→全量回归→冷启动实测→反向注入，末行 VERDICT
   stage2.py★              # 阶段 2 在其上加两步：后台生命周期（state.log 三行齐全）+ e2e 验收（搬回真实检索行）
+  stage5.py★              # 阶段 5 在其上加三步：产品路径端到端实测（现场打印耗时/内存/显卡/质量/追溯/幂等/控制组）、
+                          #   每日页预算真停机、真引擎套件不许退化成 skip。**这条门禁里不许出现任何写死的性能数字**
   # 01_deps_guard … 09_readback 那份拆分是阶段 7 的形态；没到对应阶段不建空门禁（R-007）
 docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表
 requirements/             # 分层依赖清单
@@ -119,7 +127,7 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
 | 线程 | 谁起 | 干什么 | 死了会怎样 |
 | --- | --- | --- | --- |
 | 主线程 | Qt | 渲染 + 状态栏 + **巡检定时器** | 应用没了 |
-| worker × `worker_threads`（默认 2） | `WorkQueue.start()` | 领 `scan` / `index` 任务；每线程一条 sqlite 连接（`engine.thread_connection()`） | `threading.excepthook` 落 `crash.log`（阶段 2 修好的一条，见 D-027） |
+| worker × `worker_threads`（默认 2） | `WorkQueue.start()` | 领 `scan` / `index` / `ocr` 任务；每线程一条 sqlite 连接（`engine.thread_connection()`） | `threading.excepthook` 落 `crash.log`（阶段 2 修好的一条，见 D-027） |
 | `WindowsApiObserver` | `WatchManager.start()` | 把磁盘事件塞进 `EventBuffer`，**不碰库** | **以前没人知道**：`watched_roots` 照旧是 1。现在有 `is_alive()` → `BackgroundState.watcher_alive` → 状态页 ⚠ 行 |
 
 两条纪律是阶段 2 实测逼出来的：
@@ -130,9 +138,18 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
   它一旦能直接写状态，就能写出状态流转表里不存在的边（D-025）。
 - **GPU 任务全局串行**：P5 孤跑实测单个 OCR(DirectML) 进程吃掉 **701MiB** 显存，把本机空闲从 1369MiB 压到 668MiB；
   而嵌入模型（P6 fp32）也要在同一块卡上跑。两个 GPU 任务同时启动就是 1400MiB > 1369MiB，直接 OOM。
-  队列必须保证「同一时刻最多一个 GPU 任务」，
-  且 OCR/嵌入要能在 UI 提示下让位给阅读器。
+  **阶段 5 已落地的那一半**：串行做在 `ocr/engine.py` 的实例锁里（`test_多线程推理同一时刻只有一个在跑`），
+  两个 worker 同时领到 OCR 任务也只会有一个在推理，另一个排在锁上 —— 队列不需要知道"这是 GPU 任务"。
+  嵌入层（阶段 6）必须与 OCR 抢**同一把**全局锁，不能各锁各的。
+- **OCR 的内存纪律是"一次一张图"**：`parsing/pdf.py` 出图 + `ocr_service` 逐页落库，任何"先把 N 页都渲好再一起识别"
+  的写法在 946 页的书上就是 946 × 单页位图。门禁 G8 实测峰值 806–1,131MiB（启动态 72.4MiB），
+  距离 1.2GB 的红线**余量不足 100MiB**（I16）—— 这也是为什么它只在**单 worker 实际推理**时成立。
+- **三种"停"各有各的收尾**（D-030，阶段 5 是被这条测出来的）：用户请求取消 → 库里已是 `cancelled`；
+  退出闸门拉下 → 行留 `running`，交给下次启动的 `recover()`；处理函数自己判停（抛 `JobCancelled`，
+  预算用满 / 单页超时都是这种）→ 落 `cancelled` **终态**并把原因写进 `last_error`，不消耗重试预算。
+  三者混淆的代价不一样：把判停写成 `done` 就是"这半本书永远不再被补"，把退出写成 `cancelled` 就是"关个应用把在跑的任务作废"。
 - 取消：worker 每处理一页检查一次取消位；PyMuPDF 的页面级调用是可安全中断的粒度。
+  **但 ONNX 推理一旦提交就收不回来** —— 单页超时只能在返回之后判定，判超时的同时 GPU 时间已经烧掉（I21）。
 
 ## 四 · 三层检索的依赖关系（SPEC 第 4 条要求明确）
 
@@ -172,7 +189,7 @@ OCR 文本        ──► 同一张 FTS5，source_kind='ocr'     依赖：ocr 
 | D-019 | 用户设置存 `config/settings.json`，应用内部状态存 `app_settings` 表，**两处各一个口径** | 阶段 1 实测：`test_设置持久化跨重启`；启动打印"默认值/覆盖值/来源文件"，注入 I9 证明种子标记有约束力 | 已验证 |
 | D-021 | 性能数字由**被测进程自己**写进 `state.log`，门禁与界面读同一条字段 | 避免"门禁掐一次表、界面显示另一个数"两个口径；注入 I13/I14 证明读数真参与判定 | 已验证 |
 | D-022 | 日志时间戳唯一口径 = UTC ISO 8601 带 `Z`（`log_stamp()`），含 `app.log` 行首 | 反向注入 I16：裸本地时间标 `Z` 格式合法、时刻差 8 小时，只有跨表比时刻抓得住 | 已验证 |
-| D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 5 条、注入 I6/I7 | 已验证 |
+| D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 8 条（0003 之后重数）、注入 I6/I7 | 已验证 |
 | D-024 | 正文 + `content_fts` 进 `catalog.db` 本体；向量另库 | FTS5 外部内容表只能指向同库有 rowid 的表（p1）；分库等于放弃外部内容表、正文再拷一份（p2 膨胀 4.03–6.91×） | 已验证（迁移 0002 + G10 常驻） |
 | D-025 | 处理函数只有 `ProgressMonitor` 两支笔；`done` 的进度补齐在 `JobRepository.succeed()` 里做；收尾按库里状态判流转 | 阶段 2 实测：`test_进度按步长攒着写最后补齐`、`test_试满上限后不再算重试而是留下失败终态`、e2e 残尸回收；注入 I19/I23 | 已验证 |
 | D-026 | `PermanentFailure` 只消耗 1 次尝试，重试预算（3 次）留给瞬时故障 | 阶段 2 实测：损坏/加密文件各 1 次即终态，好文件不受牵连（e2e）；重试上限的唯一持有者是 `WorkQueue.max_attempts` | 已验证 |

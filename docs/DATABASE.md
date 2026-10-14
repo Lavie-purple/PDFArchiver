@@ -13,12 +13,13 @@
 ```
 <数据根>\
   data\★
-    catalog.db★         主库：13 张表（documents / monitored_roots / categories / document_categories /
+    catalog.db★         主库：0001 的 12 张表（documents / monitored_roots / categories / document_categories /
                         tags / document_tags / document_metadata / collections / processing_jobs /
-                        file_operations / operation_items / app_settings / schema_version）
+                        file_operations / operation_items / app_settings）+ `schema_version` 水位表（由 `migrate.py` 建）
+                        + 0002 的 `text_pages` + 0002 的 FTS5 虚表 `content_fts`
     backups\★           迁移前的 Backup API 一致性快照 pre-migration-NNNN-<ts>.db
     cache\★             空着 —— 渲染缩略图缓存属阶段 3
-    content.db          FTS5 全文索引（外部内容表指向 catalog.db 的 text_pages）**未建，阶段 2 的 0002**
+    ~~content.db~~      **不建这个文件**：0002 落地时全文索引进了 `catalog.db` 本体（D-024，理由见 docs/DECISIONS）
     vectors.bin         语义向量索引（semantic 层私有；可整目录删除后重建）**未建，阶段 6**
   config\settings.json★ 用户设置（唯一口径，见 D-019；应用内部状态一律进 app_settings 表，不放这里）
   logs\★                app.log（轮转）/ crash.log（未捕获+线程异常）/ state.log（一行一条 JSON 对账）
@@ -128,6 +129,30 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 终态补齐在 `JobRepository.succeed()` 里做（`done=total`、`progress=1.0`、清 `last_error`），
 不靠处理函数记得 `flush()`。见 D-025。
 
+### 2.4 迁移 0003 实际落地的差异（阶段 5，`0003_ocr_tracking.py`）
+
+只做**加列**，不建新表（你在阶段 5 决策 4 勾选「甲 · 加列」）：
+
+| 列 | 类型 | 谁写 | 唯一口径 |
+| --- | --- | --- | --- |
+| `text_pages.ocr_version` | `TEXT`，原生页留 `NULL` | `OcrService._record_page()` 逐页写 | **幂等的唯一判据**：`rapidocr-onnxruntime/<ver>+onnxruntime/<ver>+dpi<dpi>`，**故意不含 provider**（D-029）。`NULL` 与 `''` 是两件事：前者"没跑过 OCR"，后者不存在 |
+| `documents.ocr_pages_done` | `INTEGER NOT NULL DEFAULT 0` | 每次识别收尾 | **计数不是状态**。状态只有一个口径 = `documents.ocr_status`（取值见 `parsing/classify.OCR_STATUSES`）。这一列不参与任何流转判定，只供状态页读数 |
+| `documents.last_ocr_at` | `INTEGER` | 同上 | 列名跟着既有 `last_scanned_at` / `last_indexed_at` 走，不起第三个名字 |
+
+**刻意没加的两样**（都不是遗漏，改结构前先读 `0003_ocr_tracking.py` 的模块文档）：
+- 不给 `ocr_status` 建部分索引：待 OCR 的文档在真实语料上是千级（p0 实测 7,768 份），
+  `COUNT(*) WHERE ocr_status='pending'` 全表扫几毫秒，为一个几毫秒的读加写放大不值；
+- **不加"OCR 置信度"列**：p5 实测 RapidOCR 只给行文本，**逐行分数没被验证过能不能横向比较**，
+  把一个没验证过的分数写进事实层就等于凭空编指标（SPEC 五）。
+
+**升级证据**：`tests/guards/test_migrations.py` 的真实迁移链一路跑到 `version=3`
+（`applied == ["0002_text_and_fts", "0003_ocr_tracking"]`），并有一条专门盯 0003 的假值问题：
+`test_真实0003加列后老行的OCR列是空而不是假值` —— 老行的 `ocr_version` 必须是 `NULL`，
+写成 `''` 或 `'unknown'` 都会让那一份在下次点名时被误判"已经跑过"。
+`tests/integration/test_bootstrap_and_migration.py` 另有一份**列清单**（0003 只加列不加表）钉住新库建到 version=3。
+每日页预算的**已用页数**不进 `documents`，进 `app_settings`（内部状态，D-019/D-032）——
+它是"今天跑了多少"，不是"这份文档的财产"。
+
 ## 三 · FTS5 的正确接法（三条踩过坑的硬规则）
 
 P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
@@ -177,6 +202,11 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
 
 SPEC 3.6 的要求，按"事务回滚 ≠ 磁盘回滚"来实现。
 
+> **当前状态（阶段 5 收尾时核对）**：本节是**契约设计**，`file_operations` / `operation_items`
+> 两张表已在 `0001` 建出并有无事可做的断言守着，但**执行器、journal、撤销与恢复矩阵尚未实现** ——
+> 全部属于阶段 4。下面提到的断言（`mtime` 集合不变、恢复矩阵未知状态数 = 0）是阶段 4 的**验收要求**，
+> 现在还不存在对应测试文件；在此之前把本节读成"待办"，不要读成"已验"。
+
 ### 5.1 生命周期
 
 ```
@@ -187,8 +217,8 @@ plan(纯计算)  →  preview(UI)  →  [用户确认]  →  journal 落盘  →
                                        undo plan(可选) ← 完成/部分失败/中断
 ```
 
-- **plan 阶段绝不打开、绝不写、绝不 rename**。`tests/integration/test_archive_preview.py`
-  断言预览前后整个目录的 `mtime` 集合完全不变 —— 预览唯一能被证伪的方式就是这个。
+- **plan 阶段绝不打开、绝不写、绝不 rename**。阶段 4 必须用一条"`preview` 前后整个目录的
+  `mtime` 集合完全不变"的断言来钉住它 —— 预览唯一能被证伪的方式就是这个。
 - **未确认绝不执行**：`file_operations.status` 从 `previewed` 到 `running` 必须有显式用户确认调用。
 
 ### 5.2 journal（崩溃恢复的依据）

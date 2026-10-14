@@ -4,12 +4,19 @@
 只做本地的事：扫描目录、抽取正文、建全文索引、阅读、按规则归档实体文件。
 **不上传任何文档内容、提取文本、向量或元数据**；模型推理只在本地，且**不是文件搜索的必要依赖**。
 
-> 当前进度：**阶段 1（应用骨架 + 数据库）已完成，门禁全绿**（106 passed / 0 failed / 1 skipped，
-> G1 冷启动：18 次读数 **0.344–1.031s**（门禁入口 13 次 0.409–0.910s，中位 0.486s），阈值 1.5s **[约定]**；
-> **全部为 `offscreen` 平台，真机首屏未核对（ISSUES I17）**。18/18 反向注入被抓到）。
-> **现在能跑的只有**：启动窗口、点导航切页、看"运行状态与自检"页、把分类/标签/设置/监测根/任务写进库并跨重启读回、
-> 数据库结构迁移与失败回退。**还没有**：目录扫描、全文搜索、OCR、语义搜索、任何文件移动或归档。
-> 界面只到不含布局决策的外壳，A/B/A′ 三案与 8 个未决问题仍等你拍板，见 `docs/`。
+> 当前进度：**阶段 2（扫描 / 索引 / 全文检索）与阶段 5（本地 OCR）已完成**，空载机器上全链门禁
+> 一条命令 **382s / `VERDICT: ALL GREEN`**（350 条，反向注入 46/46 + 45/45）。
+> **有一条还不能说**：收尾新增的那条可选层断言（第 351 条）还没在**空载**下跟着全链绿过一次 ——
+> 21 分钟后的第二次跑判 RED 3 条，三条全是负载绑定的冷启动读数（当时 CPU 96.5%），见 ISSUES **I25**。
+> **阶段 3（分类树 / 标签 / 智能集合 / 搜索 UI / 阅读器）与阶段 4（归档 / 重复 / 撤销 / 备份）一行代码都没做** ——
+> 前者卡在 Q7 界面线框逐屏确认（AGENTS.md 禁令），后者是唯一会改你磁盘的阶段，要单独确认。
+> **现在能跑的**：启动窗口、看"运行状态与自检"页（含后台进度 / 错误 / 重试 / 监听线程是否还活着）、
+> 监测多个目录并增量扫描、真 PDF 抽正文、FTS5 trigram 全文检索（文件名 / 路径 / 元数据 / 正文四通道，
+> 正文命中给**真页码**）、重启后一切还在、对**你显式点名的**扫描书页跑本地 OCR 并把识别文本进索引。
+> **界面仍然只有阶段 1 那一屏**：OCR 这一层目前**没有界面入口**，用法在服务层，见 `docs/OCR.md`。
+> 8 个未决问题里 Q3 已答（2026-10-15），其余仍等你拍板，见 `docs/RISKS.md`。
+> 冷启动读数：空载 **0.344–1.639s**、满载（CPU 96.5%）**3.129s**，阈值 1.5s **[约定]** —— 这是**负载绑定**读数，
+> 且全部取自 `offscreen` 平台，**真机首屏没有人看过**（ISSUES I17 / I25）。
 
 ## 技术栈（全部为实测钉死，不是选型偏好）
 
@@ -39,21 +46,24 @@ docs/
   RISKS.md           高风险决策 R1–R15 + 需要你拍板的未决问题
   DECISIONS.md       技术决策记录（含被否的替代方案与理由）
   TESTING.md         测试分层、硬门禁 G1–G21、反向测试规则、发布门禁链
+  OCR.md             OCR 这一层的装与验 / 配置项 / 怎么用 / 结果读数 / 故障处理（**没有界面入口，读这个**）
   UI-SCREENS.md      界面清单（AGENTS.md 门禁：线框未逐屏确认前不写界面代码）
   ROADMAP.md         分阶段实施计划与每阶段准入门槛
-  ISSUES.md          已知问题台账 I1–I18（收尾必须逐条销账）
+  ISSUES.md          已知问题台账 I1–I24（收尾必须逐条销账）
   CHANGELOG.md       阶段变更与版本记录
   REPO-JOURNAL.md    仓库结构/命名/忽略规则变更记录
-  stage-reports/     每阶段交付报告（阶段 0、阶段 1）
+  stage-reports/     每阶段交付报告（阶段 0、阶段 1、阶段 2、阶段 5）
 requirements/      分层依赖清单 + 版本钉死理由
 main.py            应用入口（先记 T0 再 import，冷启动才量得准）
 conftest.py        把 src/ 挂进 sys.path，测试与 python main.py 用同一份源码
-src/pdfarchiver/   产品代码：config / db(13 表+迁移) / fs / diagnostics / services / ui / app.py
-tests/probes/      p0..p8 技术验证探针 + p9 反向注入（证明断言能变红），可重跑，末尾打印 VERDICT
-tests/unit/        纯逻辑：路径解析、设置校验、文件身份、迁移发现
-tests/integration/ 真实 SQLite + 真 Qt 控件：装配与迁移、仓储层、异常处理、应用外壳
+src/pdfarchiver/   产品代码：config / db(迁移 0001..0003) / fs / parsing / indexing / jobs / search /
+                   ocr(可选层) / services / ui / diagnostics / app.py
+tests/probes/      p0..p8 技术验证探针 + p9 反向注入 + p10 OCR 反向注入 + p11 OCR 产品路径实测，末尾打印 VERDICT
+tests/unit/        纯逻辑：路径解析、设置校验、文件身份、迁移发现、OCR 版本指纹与限量推导
+tests/integration/ 真实 SQLite + 真 Qt 控件：装配与迁移、仓储、异常处理、外壳、扫描、队列、索引、检索、OCR 服务与预算
+tests/e2e/         真 worker + 真 watchdog + 真 PDF 的 11 条全链验收
 tests/guards/      常驻守卫：依赖钉版（G21）、架构方向与 SQL 位置（AST）、迁移不丢数据
-gates/stage1.py    阶段 1 验收门禁链，末行 VERDICT: ALL GREEN
+gates/             stage1.py → stage2.py → stage5.py，逐层叠加，末行 VERDICT: ALL GREEN
 ```
 
 ## 上手
@@ -71,15 +81,19 @@ python -m venv .venv
 .venv/Scripts/python.exe main.py --data-dir D:\pdfdata  # 或明确指一个目录
 .venv/Scripts/python.exe main.py --data-dir <空目录> --exit-after 0.3   # 起得来也关得掉，给门禁用
 
-# 4. 每次收尾跑这条门禁链（约 1 分钟；任何一环红就 exit=1，不许开下一阶段）
-.venv/Scripts/python.exe gates/stage1.py
+# 4. 每次收尾跑这条门禁链（空载约 6.5 分钟；任何一环红就 exit=1，不许开下一阶段）
+#    起跑第一行会打印机器负载 —— G1/G2 的冷启动阈值是负载绑定读数，满载必红（I25），那时空载重跑而不是改阈值
+.venv/Scripts/python.exe gates/stage5.py
+#    只想快一点：--quick 只跑阶段 5 三行 / --no-injection 跳过两条注入探针（141s）
+#    但**收尾必须跑全链**，快链不算销账
 
 # 5. 每次开工先单跑依赖守卫（唯一能挡住段错误 exit 139 的那一步）
 .venv/Scripts/python.exe -m pytest tests/guards -q
 
-# 6. 重跑技术验证（换机器 / 升级依赖后必做；p5 需要独占 GPU）
+# 6. 重跑技术验证（换机器 / 升级依赖后必做；p5、p11 需要独占 GPU）
 .venv/Scripts/python.exe tests/probes/p1_fts5.py
 .venv/Scripts/python.exe tests/probes/p7_path_identity.py
+.venv/Scripts/python.exe tests/probes/p11_ocr_shipped.py   # OCR 产品路径实测（要装 requirements/ocr.txt）
 ```
 
 **启动或运行失败时看这里**：`<数据根>\logs\crash.log`（完整堆栈）与 `app.log`；
@@ -87,11 +101,16 @@ python -m venv .venv
 
 ## 已验证 vs 未定
 
-**已验证可以直接依赖的**：10 条（`docs/VERIFICATION.md` 第五节 V1–V10）。
+**已验证可以直接依赖的**：10 条（`docs/VERIFICATION.md` 第五节 V1–V10）+ 阶段 2 的链路 + 阶段 5 的 OCR 层
+（逐条对账见 `docs/stage-reports/`）。
 
-**还是候选、没定下来的**：中文分词最终选型、OCR 范围策略、全文索引体积策略（外推 28–48GB）、
-向量检索方案、是否引入 QWebEngine、语义检索验收标准、界面屏数与线框、监测目录范围。
+**还是候选、没定下来的**：中文分词最终选型（Q1）、全文索引体积策略（外推 28–48GB，Q2）、
+是否放宽量级阈值与 GB/MiB 单位口径（Q4）、语义检索验收标准与向量方案（Q5/Q6）、
+界面屏数与线框（**Q7 —— 现在最大的硬阻塞**）、监测目录范围（Q8）。
+**OCR 范围策略已定**（Q3，2026-10-15：只跑你显式点名的，零自动触发）。
 逐条列在 `docs/RISKS.md` 与 `docs/VERIFICATION` 第六节。
 
-**一条已知的坏消息**：全量 OCR 不可行 —— 实测 101 万页需 DirectML 1,144 小时（8h/天 × 143 个工作日），
-所以 OCR 只能按需触发，不能当成索引的一个自动步骤。详见 `docs/VERIFICATION` 4.6。
+**一条已知的坏消息，且没有被"优化"掉**：全量 OCR 在本机不可行 —— 全库待 OCR **1,014,112 页**，
+按每日页预算 6,000 页折算 **≈169 天**（p5 那个"1,144 小时 = 143 个工作日"是历史推导，产品口径只有 169 天这一个）。
+所以 OCR 不是索引的自动步骤，只能按需点名，且**每天跑满即停**。
+处置与实测数字见 `docs/OCR.md` 与 **D-006 / D-028**；这条不销账（ISSUES **I1**）。
