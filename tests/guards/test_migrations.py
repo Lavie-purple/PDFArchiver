@@ -17,8 +17,9 @@ from pathlib import Path
 import pytest
 
 from pdfarchiver.db.engine import Engine
-from pdfarchiver.db.migrate import current_version, migrate
+from pdfarchiver.db.migrate import MigrationError, current_version, migrate
 from pdfarchiver.db.migrations import discover
+from pdfarchiver.db.repositories.text import TextRepository
 
 REAL_MIGRATIONS = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver" / "db" / "migrations"
 NEW_TABLES_AT_2 = {"text_pages", "content_fts", "content_fts_config", "content_fts_content",
@@ -184,11 +185,31 @@ def test_真实迁移目录从空库一路能跑到最新版(tmp_path) -> None:
     assert again.did_anything is False
 
 
+def test_迁移目录空时必须硬停而不是零迁移冒充成功(tmp_path) -> None:
+    """`discover()` 对空目录返回 `[]` 是它自己的规矩（单测钉着），但 `migrate()` 不能把"零迁移"当成功。
+
+    这不是假想：阶段 5 的冻结产物双击就打不开，根因是打包漏收 `migrations/*.py`，
+    于是应用静默地一条迁移也没跑、一张表也没建，报错最后落在离根因八丈远的
+    `seed_default_categories`（`no such table: app_settings`）。空发现必须在原地炸，
+    并且**把它翻过的目录打进消息里** —— 冻结产物没有控制台，能远程诊断的只有那一行日志。
+    """
+    empty = tmp_path / "migrations"
+    empty.mkdir()
+    engine = Engine(tmp_path / "catalog.db")
+    with pytest.raises(MigrationError) as e:
+        migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=empty)
+    assert str(empty) in str(e.value), "错误消息必须带上被翻过的目录路径，否则远程看不懂崩在哪"
+    assert not (tmp_path / "backups").exists(), "零迁移也不该留下一份「看起来像升级过」的快照"
+    assert current_version(engine.connect()) == 0
+    engine.close_thread_connection()
+
+
 def test_升级后删掉正文行索引里不留幽灵行(old_db, tmp_path) -> None:
     """G10 的迁移侧：0002 建的三条触发器必须在"老库升级上来的文件"里同样生效。
 
     p1 实测漏写 `old.body` 时 SQLite **不报错**，只留下删不掉的幽灵行 ——
-    所以这里必须直接数索引里还有没有指向已删行的条目。
+    而外部内容表上**没有免词的数数口径能抓到它**（见下一条注入的实测表），
+    所以这条必须**拿词直接问索引**：删完再搜同一个词，命中数要归零。
     """
     engine, _ = old_db
     migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
@@ -200,10 +221,50 @@ def test_升级后删掉正文行索引里不留幽灵行(old_db, tmp_path) -> N
         assert conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0] == 1
         conn.execute("DELETE FROM text_pages WHERE doc_id=1 AND page_no=1")
         conn.commit()
-        assert conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0] == 0
-        ghost = conn.execute(
-            "SELECT count(*) FROM content_fts WHERE rowid NOT IN (SELECT rowid FROM text_pages)").fetchone()[0]
-        assert ghost == 0, "G10：FTS 幽灵行数必须为 0"
+        assert conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0] == 0, \
+            "G10：删掉的正文页必须从倒排里摘干净 —— 这条是带词的，才会红（见下一条注入）"
+        check = TextRepository(engine).check_fts_consistency()
+        assert check.aligned, check.describe()
+    finally:
+        conn.close()
+        engine.close_thread_connection()
+
+
+def test_G10仪表有没有牙_坏法注入实测三种口径(old_db, tmp_path) -> None:
+    """反向注入（AGENTS.md：不会变红的断言直接删）：把 0002 的 `tx_pages_ad` 换成 p1 记过的那个坏写法，
+    删一行正文，三种口径同时读数。数字全部来自本轮实测，写死在这里当"仪表的仪表"：
+
+    | 口径 | 坏法生效后的读数 | 结论 |
+    | --- | --- | --- |
+    | `count(*) FROM content_fts` | 等于正文行数 | **天生瞎**：外部内容表的计数是从正文表枚举出来的 |
+    | `WHERE rowid NOT IN (SELECT rowid FROM text_pages)` | 0 | **天生瞎**：同上，所以旧版 G10 用它等于没测 |
+    | 带词 `MATCH` | 1 | **有牙**：倒排里那条还在，这就是幽灵 |
+    | 带词 `MATCH` 再 JOIN 正文表 | 0 | 检索通路自带兜底，用户看不到幽灵，代价是索引体积与 bm25 排序 |
+
+    这条不是"验产品对"，是"验上面那条断言抓得住东西"。哪天有人把 G10 改回数数，这条会先红。
+    """
+    engine, _ = old_db
+    migrate(engine, backup_dir=tmp_path / "bad", migrations_dir=REAL_MIGRATIONS)
+    conn = engine.connect()
+    try:
+        conn.execute("INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
+                     " VALUES(1, 1, 12, '人工智能行业年度报告', 1)")
+        conn.commit()
+        conn.execute("DROP TRIGGER tx_pages_ad")
+        conn.execute("CREATE TRIGGER tx_pages_ad AFTER DELETE ON text_pages BEGIN"
+                     " INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.rowid, ''); END")
+        conn.execute("DELETE FROM text_pages WHERE doc_id=1 AND page_no=1")
+        conn.commit()
+
+        check = TextRepository(engine).check_fts_consistency()
+        assert check.pages == 0 == check.indexed == check.unindexed == check.stale_docsize, \
+            "数数口径在坏法面前一片祥和（这就是它不能当 G10 的理由）：" + check.describe()
+        ghost = conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0]
+        assert ghost == 1, "带词的问法必须抓到那条幽灵，否则 G10 就没有牙了"
+        surfaced = conn.execute(
+            "SELECT count(*) FROM content_fts JOIN text_pages tp ON tp.rowid = content_fts.rowid"
+            " WHERE content_fts MATCH '人工智能'").fetchone()[0]
+        assert surfaced == 0, "检索通路 JOIN 正文表，幽灵不该进用户眼前"
     finally:
         conn.close()
         engine.close_thread_connection()

@@ -56,6 +56,15 @@ def migrate(engine: Engine, *, backup_dir: Path | None = None,
     """把库升到 migrations 目录里的最新版本。已是最新则什么都不做（幂等）。"""
     migrations_dir = Path(migrations_dir) if migrations_dir else Path(__file__).parent / "migrations"
     pending_all = discover(migrations_dir)
+    if not pending_all:
+        # 空发现必须炸在这里，而不是让应用走到后面某张表不存在时才崩 —— 那是阶段 5 冻结产物
+        # 双击没起来的真实原因：打包时漏收 migrations/*.py，discover() 静默返回 []，
+        # 于是"迁移成功、零条"，表一张也没建，报错落在离根因八丈远的 seed_default_categories。
+        # 反向注入实测：把这段变成永假分支后，全套 340 条测试只有守卫那 1 条变红 ——
+        # 也就是说没有这条守卫，整个测试套件都会放行"零迁移静默成功"。
+        raise MigrationError(
+            f"迁移目录里一个迁移也没有：{migrations_dir}（拒绝在零迁移下启动 —— 表不会建）",
+            FileNotFoundError(str(migrations_dir)), db=str(engine.path))
     conn = engine.connect()
     try:
         conn.isolation_level = None  # 手动 BEGIN/COMMIT，见模块文档第 2 条
