@@ -485,6 +485,157 @@ G5 第二条（预算真停机）的现场读数：
   "全库待 OCR 1,014,112 页"是 p5 的**抽样外推**，不是这套代码扫出来的。
 - 机器可读产物：`p11_ocr_shipped_result.json`（`--out` 默认落 `.probe_work/`，收尾会清零，重跑探针即可再生）。
 
+### 4.13 最终交付链实测（2026-10-15，`gates/final.py` 八段一条命令）
+
+跑法与口径：`.venv\Scripts\python.exe gates\final.py --only coldstart --only e2e --only regression
+--only consistency --only soak --only injection --only ocr --only package`
+（原始输出 `.probe_work/final_chain_1015.log`，14,078 字节。收尾只删了**当场写的脚本与被后续读数取代的 log**，
+这一份与 `frozen_smoke_result.json` 留在 gitignored 的现场目录里当原始证据 —— 不入库，重跑即再生）。
+**`guards` 段故意没在这一场里**：它含交付文档在场性判定，而报告当时还没写 ——
+链自己在输出里就把这一段标成"未跑"，不许拿这一场的 ALL GREEN 给报告背书。
+
+```
+门禁运行于 H:\AI project\demo19｜python 3.11.7
+        起跑负载：CPU 14.1%｜可用内存 5145MiB｜最吃内存进程 MemCompression 598MiB
+        本次跑 8 段：coldstart + e2e + regression + consistency + soak + injection + ocr + package
+  ── 段 coldstart（1.0s）      PASS  G1 冷启动 ≤ 1.5s [约定] + 关窗对账
+  ── 段 e2e（10.1s）           PASS ×2（后台生命周期 0.428s｜11 条端到端｜带页码命中 6 行）
+  ── 段 regression（49.6s）    PASS  全量回归 355 passed / 0 failed / 0 error / 1 skipped
+  ── 段 consistency（3.5s）    PASS ×3（p12 注入 17/17｜p14 ALL GREEN｜真实现场"本次未跑"）
+  ── 段 soak（288.8s）         PASS ×2（p13 注入全绿 + 真跑 4.0 分钟 9/9）
+  ── 段 injection（170.9s）    PASS ×2（p9 46/46、p10 45/45）
+  ── 段 ocr（28.4s）           PASS ×3（产品路径 / 预算真停机 / 真引擎套件 4 passed 0 skipped）
+  ── 段 package（255.0s）      PASS ×2（build.py 内容断言 + 冻结冒烟）
+  SKIP  未跑的段：guards（依赖守卫 + 架构守卫 + 交付文档在场性）—— 这一场的「全绿」不覆盖它
+  合计判定 16 条｜本次未跑 1 段
+VERDICT: ALL GREEN
+```
+
+八段墙钟相加 **807.3s（13 分 27 秒）**；这场链的**起止时刻是反推的**，不是门禁自己打的（它只打每段耗时）：
+`.probe_work` 里 `final_chain_1015.log` 与 `frozen_smoke_result.json` 的最后写入都是 **04:44:55**，
+减 807.3s → 起跑 **约 04:31:28**；再用末段互验 —— 冻结冒烟的临时目录名 `frozen_smoke_1015_044235`
+（04:42:35 起跑）＋ build 111.2s ＋ 冒烟 139.7s ≈ package 段自报的 **255.0s**，三条对得上。
+每条 PASS 的读数都是**当次现场打印**，没有一条从 4.10/4.11/4.12 抄。
+**这 16 条里有一条不算验过**：consistency 段的"一致性核查 p12 对真实数据根"在没给 `--data-root` 时是一行
+**结构上不可能变红**的 `PASS`，它的"实测"文本自己写着"本次未跑"—— 所以 `合计判定 16 条` ≠ 16 件覆盖到的事，
+真实现场那一次是另开的 `--only consistency`（下面"报告写完之后的三场补跑"里的第二场）补的。这条毛病记在 **ISSUES I36**（OPEN），
+改法与为什么收尾时没改都写在 **D-034** 末尾。
+
+**逐字关键读数**（都来自上面那一场）：
+
+- 冷启动：源码 **0.437s**（G1 阈值 1.5s **[约定]**）、后台生命周期那次 **0.428s**；
+  **冻结产物 1.109s**（`cold_start_seconds=1.109`，同一阈值内，但比源码慢 2.5 倍 —— 这是打包带来的真实代价）。
+- 回归：**355 passed / 1 skipped**（那 1 条 skip 是无 DirectML 时才走的 CPU 档）；
+  同一条链在**注入坏法之后**当场变红的记录见下面「两条补做的注入」。
+- 长跑（4.0 分钟真采样，进程树求和口径）：
+  首段 RSS 中位 **83.4** → 末段 **83.8MiB**（增长 **+0.4**，全程 83.0–83.8）、G8 余量 1,116.2MiB；
+  线程 13 → 10（峰值 15）、句柄峰值 315；排空用时 **0.0s**｜结束时队列 `{'done': 90}`；
+  盘上 PDF **52** ＝ 库里未标缺失 **52**（已标缺失 10）；`app.log` 相关 **1 份｜28KiB｜126 行**；
+  S9 用 p12 复查这场长跑现场 **13 条全绿 0 未验**；快照 3 份 `@v0/@v1/@v2`（8/120/148KiB）。
+  ⚠️ `排空 0.0s` 不等于"大积压能排空"，见 **I32** —— 交付报告把这条放在"已实现但尚未充分验证"。
+- OCR 产品路径（真引擎真扫描书 **S1** 第 217 页起 6 页，原生文本层 0 字）：
+  `provider=DmlExecutionProvider`｜初始化 0.707s｜onnxruntime 1.20.1｜
+  单页推理 **1691.0 / 2006.4 / 2647.6ms**｜整本墙钟 **12.75s**（含出图落库 **2125.0ms/页**）｜队列收尾 0.152s｜
+  启动态 72.4MiB → 跑完 540.5MiB、峰值 **869.2MiB**｜显存跑前 free 1,676MiB → 跑后 free 3,280MiB
+  （GTX 1060 4,354MiB 总量，util 0%→32%）｜每页字数 [673, 756, 731, 963, 604, 586]、每页行数 [30, 47, 30, 32, 33, 30]｜
+  合成页逐字命中 **12/12**、行均相似度 **1.0**、单页 984.3ms｜6 个取自识别正文的词命中页均含预期页、
+  出处标签只有 `['OCR 识别（可能有错字）']`｜幂等第二次点名**新增推理 0 次**｜
+  控制组 **C1**（整页图 + 隐形字层）**新增推理 0 次**（字层已在正文索引里，2833 字 / 6 页）｜
+  预算给死 2 页 → 真推理 2 页后停在第 3 页，`state=cancelled`、`done/total=2/4`、`attempts=1`、
+  文档 `ocr_status=partial`、待办剩 `[3, 4]`、复用 2 页。
+  样本真名↔代号只留在 gitignored 的 `.probe_work/`（R-008），上面这行里的书名不出现在任何入库文件。
+- 打包（`--only package` 用**当前源码**重建，I30 的残留因此清掉）：
+  整包 **392.2MiB**｜`_internal` 明细合计 374.3MiB ＝ 实际 374.3MiB（对账相等）｜构建 111.2s｜
+  OCR 层在场 `{'rapidocr': True, 'onnxruntime': True}`、3 个 `.onnx` 模型、3 个推理 DLL
+  （`DirectML.dll` / `onnxruntime.dll` / `onnxruntime_providers_shared.dll`）、
+  版本指纹要读的 `.dist-info` 6 份（含 `onnxruntime_directml-1.20.1`、`rapidocr_onnxruntime-1.4.4`）、
+  迁移脚本按 `.py` 进包且与源目录清单一致、构建日志 `ERROR` 行 **0 条**；
+  产物自报版本：`dist\PdfArchiver\PdfArchiver.exe --version` → **`PdfArchiver 0.5.0`**（退出码 0）。
+- 冻结产物冒烟 29 行全过，关键几条：干净目录首启退出码 0、优雅关闭 True（0.35s）、峰值 RSS 108.8MiB、
+  采样 12 次；`crash.log` **0 个**；`schema_version=3`、默认分类 14；两批语料 **273/273** 在册；
+  正文 **304 行**、`text_pages − content_fts = 0`（这两个数是在**第一批 153 份**抽完正文时量的，
+  第二批只验到"文档数 = 磁盘数 = 273"，所以不许把"273 份 ↔ 304 行"读成同一时刻的两个数）；
+  **另有一场更早的独立冒烟**用的是 273 份 / **544 页正文**那份语料 ——
+  `docs/BACKUP-RESTORE.md`（543 ≠ 544 那条恢复实测）与 `docs/TROUBLESHOOTING.md` 里的 544 都出自那一场上，
+  **两场的数各自成场，不许混用**（这也是为什么两份文档的文档数一样、正文数不一样）；
+  OCR 在**冻结产物里**真跑通（1 页、等 4.1s、峰值 RSS 528.2MiB、
+  线程 46、句柄 654；识别正文前 120 字非空、版本戳 `rapidocr-onnxruntime/1.4.4+onnxruntime/1.20.1+dpi200`）；
+  重启前后计数一致；**强杀恢复**：残尸 1 条 → `background.started.recovered = 2` → 未完成 0 条、失败 0 条；
+  事件序列 `['startup.begin','startup.done','window.ready','background.started','shutdown']`；
+  产出的配置与日志里**不含**开发机仓库路径 / venv 路径（扫了 2 个文件，命中=无）；
+  运行目录在仓库外（`%TEMP%\frozen_smoke_1015_044235\`）。
+
+**两条补做的坏法注入**（交付需求"每写完一条断言先用能骗过它的坏法真注入一次"，本轮欠账清零）：
+
+1. **`rebuild` 只读数不补救**：把 `services/index_service.py` 的 `self.texts.rebuild_all()` 换成 `pass`。
+   第一版 p14 的 ⑤ **当场没变红**（9/9 仍 ALL GREEN）—— 因为它在探针里自己写了一遍 `VALUES('rebuild')`，
+   压根没走产品入口（**I33**）。改成 `import` 产品的 `IndexService.rebuild_fts()` 并核对它返回的六个数之后：
+   p14 → `VERDICT: RED（2 条…）` 退出码 1，产品入口返回
+   `{'pages': 2, 'docs': 1, 'unindexed_before': 1, 'unindexed_after': 1, 'stale_before': 1, 'stale_after': 1}`
+   （`after` 不为 0 就是"没补救"的铁证），门禁 `--only consistency` → `VERDICT: RED（1 条未过）` 退出码 1。
+   撤销注入 → p14 **10/10 ALL GREEN**、门禁 **ALL GREEN** 退出码 0。
+2. **标题不含版本号**：`main_window.py` 改回写死 `"PDF 归档工具"`（去掉 `v{__version__}`）→
+   `tests/integration/test_app_shell.py::test_窗口真实显示并列出全部导航项` **FAILED**，
+   全量回归 **1 failed, 354 passed, 1 skipped in 54.44s**，门禁 `--only regression` →
+   `VERDICT: RED（1 条未过）`（57.1s）。撤销后 18 条相关断言 3.31s 全绿。
+   这条断言的来源与口径见 **I30**（唯一存放处 = `__init__.py::__version__`）。
+
+**报告写完之后的三场补跑**（上面那一场不含 `guards`，报告本身因此一直没有被机器验过在场性）：
+
+```
+        起跑负载：CPU 75.9%｜可用内存 3516MiB｜最吃内存进程 MemCompression 781MiB
+        本次跑 3 段：guards + regression + docs-inject
+  ── 段 guards（0.9s）       PASS ×6（G21 依赖守卫｜架构守卫｜四份文档在场 9/16/14/14KiB｜
+                                   报告 19KiB 缺栏 无｜占位符命中 无｜四份都含"实测"）
+  ── 段 regression（55.7s）  PASS  全量回归 355 passed / 0 failed / 0 error / 1 skipped
+  ── 段 docs-inject（0.0s）  PASS  残缺报告 + TBD 文档：抓到 两条都变红
+  合计判定 8 条｜本次未跑 7 段
+VERDICT: ALL GREEN
+```
+
+```
+        起跑负载：CPU 46.6%｜可用内存 2895MiB｜最吃内存进程 chrome.exe 712MiB
+        本次跑 1 段：consistency
+  ── 段 consistency（3.3s）  PASS ×3（p12 注入 17/17｜p14 ALL GREEN｜真实现场"本次未跑"）
+  合计判定 3 条｜本次未跑 8 段
+VERDICT: ALL GREEN
+```
+
+```
+门禁运行于 H:\AI project\demo19｜python 3.11.7
+        起跑负载：CPU 49.9%｜可用内存 3565MiB｜最吃内存进程 chrome.exe 624MiB
+        本次跑 2 段：guards + docs-inject
+  ── 段 guards（0.9s）       PASS ×6（G21 依赖守卫｜架构守卫｜四份文档在场 10/17/14/14KiB｜
+                                   报告 25KiB 缺栏 无｜占位符命中 无｜四份都含"实测"）
+  ── 段 docs-inject（0.0s）  PASS  残缺报告 + TBD 文档：抓到 两条都变红
+  SKIP  未跑的段：×8（regression｜coldstart｜e2e｜injection｜ocr｜consistency｜soak｜package）
+        —— 这一场的「全绿」不覆盖它们
+  合计判定 7 条｜本次未跑 8 段
+VERDICT: ALL GREEN
+```
+
+第三场跑在 **D-034 + I36 落进台账、四份用户文档与 README 的读数全部改写、`.probe_work/` 里当场写的
+5 个 `scratch_*.py` 与被后续读数取代的 13 份 log 删掉之后**，只验"文档这一层还在不在、门禁自己还有没有牙"，
+`SKIP` 那 8 段是真没跑 —— 这一场没有 `regression`，所以**这一场的绿不覆盖代码**（代码自 05:01 那场之后没动过）。
+上面这段抄自 `.probe_work/final_docs_1015c.log`。同一条判据在文档定稿前后一共跑了 **5 场**（`final_docs_1015b…f.log`）：
+b 打 `报告 24KiB`｜`guards 0.7s`，c/d/e 打 `报告 25KiB`｜`guards 0.9s`，f 打 `报告 25KiB`｜`guards 0.7s`；
+五场的 `10/17/14/14KiB`｜`缺栏 无`｜`占位符命中 无`｜`合计判定 7 条｜本次未跑 8 段`｜`VERDICT: ALL GREEN` **一字不差**，
+变的只有负载行和上面那两个随文档字节走的数字 —— 这类"抄录本身让被抄的读数过期"的自指与 **I36** 同族：门禁的条数与体积读数只描述**跑它那一刻**的文档状态。
+
+`consistency` 这一场是**必须补的**：那两场注入把 `index_service.py` / `main_window.py` / 三份探针
+（`p12` / `p13` / `p14`）都动过又改回来，而 4.13 的八段链跑在 04:44:55，早于这些改动落定的时刻。
+p14 单独跑一次的自报是 `合计 10 条｜红 0 条`（`.probe_work/p14_clean_1015.log`），其中新加的第 10 条：
+`{'pages': 2, 'docs': 1, 'unindexed_before': 1, 'unindexed_after': 0, 'stale_before': 1, 'stale_after': 0}`
+—— 产品入口报的数与探针独立 `census()` 数出来的数**同时**归零才算绿。
+链外其余各段（`e2e` / `soak` 真跑 / `ocr` / `package`）在这之后的改动**只有 docstring 与注释**，
+被 `regression` 那 355 条覆盖到了（`test_probe_sql_sensors.py` 会用 `ast` 重读这些文件），
+没有重跑真机 OCR 与真打包 —— 这一场的 ALL GREEN **不覆盖**它们，上面三段输出里明写了"未跑 7 段 / 8 段 / 8 段"。
+
+**这一场仍然测不到的**（不许被 16 条全绿盖过去）：
+真实现场一致性没核（`%LOCALAPPDATA%\PdfArchiver` 在本机不存在，那一行明写"本次未跑"）；
+真实语料 7,768 份 / 202 万页**一份都没扫过**（**I20**）；G2 搜索 P95、G3 首建 ≤6h、G8 1.2GB、
+L4 ×10 档仍是**反算值**（**I16**）；长跑只有分钟级（**I32**）。
+
 ---
 
 ## 五 · 已验证的决策（可以直接依赖）
@@ -499,7 +650,7 @@ G5 第二条（预算真停机）的现场读数：
 | V6 | OCR/嵌入只走 **DirectML + CPU 双后端**，CUDA 不在任何路径上 | 2.3、4.6、4.7 |
 | V7 | OCR 为**可选、显式点名触发**能力，**零自动触发**，不进自动索引流程；全量按 6,000 页/日折算 **≈169 天**（Q3 已于 2026-10-15 选定"只跑显式点名的"） | 4.6、4.12、`test_不点名就一条OCR任务都不排` |
 | V8 | 语义嵌入 fp32 + DirectML（146.9 chunks/s，全量 7.6h），量化不用于提速 | 4.7 |
-| V9 | 打包 `PyInstaller --onedir`，247.6MB，冻结后功能实测可用 | 4.9 |
+| V9 | 打包 `PyInstaller --onedir`，冻结后功能实测可用。**体积口径更正（2026-10-15）**：4.9 那个 **247.6MB** 是可行性探针用的临时 spec（不含 OCR 模型与 `.dist-info`）；产品级 `packaging/build.py` 实测 **392.2MiB**（4.13）。两个数量的不是同一件事，**对外引用体积只许引 392.2MiB** | 4.9（探针）、4.13（产品） |
 | V10 | 量级基线 8,000 份 / 120GB / 200 万页；红线按 ×10 反算 | 4.1 |
 | V11 | 迁移必须"先快照后动结构"，失败靠 `BEGIN IMMEDIATE` 回滚回到原样 | 4.10、`test_迁移中途失败回到原样` + 注入 I7 |
 | V12 | 主记录幂等写用 `INSERT … ON CONFLICT(path_key) DO UPDATE`，不用"先查后写" | 4.10、注入 I8（多刷一个 `parse_status` 立刻变红） |
@@ -509,6 +660,9 @@ G5 第二条（预算真停机）的现场读数：
 | V16 | OCR 版本**按页存**，指纹含引擎/运行时/DPI 但**不含 provider** —— 换显卡不该让整库重跑 | D-029；`test_版本指纹里没有provider_换显卡不该让整库重跑`、`test_真引擎跑完第二次一页都不再推理`（4.12：新增推理 0 次） |
 | V17 | OCR 文本与原生文本**同住 `text_pages`**，靠 `source_kind` 区分 → FTS 触发器、幽灵行守卫、片段与页码全部自动适用，**不给 OCR 单独建表也不单独建索引** | 4.12；`test_OCR文本进全文索引且标明出处`、`test_删掉OCR行全文索引不留幽灵行`、`test_索引重建把OCR文本一起重算` |
 | V18 | 失败页**不写行**，`partial ≠ done`，出处标签必须区分"原生正文"与"OCR 识别（可能有错字）" | D-031；4.12 实测出处标签只有一组；`test_失败页不写行下次只补它`、`test_全部页失败才判failed部分成功绝不判done` |
+| V19 | 交付验收**不新增判定口径**，只用一条分段链把各阶段既有门禁/探针编排起来；被 `--only` 跳过的段必须在输出里明写"本次未跑" | `gates/final.py` 头部三条设计约束；4.13 那一场的 `SKIP 未跑的段：guards` 就是这条的现场生效 |
+| V20 | 长跑采样的口径 = **整棵进程树求和**（本机 venv 的 `python.exe` 是 launcher 壳，真解释器在子进程） | 4.13 soak 行（RSS 中位 83.4→83.8MiB）；坏读数一侧见 **I29**（3.7MiB 那次）；由 `tests/integration/test_probe_sql_sensors.py` 两条守卫钉住 |
+| V21 | 冻结产物的冷启动**比源码慢一个量级差**（1.109s vs 0.437s），但仍在 G1 的 1.5s **[约定]** 内 —— 打包后的首屏时限必须单独实测，不许拿源码读数代 | 4.13 两条读数（同一台机器同一场链） |
 
 ## 六 · 候选 / 未决（**不许当成已定事实**）
 

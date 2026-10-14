@@ -166,6 +166,11 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
    ```
    漏掉 `old.body` 时 SQLite **不报错**，但索引里留着幽灵行 —— 删除的文件永远还能被搜到。
    P1 的 `delete_trigger_trap` 就是专门证这个：错误写法下删除后仍命中 1 条，而内容表已 0 行。
+   **这一种坏法恰好是所有"免词口径"唯一看不见的那一种** —— 漏列的 `'delete'` 会把
+   `content_fts_docsize` 里那行删掉，倒排里那条却还挂着，所以 `count(*)`、`NOT IN`、docsize 双向
+   四个数全都很干净；能看见它的只有**带词的 `MATCH`**（`MATCH` 命中数 vs `MATCH` 再 JOIN 正文表）。
+   五种口径对四种坏法的可见性由 `tests/probes/p14_fts_instrument.py` 每次重测（台账 **I8**），
+   `'integrity-check'` 在那四种坏状态下全部"通过"、也不改动文件，**不许拿它当检查**。
 
 另外两条口径：
 - `offsets()` 在 FTS5 **不存在**（实测 `pragma_function_list` 只有 `rank/snippet/bm25/highlight`）。

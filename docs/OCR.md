@@ -75,7 +75,9 @@ ctx.shutdown()
   以及上一次**失败的那些页**（失败页一行都不写，下次只补它，D-031）。
 - **强制重识别**：`ctx.ocr.request_ocr(ids, force=True)` 或直接 `ctx.ocr.ocr_document(doc_id, force=True)`。
   `force` 绕过"已是当前版本"，但**不绕过每日页预算** —— 限量是资源约束，不是幂等判据。
-- **整库索引重建**：`ctx.indexer.rebuild_fts()`，返回 `{pages, docs, ghost_before, ghost_after}` 四个可核对的数。
+- **整库索引重建**：`ctx.indexer.rebuild_fts()`，返回 `{pages, docs, unindexed_before, unindexed_after,
+  stale_before, stale_after}` 六个可核对的数 —— 后四个是 `check_fts_consistency()` 的两个方向
+  （该进索引却没进的 / 索引里多出来的花名册行）在重建前后的读数。
   OCR 文本**不需要单独的重建入口**：它与原生正文住在同一张 `text_pages`，重算投影时一起进去，
   来源按行上的 `source_kind` 区分。
 
