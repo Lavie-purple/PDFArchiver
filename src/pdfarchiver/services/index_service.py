@@ -128,6 +128,24 @@ class IndexService:
         log.info("索引完成 id=%s %s｜%s", doc_id, outcome.describe(), doc.path)
         return outcome
 
+    def rebuild_fts(self) -> dict[str, int]:
+        """按需重建全文索引（阶段 5 第 7 条）：`content_fts` 整表按 `text_pages` 重算。
+
+        什么时候真需要它：外部内容表只是投影，触发器漏写、手工动过库、从备份恢复之后
+        投影会与真身不一致 —— 而 G10 的幽灵行数是唯一能被查出来的证据。
+        返回三个可核对的数，让调用方能把"重建前 vs 重建后"说出来，而不是只回一句"重建完成"。
+        OCR 文本不需要单独的重建入口：它和原生文本住在同一张 `text_pages` 里，
+        重算投影时一起进去，来源仍按行上的 `source_kind` 区分。
+        """
+        stats = self.texts.stats()
+        before = self.texts.ghost_row_count()
+        self.texts.rebuild_all()
+        after = self.texts.ghost_row_count()
+        log.info("全文索引重建：正文 %d 行（%d 份）｜幽灵行 %d → %d",
+                 stats["pages"], stats["docs"], before, after)
+        return {"pages": stats["pages"], "docs": stats["docs"],
+                "ghost_before": before, "ghost_after": after}
+
     # —— 单份文档的抽取 ——————————————————————————————————
 
     def _extract(self, doc: Document, reader: PdfReader, digest: str, monitor) -> IndexOutcome:
@@ -178,6 +196,9 @@ class IndexService:
         parse_status = _parse_status(info.is_repaired, verdict.text_status, verdict.error_pages)
         # 先落正文再落状态：反过来会留一小段"状态 done 而正文还是旧的"（触发器让索引跟着正文走）。
         self.texts.replace_pages(doc_id, rows)
+        # 整本重抽 = OCR 那些行已经没了（replace_pages 删的是这份文档的全部正文页）。
+        # 不一起清零，库里就留着"这份有 900 页 OCR 文本"的谎，而幂等判据正是照着这个数跳过的。
+        self.documents.reset_ocr_tracking(doc_id)
         self.metadata.replace(doc_id, info.as_metadata_row())
         self.documents.mark_index_result(
             doc_id, sha256=digest, page_count=info.page_count,

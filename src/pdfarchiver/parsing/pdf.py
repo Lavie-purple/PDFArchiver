@@ -67,6 +67,24 @@ class PageText:
         return len(self.text.strip())
 
 
+# 200dpi = p5 探针实测那一档（真实扫描页出图 1700×2200）。换档等于换识别质量，
+# 所以这个数会被写进 OCR 版本串，不许在别处再抄一个 150 或 300。
+OCR_DPI = 200
+
+
+@dataclass
+class PageImage:
+    """一页的位图，`pixels` 是 H×W×3 的 uint8 数组（RGB，alpha 已丢）。
+
+    与 `PageText` 一样带 `error`：**出图失败的那一页不连坐**，OCR 层据此把这一页记成失败、
+    其余页照常入库（阶段 5 要求「OCR 失败不能阻塞其他文件」，同一条规矩在页级也成立）。
+    """
+
+    page_no: int
+    pixels: object | None = None
+    error: str | None = None
+
+
 @dataclass
 class PdfInfo:
     page_count: int = 0
@@ -140,6 +158,37 @@ class PdfReader:
                 yield PageText(index + 1, error=f"{type(exc).__name__}: {exc}")
                 continue
             yield PageText(index + 1, text=text)
+
+    def iter_page_images(self, dpi: int = OCR_DPI) -> Iterator[PageImage]:
+        """逐页出图给 OCR 用。规矩与 `iter_text_pages` 完全一样：
+        需要密码的文档产一条 error 就结束（不是崩溃），单页出图失败继续走后面的页。
+
+        **为什么在这里出图而不是让 OCR 层自己开文件**：D-017 定的就是"同一份 PDF 只开一次句柄"，
+        PyMuPDF 是文本提取与 OCR 预处理的唯一入口。OCR 层自己 `pymupdf.open()` 会变成两个库
+        各持一份同一文档的句柄，最大单文件 1.1GB / 946 页（p2）时这就是白吃的内存。
+
+        分辨率进版本串（`ocr/engine.py` 的 `version_stamp()`）：150dpi 与 200dpi 识别结果不一样，
+        把档换了却不记，"这批 OCR 文本是谁跑出来的"就说不清了。
+        """
+        import numpy  # noqa: PLC0415 - 只有真要出图时才需要，别让只读元数据的路径也拽着 numpy
+
+        if self.info.needs_pass:
+            yield PageImage(1, error="PDF 已加密且需要密码，无法出图")
+            return
+        matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
+        for index in range(self.info.page_count):
+            try:
+                pix = self._doc[index].get_pixmap(matrix=matrix, colorspace=pymupdf.csRGB)
+                arr = numpy.frombuffer(pix.samples, dtype=numpy.uint8).reshape(
+                    pix.height, pix.width, pix.n)
+                if pix.n == 4:
+                    arr = arr[:, :, :3]
+                # copy()：pix.samples 是 PyMuPDF 持有的缓冲，pix 一被回收这段内存就没了，
+                # 而调用方要拿着它跨过一页继续干活。
+                yield PageImage(index + 1, pixels=arr.copy())
+            except Exception as exc:  # noqa: BLE001 - 坏页留住原文继续走，见模块说明第 2 条
+                log.warning("第 %d 页出图失败 %s：%s", index + 1, self.path, exc)
+                yield PageImage(index + 1, error=f"{type(exc).__name__}: {exc}")
 
 
 def parse_pdf_date(raw: str | None) -> int | None:

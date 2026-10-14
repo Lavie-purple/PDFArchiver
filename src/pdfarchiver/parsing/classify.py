@@ -71,6 +71,54 @@ def ocr_status_for(verdict: Verdict) -> str:
     return "pending" if verdict.needs_ocr else "na"
 
 
+OCR_NA = "na"
+OCR_PENDING = "pending"
+OCR_DONE = "done"
+OCR_PARTIAL = "partial"
+OCR_FAILED = "failed"
+# 取值只有这五个，`documents.ocr_status` 的写入唯一入口是 `mark_ocr_result`，判定唯一出处是
+# `services/ocr_service._status_for` / `_status_when_nothing_to_do`。
+# **没有** `running` —— 与 `fts_status` 同一条规矩（D-025）：进行中由队列的 `job.state` 表达，
+# 文档行只记结论，否则关窗时会留下一堆没人认领的 'running'。
+# 也**没有**状态机转移表：这一列每次都由"这次跑了几页、库里几页是当前版本"重新算出来，
+# 不是从上一步累加过去的，所以不存在"哪条边合法"的问题；写它的唯一后果是漏一条边把自己挡死。
+OCR_STATUSES = (OCR_NA, OCR_PENDING, OCR_DONE, OCR_PARTIAL, OCR_FAILED)
+
+
+def ocr_ready(text_status: str) -> bool:
+    """这份文档**有没有可用的正文判定**，也就是能不能算出"哪几页缺字"。
+
+    OCR 的待办页判据是原生字数表（`text_pages` 里 `source_kind='native'` 那些行），
+    而那张表只在索引成功之后才存在。所以这里问的不是 `ocr_status`，而是"判定存不存在"：
+    - `pending` = 还没索引，一页的原生字数都不知道，跑 OCR 会把文字版 PDF 的每一页都识别一遍；
+    - `failed` = 整本读不出内容，那是 `parse_status` + `last_error` 该说的事，不该排进 OCR 队列。
+    排队（`services/ocr_service.request_ocr`）与执行（`ocr_document`）都只问这一个问题。
+    """
+    return text_status in (TEXT_NATIVE, TEXT_MIXED, TEXT_NONE)
+
+
+def ocr_is_current(*, ocr_status: str, ocr_pages_done: int, stored_version: str | None,
+                   version_now: str, pages_expected: int) -> bool:
+    """「这份文档的 OCR 还是当前的吗」—— 唯一判定，幂等跳过与"按需重识别"都只问它。
+
+    四个条件缺一个就会出事故，各自对应一条实测：
+    - `ocr_status` 不是 done/partial：从没跑过或整体失败，当然要跑。
+    - `stored_version == version_now`：引擎或模型或出图分辨率变了就必须重跑（阶段 5 决策 4 加这一列
+      的全部理由）。版本串里**不含 provider**：p5 实测 CPU 与 DirectML `text_identical=true`，
+      把 provider 写进版本会让"显卡驱动换了/临时退回 CPU"这种小事引发整库重跑 = 1,144 小时。
+    - `ocr_pages_done == pages_expected`：混合文档上次只成功了 8/10 页时，`ocr_status` 是 partial，
+      重跑要能只补那 2 页（按页存版本正是为此）。
+    - `pages_expected > 0`：页数为 0 的文档（读不出来）不该被当成"当前且完整"。
+    """
+    if ocr_status not in (OCR_DONE, OCR_PARTIAL):
+        return False
+    if not pages_expected:
+        return False
+    if stored_version is None or stored_version != version_now:
+        return False
+    return ocr_pages_done >= pages_expected
+
+
 def judge(pages: Sequence[PageText]) -> Verdict:
     """对一份文档的全部页面判定。空列表 = 一页都没有，按 `failed` 处理（没有正文可索引）。
 

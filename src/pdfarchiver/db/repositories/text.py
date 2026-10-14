@@ -55,6 +55,68 @@ class TextRepository:
             cur = conn.execute("DELETE FROM text_pages WHERE doc_id=?", (doc_id,))
         return cur.rowcount
 
+    # —— OCR 专用（阶段 5）——
+
+    def upsert_pages(self, doc_id: int, pages: list[TextPage]) -> int:
+        """按页写入，已有的页**覆盖**，不碰没提到的页。
+
+        为什么必须有这个方法而不是复用 `replace_pages`：后者"先删整本再插"，那是原生抽取的语义
+        （文件内容变了，旧正文一个字都不能留）。而 OCR 的语义是"这份 900 页的书这次只补第 400 页"，
+        删整本等于把前 899 页的识别成果扔掉重跑 —— p5 实测那是 3,281ms/页 的重跑。
+
+        用 `INSERT OR REPLACE`：SQLite 里 replace = 先删后插，所以 `tx_pages_ad` 与 `tx_pages_ai`
+        两条触发器都会走，索引跟着正文对齐（外部内容表的三条硬规则见 `0002_text_and_fts`）。
+        """
+        conn = self.engine.thread_connection()
+        ts = now_ts()
+        with self.engine.transaction(conn, on_error=f"写入 OCR 正文失败 doc_id={doc_id}"):
+            conn.executemany(
+                "INSERT OR REPLACE INTO text_pages(doc_id, page_no, source_kind, char_count,"
+                " body, indexed_at, ocr_version) VALUES(?,?,?,?,?,?,?)",
+                [(doc_id, p.page_no, p.source_kind, p.char_count, p.body, ts, p.ocr_version)
+                 for p in pages])
+        return len(pages)
+
+    def ocr_versions_of(self, doc_id: int) -> dict[int, str | None]:
+        """已有的 OCR 页 → 当初那次的版本指纹。幂等跳过逐页比这个数，不比整本。"""
+        rows = self.engine.thread_connection().execute(
+            "SELECT page_no, ocr_version FROM text_pages"
+            " WHERE doc_id=? AND source_kind='ocr'", (doc_id,)).fetchall()
+        return {int(r["page_no"]): r["ocr_version"] for r in rows}
+
+    def native_page_chars(self, doc_id: int) -> dict[int, int]:
+        """原生正文的 页码 → 字数。OCR 层用它决定"哪些页还缺字"，全程只读库不再解析 PDF。
+
+        只回原生行：OCR 自己写的页不算"已经有字"，否则第一页识别完，第二遍就认为它不用跑了
+        —— 那正是「普通文字 PDF 不应无意义地反复执行 OCR」这条要求反过来的情形。
+        """
+        rows = self.engine.thread_connection().execute(
+            "SELECT page_no, char_count FROM text_pages WHERE doc_id=? AND source_kind='native'",
+            (doc_id,)).fetchall()
+        return {int(r["page_no"]): int(r["char_count"]) for r in rows}
+
+    def count_ocr_pages(self, doc_id: int) -> int:
+        return self.engine.thread_connection().execute(
+            "SELECT count(*) FROM text_pages WHERE doc_id=? AND source_kind='ocr'",
+            (doc_id,)).fetchone()[0]
+
+    def count_ocr_pages_all(self) -> int:
+        """全库已经存下的 OCR 正文页数（状态读数用）。
+        与 `count_ocr_pages(doc_id)` 的差别只有范围，所以 SQL 只多一个 WHERE 少一个 doc_id ——
+        分成两个方法是故意的：`doc_id=None` 表示"全部"会让"这份有几页"和"库里有几页"共用一个签名，
+        正是 AGENTS.md 禁止的那种多口径。
+        """
+        return self.engine.thread_connection().execute(
+            "SELECT count(*) FROM text_pages WHERE source_kind='ocr'").fetchone()[0]
+
+    def delete_ocr_pages(self, doc_id: int) -> int:
+        """只删 OCR 页（整本重识别前用）。原生页不动 —— 那是文件里本来就有的字，不是识别出来的。"""
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"清除 OCR 正文失败 doc_id={doc_id}"):
+            cur = conn.execute("DELETE FROM text_pages WHERE doc_id=? AND source_kind='ocr'",
+                               (doc_id,))
+        return cur.rowcount
+
     def count_pages(self, doc_id: int) -> int:
         """这份文档在库里有几页正文。走 `ux_text_pages_doc_page` 的覆盖扫描，不碰 `body` 列 ——
         短路判据用它而不是 `pages_of`：后者为了数个数把整本文本拷进内存，
@@ -63,8 +125,10 @@ class TextRepository:
             "SELECT count(*) FROM text_pages WHERE doc_id=?", (doc_id,)).fetchone()[0]
 
     def pages_of(self, doc_id: int) -> list[TextPage]:
+        """这一份的正文页，按页码升序。`ocr_version` 必须在列 ——
+        少选一列就等于交出一个永远为 None 的字段，读它的人不会报错，只会以为"这页没记过版本"。"""
         rows = self.engine.thread_connection().execute(
-            "SELECT doc_id, page_no, source_kind, char_count, body FROM text_pages"
+            "SELECT doc_id, page_no, source_kind, char_count, body, ocr_version FROM text_pages"
             " WHERE doc_id=? ORDER BY page_no", (doc_id,)).fetchall()
         return [TextPage(**dict(r)) for r in rows]
 

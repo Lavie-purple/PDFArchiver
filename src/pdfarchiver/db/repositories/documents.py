@@ -23,8 +23,8 @@ from pdfarchiver.db.sqltext import like_contains, like_prefix
 _COLS = """
   id, path, path_key, name, ext, size_bytes, mtime_ns, ctime_ns, file_id, device_id, sha256,
   page_count, text_bearing_rate, is_pdf, needs_pass, is_repaired, parse_status, text_status,
-  ocr_status, fts_status, vector_status, category_confirmed, last_scanned_at, last_indexed_at,
-  last_error, missing_since, created_at, updated_at
+  ocr_status, ocr_pages_done, last_ocr_at, fts_status, vector_status, category_confirmed,
+  last_scanned_at, last_indexed_at, last_error, missing_since, created_at, updated_at
 """
 
 
@@ -166,6 +166,16 @@ class DocumentRepository:
         rows = conn.execute("SELECT fts_status, count(*) AS n FROM documents GROUP BY fts_status").fetchall()
         return {r["fts_status"]: r["n"] for r in rows}
 
+    def counts_by_ocr_status(self) -> dict[str, int]:
+        """OCR 侧的"还欠多少份"，与 `counts_by_fts_status` 完全对称：一条分组查询数出来。
+
+        状态取值只有 `parsing.classify.OCR_STATUSES` 那五个，这里不另列名单 ——
+        界面上"待 OCR"和"识别中"分不清是谁的锅，就该由这一行的数说清楚，而不是由展示层再算。
+        """
+        conn = self.engine.thread_connection()
+        rows = conn.execute("SELECT ocr_status, count(*) AS n FROM documents GROUP BY ocr_status").fetchall()
+        return {r["ocr_status"]: r["n"] for r in rows}
+
     def ids_needing_index(self, limit: int = 5000) -> list[int]:
         """重启/重建后把"没做完的活"重新排进队列用（验收：索引恢复）。
 
@@ -279,6 +289,32 @@ class DocumentRepository:
                 " is_pdf=?, last_error=?, last_indexed_at=?, updated_at=? WHERE id=?",
                 (sha256, page_count, parse_status, text_status, text_bearing_rate, fts_status,
                  ocr_status, needs_pass, is_repaired, is_pdf, last_error, ts, ts, doc_id))
+
+    def mark_ocr_result(self, doc_id: int, *, ocr_status: str, ocr_pages_done: int,
+                        last_error: str | None = None) -> None:
+        """OCR 结果的唯一写入口（与 `mark_index_result` 之于正文索引同一条规矩：一处写、别处只读）。
+
+        `ocr_status` 的合法取值只有 `parsing.classify.OCR_STATUSES` 那五个，
+        状态机由 `services/ocr_service.py` 判，这一层只负责"一次写完不留半个"。
+        """
+        conn = self.engine.thread_connection()
+        ts = now_ts()
+        with self.engine.transaction(conn, on_error=f"写 OCR 结果失败 doc_id={doc_id}"):
+            conn.execute(
+                "UPDATE documents SET ocr_status=?, ocr_pages_done=?, last_ocr_at=?,"
+                " last_error=?, updated_at=? WHERE id=?",
+                (ocr_status, ocr_pages_done, ts, last_error, ts, doc_id))
+
+    def reset_ocr_tracking(self, doc_id: int) -> None:
+        """正文被整本重抽时把 OCR 计数清零 —— OCR 的那些行已经被 `replace_pages` 删掉了。
+
+        不清零就会留下"`ocr_pages_done=900` 而库里一行 OCR 文本都没有"的谎。
+        状态位 `ocr_status` 由调用方在同一次 `mark_index_result` 里写，这里不越界重复写。
+        """
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"重置 OCR 计数失败 doc_id={doc_id}"):
+            conn.execute("UPDATE documents SET ocr_pages_done=0, last_ocr_at=NULL, updated_at=?"
+                         " WHERE id=?", (now_ts(), doc_id))
 
     def set_fts_status(self, doc_id: int, status: str, *, error: str | None = None) -> None:
         conn = self.engine.thread_connection()

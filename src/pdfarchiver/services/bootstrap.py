@@ -33,9 +33,12 @@ from pdfarchiver.diagnostics.logs import install_crash_hooks, setup_logging, sta
 from pdfarchiver.fs.exclude import Exclusions
 from pdfarchiver.fs.watcher import EventBuffer, WatchManager
 from pdfarchiver.jobs.queue import DEFAULT_MAX_ATTEMPTS, WorkQueue
+from pdfarchiver.ocr.budget import OcrBudget
+from pdfarchiver.ocr.engine import OcrEngine, OcrUnavailable
 from pdfarchiver.search.service import SearchService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
 from pdfarchiver.services.index_service import IndexService
+from pdfarchiver.services.ocr_service import OcrService
 from pdfarchiver.services.patrol import Patrol
 from pdfarchiver.services.scan_service import ScanService
 from pdfarchiver.services.session_service import SessionService
@@ -81,6 +84,10 @@ class AppContext:
     测试用的，界面直取等于绕过依赖方向。`queue` / `watch` / `events` 是**私有运行时**，
     界面要那三样的数字就走 `background_state()`，不许自己摸线程对象。
 
+    `ocr` 是阶段 5 的服务入口，**故意不在上面那份界面可用清单里**：OCR 的入口界面还没经线框确认
+    （AGENTS.md），现在只有测试与门禁通过它排队。装配无条件进行、引擎惰性加载，
+    没装可选层的应用照旧能扫描与全文检索。
+
     `watch` / `queue` 在 `start_background()` 之前是 None —— 阶段 1 的界面测试
     和"只看库"的调用方不该被起线程这件事拖住，也不该在没人要扫描时占着两个 worker。
     """
@@ -102,6 +109,7 @@ class AppContext:
     scan: ScanService
     indexer: IndexService
     search: SearchService
+    ocr: OcrService
     patrol: Patrol
     events: EventBuffer
     bootstrap_seconds: float
@@ -119,7 +127,9 @@ class AppContext:
         """
         if self.queue is not None:
             return self.queue
-        self.queue = WorkQueue(self.jobs, {"scan": self.scan.handle, "index": self.indexer.handle},
+        self.queue = WorkQueue(self.jobs,
+                               {"scan": self.scan.handle, "index": self.indexer.handle,
+                                "ocr": self.ocr.handle},
                                engine=self.engine, threads=int(self.settings["worker_threads"]))
         recovered = self.queue.recover()
         resuming = self.scan.resume_pending()
@@ -202,13 +212,22 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     jobs = JobRepository(engine)
     texts = TextRepository(engine)
     metadata = MetadataRepository(engine)
-    status = StatusService(engine, documents, catalog, roots, jobs, app_settings)
+    status = StatusService(engine, documents, catalog, roots, jobs, app_settings, texts)
     session = SessionService(app_settings)
 
     events = EventBuffer()
     scan = ScanService(documents, roots, jobs, exclusions=Exclusions.of())
     indexer = IndexService(documents, texts, metadata)
     search = SearchService(documents, metadata, texts)
+    ocr_engine = OcrEngine()
+    ocr = OcrService(documents, texts, jobs, ocr_engine,
+                     OcrBudget(app_settings, int(settings["ocr_daily_page_budget"])))
+    # 只在启动时读一次发行包元数据（微秒级），**不 import onnxruntime** —— 那一下是 1s 量级，
+    # 冷启动门禁 G1（≤1.5s）就是被它顶掉的（docs/ISSUES）。真正的加载发生在首次识别的 ensure() 里。
+    try:
+        log.info("OCR 层可用，版本指纹 %s（引擎与模型要到首次识别才加载）", ocr_engine.version_stamp)
+    except OcrUnavailable as exc:  # 消息本身就是"缺哪个包、怎么装"，原样写进日志
+        log.warning("OCR 层不可用，扫描与全文检索照旧：%s", exc)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
 
@@ -236,5 +255,6 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       documents=documents, catalog=catalog, roots=roots, jobs=jobs,
                       texts=texts, metadata=metadata,
                       app_settings=app_settings, status=status, session=session,
-                      scan=scan, indexer=indexer, search=search, patrol=patrol, events=events,
+                      scan=scan, indexer=indexer, search=search, ocr=ocr, patrol=patrol,
+                      events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

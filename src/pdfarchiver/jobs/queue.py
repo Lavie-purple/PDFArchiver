@@ -10,9 +10,12 @@
 2. **状态只能按 `LEGAL_TRANSITIONS` 走**。每次写状态前先从库里读回**当前**状态再查表 ——
    拿调用方内存里记着的那个状态去查等于自证：任务可能在处理期间被用户取消，这时
    `running → done` 就不合法，而这张表只有在这种时候才真的挡得住东西。
-3. **退出打断 ≠ 用户取消**。进程收尾时正在跑的任务，行留在 `running`，
-   下次启动由 `recover_interrupted()` 收回 `queued`；用户显式取消才落 `cancelled`。
-   两者混成一个的话，每次正常关应用都会留下一堆"已取消"的任务，没人知道那些文件到底做完了没有。
+3. **退出打断 ≠ 用户取消 ≠ 处理函数判停**。进程收尾时正在跑的任务，行留在 `running`，
+   下次启动由 `recover_interrupted()` 收回 `queued`；用户显式取消才落 `cancelled`；
+   处理函数自己抛 `JobCancelled`（页预算跑满、单页耗时超上限）落 `cancelled` 并把原因留在
+   `last_error`。三者混成一个的话，每次正常关应用都会留下一堆"已取消"的任务，
+   没人知道那些文件到底做完了没有；而自动重跑被明确判停的文档，
+   等于把用户"只跑我点名的"那句话当耳旁风。
 4. **进度按工作量回写，且必须节流**。全量索引要跑 200 万页（docs/VERIFICATION 语料实测），
    每页一次 UPDATE 就是把磁盘带宽花在没人看的数字上；按 `PROGRESS_STEP_PAGES` 攒着写，
    结束时补一次真值。百分比由仓储里的 `done/total` 算，不由这里传（AGENTS.md：不许模拟进度）。
@@ -53,7 +56,11 @@ class IllegalTransition(RuntimeError):
 
 
 class JobCancelled(Exception):
-    """处理函数主动抛出，表示"这一页之后别再干了"。"""
+    """处理函数主动抛出，表示"这一页之后别再干了"。
+
+    消息原样落进任务行的 `last_error`：队列靠它把"用户按的取消""退出打断""处理函数判停"
+    三种停分开收尾（见模块说明第 3 条），界面上那句"为什么没跑完"就是从这儿来的。
+    """
 
 
 class PermanentFailure(Exception):
@@ -257,10 +264,12 @@ class WorkQueue:
         handler = self._handlers[str(job.kind)]
         monitor = ProgressMonitor(self._jobs, job_id, self._stop)
         outcome = "done"
+        stop_reason = ""
         try:
             handler(job, monitor)
-        except JobCancelled:
+        except JobCancelled as exc:
             outcome = "cancelled"
+            stop_reason = str(exc)      # 处理函数说得出的原因要跟着进任务行
         except PermanentFailure as exc:
             outcome = f"permanent:{exc}"
         except Exception as exc:  # 一个坏文件不许把 worker 拖死，但原文必须留下（AGENTS.md 排障条）
@@ -277,7 +286,7 @@ class WorkQueue:
         if outcome == "done":
             self._finish_success(job)
         elif outcome == "cancelled":
-            self._finish_cancelled(job)
+            self._finish_cancelled(job, stop_reason)
         elif outcome.startswith("permanent:"):
             self._finish_permanent(job, outcome[len("permanent:"):])
         else:
@@ -329,11 +338,30 @@ class WorkQueue:
         assert_transition(str(current.state), "done")
         self._jobs.succeed(job_id)
 
-    def _finish_cancelled(self, job: Job) -> None:
-        """`request_cancel` 已经把行写成 cancelled 了，这里只分辨是哪一种停。"""
+    def _finish_cancelled(self, job: Job, reason: str = "") -> None:
+        """分辨是哪种停 —— 三种停的收尾各不相同，混成一种就会留下没人能解释的行。
+
+        - **用户按了取消**：`request_cancel` 已经把行写成 `cancelled`，这里不重复改；
+        - **退出打断**（闸门已拉下）：不改状态。留在 `running` 的那一行是 `recover()` 的输入，
+          不是 bug —— 进程被收走时没人知道它做到哪儿，下次启动重跑一遍最诚实；
+        - **处理函数自己判停**（OCR 的每日页预算跑满、单页耗时超过上限）：与用户和退出都无关，
+          必须落终态并把原因留在 `last_error` 上。留在 `running` 会有两个后果：
+          界面一直显示"正在跑"而 worker 早去领下一条了，`wait_until_idle()` 也永远等不到空闲；
+          而下次启动 `recover()` 把它无条件收回队列，等于每天凌晨自动重跑一份
+          被明确判停的文档 —— 那正是阶段 5 决策 Q3=甲（只跑显式点名的）要挡住的事。
+        """
         job_id = int(job.id or 0)
         if self._jobs.is_cancelled(job_id):
             log.info("任务 %s(%s) 已按请求取消", job.id, job.kind)
             return
-        # 退出打断：不改状态。留在 running 的那一行是 recover() 的输入，不是 bug。
-        log.info("任务 %s(%s) 被退出打断，留在 running 等下次回收", job.id, job.kind)
+        if self._stop.is_set():
+            log.info("任务 %s(%s) 被退出打断，留在 running 等下次回收", job.id, job.kind)
+            return
+        current = self._jobs.get(job_id)
+        if current is None:
+            log.warning("任务 %s 已经不在表里，跳过判停收尾", job_id)
+            return
+        assert_transition(str(current.state), "cancelled")
+        self._jobs.finish_as(job_id, "cancelled",
+                             error=reason or "处理函数自行判定该停下，未跑完")
+        log.warning("任务 %s(%s) 由处理函数判停，落 cancelled：%s", job.id, job.kind, reason)

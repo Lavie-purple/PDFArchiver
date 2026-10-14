@@ -50,6 +50,13 @@ FIELD_LABELS = {
 # 名字里带词的文档几乎就是用户要找的那份；正文命中一万次也不该把它挤下去。
 FIELD_WEIGHT = {FIELD_FILENAME: 0, FIELD_METADATA: 1, FIELD_PATH: 2, FIELD_BODY: 3}
 
+# 正文有两个来源，而且必须一直分开说（SPEC 五：不得把未经验证的识别文字伪装成准确的原始文本）。
+# 这一段文字会出现在每条正文命中上 —— 用户照着页码翻回原文件时，得先知道那句"正文"是谁给的。
+BODY_SOURCE_LABELS = {
+    "native": "原生正文",
+    "ocr": "OCR 识别（可能有错字）",
+}
+
 
 @dataclass(frozen=True)
 class Criteria:
@@ -107,10 +114,16 @@ class Hit:
     page_no: int | None   # 正文命中的页码（1 基，与阅读器显示的一致）；其他通道为 None
     score: float          # 正文 trigram 通道的 bm25（越小越相关）；其他通道恒 0.0
     field_detail: str | None = None   # 元数据命中时的具体列名，如 author / title
+    body_source: str = "native"       # 正文命中的来源：native=文件里本来就有的字，ocr=识别出来的
 
     @property
     def field_label(self) -> str:
         return FIELD_LABELS[self.field]
+
+    @property
+    def source_label(self) -> str:
+        """正文命中的出处标签。非正文通道返回空串 —— 只有正文有两个来源可说。"""
+        return BODY_SOURCE_LABELS.get(self.body_source, "") if self.field == FIELD_BODY else ""
 
     def highlight(self) -> tuple[int, int] | None:
         """片段内的高亮区间（界面据此把片段切成 前文/命中/后文 三段）。
@@ -154,7 +167,11 @@ class SearchResult:
         for hit in self.hits:
             where = f"第 {hit.page_no} 页" if hit.page_no else \
                 f"{hit.field_label}" + (f"·{hit.field_detail}" if hit.field_detail else "")
-            out.append(f"[{where}] {hit.doc.name}｜{hit.snippet.line() if hit.snippet else hit.doc.path}")
+            # 正文命中必须带上出处：同一句"命中"可能是 PDF 里的字，也可能是识别出来的字，
+            # 后者会有错字，用户照抄进报告之前有权知道（SPEC 五·不许伪装成准确的原始文本）。
+            source = f"｜{hit.source_label}" if hit.source_label else ""
+            out.append(f"[{where}]{source} {hit.doc.name}｜"
+                       f"{hit.snippet.line() if hit.snippet else hit.doc.path}")
         return out
 
 
@@ -223,7 +240,8 @@ class SearchService:
         docs = self.documents.by_ids([r.doc_id for r in rows])
         return self._truncate([
             Hit(doc=docs[r.doc_id], field=FIELD_BODY, snippet=snippet_for(r.body, needle),
-                page_no=r.page_no, score=r.score) for r in rows if r.doc_id in docs])
+                page_no=r.page_no, score=r.score, body_source=r.source_kind)
+            for r in rows if r.doc_id in docs])
 
     def _from_docs(self, docs: list[Document], name: str, needle: str,
                    source) -> tuple[list[Hit], bool]:  # noqa: ANN001 - source 是 str→str 的小函数

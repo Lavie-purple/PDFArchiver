@@ -35,6 +35,8 @@ class Document:
     parse_status: str = "pending"
     text_status: str = "pending"
     ocr_status: str = "na"
+    ocr_pages_done: int = 0
+    last_ocr_at: int | None = None
     fts_status: str = "pending"
     vector_status: str = "na"
     category_confirmed: int = 0
@@ -110,6 +112,7 @@ class TextPage:
     body: str
     source_kind: str = "native"
     char_count: int = 0
+    ocr_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.page_no < 1:

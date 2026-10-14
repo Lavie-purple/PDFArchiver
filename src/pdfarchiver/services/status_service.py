@@ -26,6 +26,7 @@ from pdfarchiver.db.repositories.documents import (NEEDS_INDEX_STATUSES, Documen
 from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.roots import RootRepository
 from pdfarchiver.db.repositories.settings import SettingsRepository
+from pdfarchiver.db.repositories.text import TextRepository
 
 # 界面上一屏最多列几条故障。按"人一次读得完"定，不是按库里有多少错误定 ——
 # 全量首轮 8,000 份文档一起失败时，把 8,000 行原文灌进文本框就是 AGENTS.md 禁止的全量渲染。
@@ -93,6 +94,8 @@ class TaskStatus:
     retried_by_kind: dict[str, int]
     max_attempts: int
     fts_by_status: dict[str, int]
+    ocr_by_status: dict[str, int]
+    ocr_pages: int
     documents: int
     errors: list[TaskError]
     roots: list[MonitoredRoot]
@@ -123,6 +126,9 @@ class TaskStatus:
         out.append(f"  文档索引状态：共 {self.documents} 份｜"
                    + "｜".join(f"{s}={n}" for s, n in sorted(self.fts_by_status.items()))
                    + f"｜还欠一次索引 {self.index_backlog}（口径 pending+stale）")
+        out.append("  OCR 状态："
+                   + ("｜".join(f"{s}={n}" for s, n in sorted(self.ocr_by_status.items())) or "无一行")
+                   + f"｜库里已存 OCR 正文 {self.ocr_pages:,} 页")
         retried = "｜".join(f"{k}={n}" for k, n in sorted(self.retried_by_kind.items()))
         out.append(f"  重试中：{retried or '无'}（每条最多 {self.max_attempts} 次尝试）")
         if self.errors:
@@ -146,13 +152,15 @@ class StatusService:
     """界面与自检页共用的唯一取数口。不做缓存 —— 阶段 1 的量级不值得缓存，缓存只会让"读到旧数"变成 bug。"""
 
     def __init__(self, engine: Engine, documents: DocumentRepository, catalog: CatalogRepository,
-                 roots: RootRepository, jobs: JobRepository, app_settings: SettingsRepository) -> None:
+                 roots: RootRepository, jobs: JobRepository, app_settings: SettingsRepository,
+                 texts: TextRepository) -> None:
         self.engine = engine
         self.documents = documents
         self.catalog = catalog
         self.roots = roots
         self.jobs = jobs
         self.app_settings = app_settings
+        self.texts = texts
 
     def read(self) -> CatalogStatus:
         conn = self.engine.thread_connection()
@@ -188,6 +196,8 @@ class StatusService:
             retried_by_kind=self.jobs.counts_retried_by_kind(),
             max_attempts=max_attempts,
             fts_by_status=self.documents.counts_by_fts_status(),
+            ocr_by_status=self.documents.counts_by_ocr_status(),
+            ocr_pages=self.texts.count_ocr_pages_all(),
             documents=self.documents.count(),
             errors=errors,
             roots=self.roots.list(),

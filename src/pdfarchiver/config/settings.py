@@ -19,6 +19,9 @@ DEFAULTS: dict[str, Any] = {
     "archive_default_template": "{category}/{year}/{name}.pdf",  # 阶段 4 才执行，先占口径
     "scan_poll_seconds": 5,       # 阶段 2：巡检器多久取一次文件事件（`services/patrol.py`）
     "scan_verify_minutes": 30,    # 阶段 2：即使一条事件都没有，最迟多久保证走一遍全量对账（P4：根被改名是 0 事件）
+    "ocr_daily_page_budget": 6000,  # 阶段 5：每日 OCR 页预算，跑满即停。6,000 = 8 小时 ÷ 实测最慢
+                                    # 可持续档 4.193s/页 ≈ 6,868 页，向下取整到千位
+                                    # （推导与实测出处见 src/pdfarchiver/ocr/budget.py）
 }
 
 SETTINGS_VERSION = 1
