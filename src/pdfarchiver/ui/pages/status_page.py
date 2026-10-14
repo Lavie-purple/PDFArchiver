@@ -63,6 +63,8 @@ class StatusPage(QtWidgets.QWidget):
         parts += ["", "== 数据库 =="] + [f"  {ln}" for ln in st.lines()]
         parts += ["", f"== 默认分类写入结果 ==\n  {self.ctx.seed.describe()}"]
         parts += ["", "== 扫描与索引任务：进度 / 错误 / 重试 ==", *bg.lines(), *tasks.lines()]
-        parts += ["", "== 本阶段未实现 =="] + self._pending_block()
-        parts += ["", "尚未实现：OCR、语义搜索、归档改名 —— 界面上没有任何按钮会移动或删除磁盘上的文件。"]
+        parts += ["", "== 界面尚未实现 =="] + self._pending_block()
+        parts += ["", "界面上没有任何按钮会移动、改名或删除磁盘上的文件。",
+                  "OCR 后端已交付（装了可选层就能用，但没有界面入口）；"
+                  "语义搜索（阶段 6）与文件归档、备份恢复的界面（阶段 4）后端和界面都还没实现。"]
         self.view.setPlainText("\n".join(parts))

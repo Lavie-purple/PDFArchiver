@@ -26,7 +26,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctx = ctx
         self._cold_start = cold_start_seconds
         self._pages: dict[str, QtWidgets.QWidget] = {}
-        self.setWindowTitle(f"PDF 归档工具 · 阶段 2 {__version__}")
+        self.setWindowTitle(f"PDF 归档工具 v{__version__}")
         self.resize(1000, 680)
 
         split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)

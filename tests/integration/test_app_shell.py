@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from PySide6 import QtCore, QtWidgets
 
+from pdfarchiver import __version__
 from pdfarchiver.services.bootstrap import bootstrap
 from pdfarchiver.ui.nav import NAV_ITEMS, PAGE_STATUS
 from pdfarchiver.ui.pages.pending_page import PendingPage
@@ -39,7 +40,7 @@ def test_窗口真实显示并列出全部导航项(window) -> None:
     assert window.isVisible()
     assert window.centralWidget() is not None
     assert window.nav.count() == len(NAV_ITEMS)
-    assert "阶段 2" in window.windowTitle()
+    assert __version__ in window.windowTitle(), "标题里的版本必须来自 __version__，不许另写一份"
 
 
 def test_首屏显示的是库里的真数字不是写死的文案(window, ctx) -> None:
