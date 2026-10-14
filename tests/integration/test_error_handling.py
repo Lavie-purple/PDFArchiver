@@ -13,6 +13,7 @@ import re
 import sqlite3
 import sys
 import threading
+import time
 from datetime import datetime
 
 import pytest
@@ -114,31 +115,37 @@ def test_未捕获异常经excepthook落进crash_日志(tmp_path) -> None:
 
 
 def test_后台线程里的异常也会留痕(tmp_path) -> None:
-    """worker 线程抛出去的东西默认只打一行到 stderr 就没了（docs/ARCHITECTURE 三：worker 都在别的线程）。"""
+    """worker 线程抛出去的东西默认只打一行到 stderr 就没了（docs/ARCHITECTURE 三：worker 都在别的线程）。
+
+    **必须真起一个线程让它崩**，不许手工构造 `excepthook` 的参数：上一版这里写了
+    `class A: exc_info = sys.exc_info()` 喂给钩子，于是按 `args.exc_info` 取值的实现也能过，
+    而真实的 `threading.ExceptHookArgs` 只有 `exc_type/exc_value/exc_traceback` 三个字段 ——
+    钩子自己抛 AttributeError，crash.log 里一个字都没留下，产品里 worker 崩了没人看得见（实测踩过）。
+    """
     from pdfarchiver.diagnostics.logs import crash_log_path
 
     install_crash_hooks(tmp_path)
-    done = threading.Event()
+    target = crash_log_path(tmp_path)
+    if target.exists():
+        target.unlink()
 
     def boom() -> None:
-        try:
-            raise RuntimeError("线程内的测试异常")
-        except RuntimeError:
-            args = sys.exc_info()
+        raise RuntimeError("线程内崩溃的测试异常")
 
-            class A:  # 直接喂 threading.excepthook，不依赖线程真的崩溃
-                thread = None
-                exc_info = args
+    threading.Thread(target=boom, name="boom-thread").start()
 
-            threading.excepthook(A())
-        finally:
-            done.set()
-
-    t = threading.Thread(target=boom)
-    t.start()
-    t.join(2)
-    assert done.is_set()
-    assert "线程内的测试异常" in crash_log_path(tmp_path).read_text(encoding="utf-8")
+    deadline = time.monotonic() + 5.0
+    text = ""
+    while time.monotonic() < deadline:
+        if target.is_file():
+            text = target.read_text(encoding="utf-8")
+            if "线程内崩溃的测试异常" in text:
+                break
+        time.sleep(0.05)
+    assert "线程内崩溃的测试异常" in text, \
+        f"线程异常没落进 crash.log —— 钩子拿异常参数的字段名错了：{text[-300:]}"
+    assert "boom-thread" in text, "留下的行要说得出是哪个线程，否则一堆 worker 里没法定位"
+    assert "Traceback" in text and "RuntimeError" in text
 
 
 def test_append_crash写不进去时不二次崩溃(tmp_path) -> None:

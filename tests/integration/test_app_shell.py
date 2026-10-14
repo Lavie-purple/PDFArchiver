@@ -1,4 +1,5 @@
-"""阶段 1 验收 1、2：应用真的能起来、能关掉、能再起；界面显示的是库里的真数据。
+"""阶段 1 验收 1、2 + 阶段 2 第 10 项的界面接线：应用真的能起来、能关掉、能再起；
+界面显示的是库里的真数据，包括扫描与索引任务的进度 / 错误 / 重试。
 
 这一组测试全部 offscreen 跑真 Qt 控件（p3 实测该模式下 QApplication 可用），
 不是截图、不是静态稿：每个断言都靠 `qtbot` 点一下、切一下、关一下。
@@ -38,7 +39,7 @@ def test_窗口真实显示并列出全部导航项(window) -> None:
     assert window.isVisible()
     assert window.centralWidget() is not None
     assert window.nav.count() == len(NAV_ITEMS)
-    assert "阶段 1 骨架" in window.windowTitle()
+    assert "阶段 2" in window.windowTitle()
 
 
 def test_首屏显示的是库里的真数字不是写死的文案(window, ctx) -> None:
@@ -154,4 +155,90 @@ def test_进程级冷启动实测符合G1约定(data_root) -> None:
     cold = ready[-1]["cold_start_seconds"]
     assert cold <= 1.5, f"G1 [约定] ≤1.5s，实测 {cold}s"
     assert any(e["event"] == "shutdown" for e in events), "--exit-after 走的是关窗路径，必须有对账行"
+    # 后台必须在这个真进程里真的起来 —— 否则"能开界面"掩盖着"没有任何 worker 在领任务"，
+    # 阶段 2 的增量扫描与索引就只存在于测试里。
+    started = [e for e in events if e["event"] == "background.started"]
+    assert started, f"没有 background.started 事件：{[e['event'] for e in events]}"
+    from pdfarchiver.config.settings import DEFAULTS
+
+    assert started[-1]["threads"] == int(DEFAULTS["worker_threads"])
+    assert started[-1]["watched"] == 0, "空库里没有监测根，起来的事件监听必须是 0 条"
     print(f"\nG1 实测：冷启动 {cold:.3f}s，进程总耗时 {wall:.3f}s")
+    print(f"后台起停实测：{started[-1]}")
+
+
+# —— 阶段 2 第 10 项：进度 / 错误 / 重试真的显示出来 ————————————————————
+
+def test_状态页显示扫描与索引任务的读数(window, ctx, root, make_pdf) -> None:
+    """界面不许只显示"一切正常"：这一屏要把队列的真条数打出来。
+
+    `后台未启动` 那半句同样是指令的一部分 —— 阶段 2 的装配刻意不起线程，
+    所以界面必须说"没在跑"，不能让人以为任务卡住了。
+    """
+    r = root("界面读数")
+    make_pdf("界面读数/己.pdf", page_lines=["己文档的正文内容字符"])
+    ctx.scan.scan_root(r)
+    page = window.stack.currentWidget()
+    page.reload()
+    text = page.view.toPlainText()
+    assert "== 扫描与索引任务：进度 / 错误 / 重试 ==" in text
+    assert "后台未启动" in text, "没起 worker 就要说没起，不许显示成正在跑"
+    assert "任务条数  index：queued=1" in text, text
+    assert "还欠一次索引 1" in text
+    assert r.root_path in text
+
+
+def test_刷新按钮同样重查任务读数(window, ctx, root, make_pdf, qtbot) -> None:
+    """进度块缓存一下就等于在界面上展示一个已经过去的时刻 —— 刷新必须连它一起重查。"""
+    r = root("刷新读数")
+    make_pdf("刷新读数/辛.pdf", page_lines=["辛文档的正文内容字符"])
+    ctx.scan.scan_root(r)
+    page = window.stack.currentWidget()
+    qtbot.mouseClick(page.refresh, QtCore.Qt.MouseButton.LeftButton)
+    assert "queued=1" in page.view.toPlainText()
+
+    make_pdf("刷新读数/丑.pdf", page_lines=["丑文档的正文内容字符"])
+    ctx.scan.scan_root(r)
+    qtbot.mouseClick(page.refresh, QtCore.Qt.MouseButton.LeftButton)
+    assert "任务条数  index：queued=2" in page.view.toPlainText()
+
+
+def test_巡检一轮就把脏根排成一条扫描任务(window, ctx, root) -> None:
+    """`patrol_tick` 必须真的调 `patrol.poll()`：定时器空转的话，事件永远没人处理，
+    而界面上的"上次扫描"会停在启动那一刻，看起来像还在跑。"""
+    r = root("巡检")
+    ctx.events.push_directory(r.root_key)
+    assert ctx.jobs.count("queued") == 0
+
+    window.patrol_tick()
+    live = ctx.jobs.list()
+    assert [j.kind for j in live] == ["scan"], live
+    assert "巡检：" in window.statusBar().currentMessage()
+
+    window.patrol_tick()
+    assert ctx.jobs.count("queued") == 1, "脏根已经取走，第二轮不该再排一场重复的重扫"
+
+
+def test_巡检定时器与巡检器同一个间隔口径(window, ctx) -> None:
+    """间隔只许有一个出处。测试先把巡检器的间隔改成 7.5 秒再起定时器：
+    界面里写死 5000（`scan_poll_seconds` 的默认值）当场露馅 —— 用默认值当默认值的断言等于没断言。"""
+    ctx.patrol.poll_seconds = 7.5
+    window.start_patrol()
+    timer = window._patrol_timer
+    assert timer is not None and timer.isActive()
+    assert timer.interval() == 7500, f"定时器间隔没跟巡检器取同一个数：{timer.interval()}ms"
+    timer.stop()
+
+
+def test_巡检抛异常时定时器不许停并且状态栏留下原文(window, ctx, monkeypatch) -> None:
+    """一轮失败如果把定时器打死，此后所有文件事件都没人管，而界面看起来一切正常 ——
+    这正是 SPEC 4.3「故障要能被知道」禁止的那种静默。"""
+    def boom():
+        raise OSError("移动盘被拔掉了")
+
+    window.start_patrol()
+    monkeypatch.setattr(ctx.patrol, "poll", boom)
+    window.patrol_tick()
+    message = window.statusBar().currentMessage()
+    assert "巡检出错：OSError: 移动盘被拔掉了" in message, message
+    assert window._patrol_timer.isActive(), "异常之后定时器必须还活着"

@@ -3,6 +3,10 @@
 守卫的问题不是"0001 能不能建表"，那已经由 integration 验过；这里验的是
 **升级路径上数据不丢**：拿一个已经带着数据的旧库，跑一遍全量迁移，
 条数、内容、完整性、外键都必须原样还在。
+
+阶段 1 时这条守卫只能拿**合成的** 0002 试（那时还没有真的 0002）。
+阶段 2 有了真的 `0002_text_and_fts`，docs/ROADMAP 阶段 2 明确要求换成真实迁移再验一次 ——
+所以下面的基线库故意**只跑到 0001**，然后应用真实迁移目录。
 """
 from __future__ import annotations
 
@@ -17,15 +21,26 @@ from pdfarchiver.db.migrate import current_version, migrate
 from pdfarchiver.db.migrations import discover
 
 REAL_MIGRATIONS = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver" / "db" / "migrations"
+NEW_TABLES_AT_2 = {"text_pages", "content_fts", "content_fts_config", "content_fts_content",
+                  "content_fts_data", "content_fts_docsize", "content_fts_idx"}
+
+
+def _v1_dir(tmp_path: Path) -> Path:
+    """只含 0001 的迁移目录 —— 用来造"阶段 2 发布时用户机器上已存在的库"。"""
+    d = tmp_path / "migrations_v1"
+    d.mkdir(exist_ok=True)
+    shutil.copy(REAL_MIGRATIONS / "0001_initial.py", d)
+    return d
 
 
 @pytest.fixture
 def old_db(tmp_path: Path) -> tuple[Engine, Path]:
-    """一个已经跑过真实迁移、并且带着数据的库。"""
+    """一个**停在 0001** 并且带着数据的库。"""
     db = tmp_path / "catalog.db"
     engine = Engine(db)
-    report = migrate(engine, backup_dir=tmp_path / "backups")
-    assert report.applied, "基线都没建起来，后面的断言全是假的"
+    report = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=_v1_dir(tmp_path))
+    assert report.applied == ["0001_initial"], "基线必须停在 0001，否则后面的升级断言全是空的"
+    assert current_version(engine.connect()) == 1
     conn = engine.connect()
     conn.executemany("INSERT INTO tags(name, created_at) VALUES(?,?)",
                     [("标签甲", 1), ("标签乙", 2), ("标签丙", 3)])
@@ -34,42 +49,81 @@ def old_db(tmp_path: Path) -> tuple[Engine, Path]:
         " VALUES(?,?,?,?,?,?,?,?)",
         [(f"H:/docs/{i}.pdf", f"h:/docs/{i}.pdf", f"{i}.pdf", "pdf", i, i, 1, 1) for i in range(5)])
     conn.execute("INSERT INTO categories(name, name_path, created_at, updated_at) VALUES('报告','报告',1,1)")
+    conn.execute("INSERT INTO monitored_roots(root_path, root_key, created_at, updated_at)"
+                 " VALUES('H:/docs','h:/docs',1,1)")
     conn.commit()
     conn.close()
     return engine, db
 
 
-def _counts(db: Path) -> dict[str, int]:
+def _counts(db: Path, ignore: set[str] = frozenset()) -> dict[str, int]:
+    """各表行数。`ignore` 用来排除**这次迁移新建**的表 —— 它们从 0 变成 N 不是数据丢失。"""
     conn = sqlite3.connect(str(db))
     try:
         out = {}
         for (name,) in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+            if name in ignore:
+                continue
             out[name] = conn.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
     finally:
         conn.close()
     return out
 
 
-def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
+def test_真实0002升级后旧数据行数一条不丢(old_db, tmp_path) -> None:
     engine, db = old_db
     before = _counts(db)
+    report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
+    assert report.applied == ["0002_text_and_fts"]
+    assert current_version(engine.connect()) == 2
+
+    after = _counts(db, ignore=NEW_TABLES_AT_2)
+    assert after == before, "带数据升级把老表的内容弄丢或弄多了"
+    assert after["tags"] == 3 and after["documents"] == 5 and after["monitored_roots"] == 1
+    assert engine.integrity_check() == "ok"
+    engine.close_thread_connection()
+
+
+def test_真实0002升级后旧内容仍然读得回来(old_db, tmp_path) -> None:
+    engine, db = old_db
+    migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
+        docs = conn.execute("SELECT path_key, name, size_bytes FROM documents ORDER BY path_key").fetchall()
+        root = conn.execute("SELECT root_path FROM monitored_roots").fetchall()
+        # 新加的列必须是 NULL 而不是 0 或空串 —— "取不到就留空"是 SPEC 3.2 的口径
+        fresh = conn.execute("SELECT device_id, text_bearing_rate FROM documents LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    assert [r[0] for r in rows] == ["标签丙", "标签乙", "标签甲"]
+    assert len(docs) == 5 and all(d[0].startswith("h:/docs/") for d in docs)
+    assert root == [("H:/docs",)]
+    assert tuple(fresh) == (None, None), "新增列拿不到值时不许填 0 或空串冒充"
+
+
+def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
+    """再加一步**合成**的 0003：证明这条守卫对将来的迁移同样成立，不是只认识 0002。"""
+    engine, db = old_db
+    migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
+    before = _counts(db, ignore=NEW_TABLES_AT_2)
     mdir = tmp_path / "migrations"
     shutil.copytree(REAL_MIGRATIONS, mdir)
-    (mdir / "0002_add_note.py").write_text(
-        "VERSION = 2\n\n\n"
+    (mdir / "0003_add_note.py").write_text(
+        "VERSION = 3\n\n\n"
         "def apply(conn):\n"
-        "    conn.execute('CREATE TABLE stage2_marker(id INTEGER PRIMARY KEY, note TEXT)')\n"
-        "    conn.execute(\"INSERT INTO stage2_marker(note) VALUES('新表')\")\n"
+        "    conn.execute('CREATE TABLE stage3_marker(id INTEGER PRIMARY KEY, note TEXT)')\n"
+        "    conn.execute(\"INSERT INTO stage3_marker(note) VALUES('新表')\")\n"
         "    conn.execute(\"ALTER TABLE tags ADD COLUMN note2 TEXT\")\n",
         encoding="utf-8")
 
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=mdir)
-    assert report.applied == ["0002_add_note"]
-    assert current_version(engine.connect()) == 2
+    assert report.applied == ["0003_add_note"]
+    assert current_version(engine.connect()) == 3
 
-    after = _counts(db)
-    assert {k: v for k, v in after.items() if k != "stage2_marker"} == before, "升级把数据弄丢或弄多了"
+    after = _counts(db, ignore=NEW_TABLES_AT_2 | {"stage3_marker"})
+    assert after == before, "升级把数据弄丢或弄多了"
     assert after["tags"] == 3 and after["documents"] == 5
     assert engine.integrity_check() == "ok"
 
@@ -77,19 +131,23 @@ def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
 def test_升级后的旧数据内容仍然读得回来(old_db) -> None:
     engine, db = old_db
     conn = sqlite3.connect(str(db))
-    rows = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
-    docs = conn.execute("SELECT path_key FROM documents ORDER BY path_key").fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
+        docs = conn.execute("SELECT path_key FROM documents ORDER BY path_key").fetchall()
+    finally:
+        conn.close()
     assert [r[0] for r in rows] == ["标签丙", "标签乙", "标签甲"]  # 按字节序，只验条数与内容都在
     assert len(docs) == 5 and all(d[0].startswith("h:/docs/") for d in docs)
 
 
-def test_完整性与外键检查都干净(old_db) -> None:
+def test_完整性与外键检查都干净(old_db, tmp_path) -> None:
     engine, db = old_db
+    migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
     assert engine.integrity_check() == "ok"
     conn = sqlite3.connect(str(db))
     try:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         conn.close()
 
@@ -100,17 +158,33 @@ def test_真实迁移目录从空库一路能跑到最新版(tmp_path) -> None:
     engine = Engine(db)
     report = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     newest = discover(REAL_MIGRATIONS)[-1].order
-    assert report.to_version == newest
+    assert report.to_version == newest == 2
     assert engine.integrity_check() == "ok"
     # 再跑一次必须什么都不做（幂等），否则重启会把同一迁移执行多遍
     again = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     assert again.did_anything is False
 
 
-def test_WAL与外键设置在库里持久(old_db) -> None:
-    engine, db = old_db
-    conn = sqlite3.connect(str(db))
+def test_升级后删掉正文行索引里不留幽灵行(old_db, tmp_path) -> None:
+    """G10 的迁移侧：0002 建的三条触发器必须在"老库升级上来的文件"里同样生效。
+
+    p1 实测漏写 `old.body` 时 SQLite **不报错**，只留下删不掉的幽灵行 ——
+    所以这里必须直接数索引里还有没有指向已删行的条目。
+    """
+    engine, _ = old_db
+    migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
+    conn = engine.connect()
     try:
-        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        conn.execute("INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
+                     " VALUES(1, 1, 12, '人工智能行业年度报告', 1)")
+        conn.commit()
+        assert conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0] == 1
+        conn.execute("DELETE FROM text_pages WHERE doc_id=1 AND page_no=1")
+        conn.commit()
+        assert conn.execute("SELECT count(*) FROM content_fts WHERE content_fts MATCH '人工智能'").fetchone()[0] == 0
+        ghost = conn.execute(
+            "SELECT count(*) FROM content_fts WHERE rowid NOT IN (SELECT rowid FROM text_pages)").fetchone()[0]
+        assert ghost == 0, "G10：FTS 幽灵行数必须为 0"
     finally:
         conn.close()
+        engine.close_thread_connection()

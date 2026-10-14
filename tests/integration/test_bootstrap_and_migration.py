@@ -8,6 +8,7 @@ D-012 禁止 mock 数据库，所以这里全部是真 sqlite3 文件。
 """
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -17,11 +18,16 @@ from pdfarchiver.db.engine import DatabaseError, Engine
 from pdfarchiver.db.migrate import MigrationError, current_version, migrate
 from pdfarchiver.services.bootstrap import bootstrap
 
-EXPECTED_TABLES = {
+REAL_MIGRATIONS = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver" / "db" / "migrations"
+
+STAGE1_TABLES = {
     "documents", "monitored_roots", "categories", "document_categories", "tags", "document_tags",
     "document_metadata", "collections", "processing_jobs", "file_operations", "operation_items",
     "app_settings", "schema_version",
 }
+# 0002 建的正文表与全文索引表。content_fts 是外部内容表，SQLite 会另建 content_fts_* 影子表，
+# 所以下面一律用"包含"断言，不用 == 全表清单 —— 影子表名是 SQLite 的实现细节，不该被我们钉死。
+STAGE2_TABLES = {"text_pages", "content_fts"}
 
 
 def _tables(db: Path) -> set[str]:
@@ -39,24 +45,62 @@ def _write_migration(dir_: Path, filename: str, body: str) -> Path:
     return p
 
 
+def _db_at_v1(data_root: Path) -> Engine:
+    """造一个**停在 0001** 的库 —— 这就是阶段 2 发布时用户机器上已存在的真实状态。
+
+    要测"带数据升级"和"升级中途失败"，必须从 v1 起步；拿跑完 0002 的库去应用一个假 0002，
+    水位已经 ≥2，迁移根本不会执行，断言全是空的。
+    """
+    m1 = data_root / "m_v1"
+    m1.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REAL_MIGRATIONS / "0001_initial.py", m1)
+    engine = Engine(data_root / "data" / "catalog.db")
+    report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=m1)
+    assert report.applied == ["0001_initial"]
+    return engine
+
+
 def test_空库首启建出全部表(data_root: Path) -> None:
     ctx = bootstrap(data_root)
     try:
-        assert ctx.paths.catalog_db.is_file()
-        assert EXPECTED_TABLES <= _tables(ctx.paths.catalog_db)
-        assert ctx.schema_version == 1
+        tables = _tables(ctx.paths.catalog_db)
+        assert STAGE1_TABLES | STAGE2_TABLES <= tables
+        assert ctx.schema_version == 2
         assert ctx.status.read().integrity == "ok"
-        assert ctx.migration.did_anything and ctx.migration.applied == ["0001_initial"]
+        assert ctx.migration.did_anything and ctx.migration.applied == [
+            "0001_initial", "0002_text_and_fts"]
     finally:
         ctx.shutdown()
 
 
-def test_阶段1刻意不建的表确实不存在(data_root: Path) -> None:
-    """Q1（分词器）和 Q2（索引体积）没答，全文表结构建了就得返工 —— 这条断言是"没提前建"的证据。"""
+def test_0002建出的全文索引表结构与触发器齐全(data_root: Path) -> None:
+    """FTS 外部内容表的三条触发器少一条，索引就会静默不一致（docs/DATABASE 三）。
+    这条断言只看目录里真有什么，不看代码写了什么。"""
+    ctx = bootstrap(data_root)
+    conn = ctx.engine.thread_connection()
+    try:
+        triggers = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='text_pages'")}
+        assert {"tx_pages_ai", "tx_pages_ad", "tx_pages_au"} == triggers
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(text_pages)")]
+        assert cols == ["rowid", "doc_id", "page_no", "source_kind", "char_count", "body", "indexed_at"]
+        # 外部内容表必须指向 text_pages，且列名与内容表一致 —— 不一致时 rebuild 直接 SQL logic error
+        fts_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='content_fts'").fetchone()[0]
+        assert "content='text_pages'" in fts_sql and "tokenize='trigram'" in fts_sql
+        doc_cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
+        assert {"device_id", "text_bearing_rate"} <= doc_cols, "重命名采纳与扫描件判定要用的列没加上"
+    finally:
+        ctx.shutdown()
+
+
+def test_阶段4的表在阶段2仍然不存在(data_root: Path) -> None:
+    """duplicate_groups 的分组口径（按 sha256 还是按内容相似）要到阶段 4 按实测再定，提前建就是返工。
+    反向对照：text_pages / content_fts 现在**必须**已经存在。"""
     ctx = bootstrap(data_root)
     ctx.shutdown()
     tables = _tables(ctx.paths.catalog_db)
-    assert not ({"text_pages", "content_fts", "duplicate_groups"} & tables)
+    assert "duplicate_groups" not in tables
+    assert STAGE2_TABLES <= tables, "0002 没有真的应用，全文索引无从谈起"
 
 
 def test_重启第二次不重复建表(data_root: Path) -> None:
@@ -68,7 +112,7 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
     second = bootstrap(data_root)
     try:
         assert second.migration.did_anything is False
-        assert second.migration.from_version == second.migration.to_version == 1
+        assert second.migration.from_version == second.migration.to_version == 2
         assert sorted(p.name for p in second.paths.backups_dir.glob("*.db")) == snaps_before, \
             "没有待应用迁移时不许产生新快照"
         assert second.catalog.count_tags() == 1
@@ -78,15 +122,21 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
         second.shutdown()
 
 
-def test_迁移前快照是空库且可用BackupAPI读出(data_root: Path) -> None:
+def test_每一步迁移前都有可用快照且快照停在迁移之前(data_root: Path) -> None:
     ctx = bootstrap(data_root)
     ctx.shutdown()
-    snaps = sorted(ctx.paths.backups_dir.glob("pre-migration-*.db"))
-    assert len(snaps) == 1
-    assert snaps[0].name.startswith("pre-migration-0001-")
-    snap_tables = _tables(snaps[0])
-    assert "documents" not in snap_tables, "0001 之前的快照里不该有 documents"
-    conn = sqlite3.connect(str(snaps[0]))
+    snaps = sorted(p.name for p in ctx.paths.backups_dir.glob("pre-migration-*.db"))
+    assert snaps == sorted(snaps) and len(snaps) == 2, \
+        "应用了 0001 与 0002 两个迁移，就该有两次迁移前快照"
+    assert all(n.startswith("pre-migration-000") for n in snaps)
+
+    s1 = ctx.paths.backups_dir / snaps[0]
+    s2 = ctx.paths.backups_dir / snaps[1]
+    assert "documents" not in _tables(s1), "0001 之前的快照里不该有 documents"
+    mid = _tables(s2)
+    assert "documents" in mid, "0002 之前的快照必须有 0001 的成果"
+    assert not (STAGE2_TABLES & mid), "快照必须在迁移**之前**拍，否则回退点就是脏的"
+    conn = sqlite3.connect(str(s2))
     try:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
@@ -103,68 +153,68 @@ def test_没有快照目录就拒绝迁移(tmp_path: Path) -> None:
 
 def test_迁移中途失败回到原样(data_root: Path) -> None:
     """真注入：0002 先建一张表，再故意抛。库必须回到 0001 的状态，那张表不能存在。"""
-    ctx = bootstrap(data_root)
-    ctx.catalog.add_tag("失败前就有了的标签")
-    db = ctx.paths.catalog_db
+    engine = _db_at_v1(data_root)
+    db = engine.path
+    conn = engine.connect()
+    conn.execute("INSERT INTO tags(name, created_at) VALUES('失败前就有了的标签', 1)")
+    conn.commit()
+    conn.close()
+    before_rows = engine.connect().execute("SELECT count(*) FROM tags").fetchone()[0]
+
     mdir = data_root / "migrations_with_bad"
     mdir.mkdir()
+    shutil.copy(REAL_MIGRATIONS / "0001_initial.py", mdir)
     _write_migration(mdir, "0002_boom.py", (
         "VERSION = 2\n\n\n"
         "def apply(conn):\n"
         "    conn.execute('CREATE TABLE should_not_survive(x INTEGER)')\n"
         "    raise RuntimeError('故意注入的迁移中途失败')\n"))
-    before_rows = ctx.catalog.count_tags()
-    ctx.shutdown()
 
-    engine = Engine(db)
     with pytest.raises(MigrationError, match="已回滚"):
         migrate(engine, backup_dir=data_root / "backups2", migrations_dir=mdir)
 
     tables = _tables(db)
     assert "should_not_survive" not in tables, "半个迁移留下了表 —— 事务没兜住"
     assert "documents" in tables, "回滚把 0001 的成果也弄丢了"
+    assert "content_fts" not in tables, "回滚必须连 FTS 虚表一起撤销"
     assert current_version(engine.connect()) == 1
     conn = engine.connect()
     try:
         assert conn.execute("SELECT count(*) FROM tags").fetchone()[0] == before_rows
     finally:
         conn.close()
+        engine.close_thread_connection()
     assert engine.integrity_check() == "ok"
 
 
 def test_迁移失败时异常里带快照路径(data_root: Path) -> None:
-    ctx = bootstrap(data_root)
+    engine = _db_at_v1(data_root)
     mdir = data_root / "m"
     mdir.mkdir()
+    shutil.copy(REAL_MIGRATIONS / "0001_initial.py", mdir)
     _write_migration(mdir, "0002_boom.py", "VERSION = 2\n\n\ndef apply(conn):\n    raise ValueError('x')\n")
-    ctx.shutdown()
     with pytest.raises(MigrationError) as e:
-        migrate(Engine(data_root / "data" / "catalog.db"),
-                backup_dir=data_root / "backups", migrations_dir=mdir)
+        migrate(engine, backup_dir=data_root / "backups", migrations_dir=mdir)
     assert e.value.snapshot is not None and e.value.snapshot.is_file()
+    engine.close_thread_connection()
 
 
 def test_坏迁移修好后能继续往前(data_root: Path) -> None:
     """失败不是终点：把 0002 换成好版本，同一个库要能正常升上去（SPEC 4.2 不许让用户删库重来）。"""
-    ctx = bootstrap(data_root)
-    db = ctx.paths.catalog_db
-    ctx.shutdown()
+    engine = _db_at_v1(data_root)
+    db = engine.path
     bad = data_root / "m_bad"
     bad.mkdir()
+    shutil.copy(REAL_MIGRATIONS / "0001_initial.py", bad)
     _write_migration(bad, "0002_boom.py", "VERSION = 2\n\n\ndef apply(conn):\n    raise ValueError('x')\n")
     with pytest.raises(MigrationError):
-        migrate(Engine(db), backup_dir=data_root / "backups", migrations_dir=bad)
+        migrate(engine, backup_dir=data_root / "backups", migrations_dir=bad)
 
-    good = data_root / "m_good"
-    good.mkdir()
-    _write_migration(good, "0002_fixed.py",
-                     "VERSION = 2\n\n\ndef apply(conn):\n"
-                     "    conn.execute('CREATE TABLE added_later(x INTEGER)')\n")
-    engine = Engine(db)
-    report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=good)
-    assert report.applied == ["0002_fixed"]
+    report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
+    assert report.applied == ["0002_text_and_fts"], "真实 0002 必须能接着坏迁移留下的 v1 库往上走"
     assert current_version(engine.connect()) == 2
-    assert "added_later" in _tables(db)
+    assert STAGE2_TABLES <= _tables(db)
+    assert engine.integrity_check() == "ok"
     engine.close_thread_connection()
 
 
