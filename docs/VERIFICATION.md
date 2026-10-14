@@ -617,7 +617,7 @@ VERDICT: ALL GREEN
 第三场跑在 **D-034 + I36 落进台账、四份用户文档与 README 的读数全部改写、`.probe_work/` 里当场写的
 5 个 `scratch_*.py` 与被后续读数取代的 13 份 log 删掉之后**，只验"文档这一层还在不在、门禁自己还有没有牙"，
 `SKIP` 那 8 段是真没跑 —— 这一场没有 `regression`，所以**这一场的绿不覆盖代码**（代码自 05:01 那场之后没动过）。
-上面这段抄自 `.probe_work/final_docs_1015c.log`。同一条判据在文档定稿前后一共跑了 **5 场**（`final_docs_1015b…f.log`）：
+上面这段抄自 `.probe_work/final_docs_1015c.log`。同一条判据在文档定稿前后**留档 5 场**（`final_docs_1015b…f.log`；此后每次改文档都可以再跑，判据与条数不变，不再逐场留档）：
 b 打 `报告 24KiB`｜`guards 0.7s`，c/d/e 打 `报告 25KiB`｜`guards 0.9s`，f 打 `报告 25KiB`｜`guards 0.7s`；
 五场的 `10/17/14/14KiB`｜`缺栏 无`｜`占位符命中 无`｜`合计判定 7 条｜本次未跑 8 段`｜`VERDICT: ALL GREEN` **一字不差**，
 变的只有负载行和上面那两个随文档字节走的数字 —— 这类"抄录本身让被抄的读数过期"的自指与 **I36** 同族：门禁的条数与体积读数只描述**跑它那一刻**的文档状态。
@@ -636,6 +636,28 @@ p14 单独跑一次的自报是 `合计 10 条｜红 0 条`（`.probe_work/p14_c
 真实语料 7,768 份 / 202 万页**一份都没扫过**（**I20**）；G2 搜索 P95、G3 首建 ≤6h、G8 1.2GB、
 L4 ×10 档仍是**反算值**（**I16**）；长跑只有分钟级（**I32**）。
 
+
+**提交之后，对"已提交的那棵树"再跑一次默认五段链**（`final_committed_1015.log`，收尾提交为 6 个 commit，
+作者身份走命令行 `-c user.name=… -c user.email=…` 传入，**不动 git config、不 push**）：
+
+```
+门禁运行于 H:\AI project\demo19｜python 3.11.7
+        起跑负载：CPU 21.7%｜可用内存 4318MiB｜最吃内存进程 WorkBuddy.exe 533MiB
+        本次跑 5 段：guards + regression + coldstart + e2e + consistency
+  ── 段 guards（0.7s）       PASS ×6
+  ── 段 regression（51.7s）  PASS  全量回归 355 passed / 0 failed / 0 error / 1 skipped
+  ── 段 coldstart（1.1s）    PASS  G1 冷启动 0.497s｜进程总耗时 1.077s｜关窗对账 1 条
+  ── 段 e2e（10.0s）         PASS ×2（后台生命周期 冷启动 0.573s｜11 条端到端｜带页码的命中 6 行）
+  ── 段 consistency（3.0s）  PASS ×3（p12 注入 17/17｜p14 ALL GREEN｜真实现场"本次未跑"）
+  合计判定 13 条｜本次未跑 4 段
+VERDICT: ALL GREEN
+```
+
+这一段量的是**交付物本身**：跑在提交之后，跑完 `git status --short` 无输出（工作树干净）。
+`injection / ocr / soak / package` 四段没在这一场重跑，它们的读数仍是 04:31–04:44 那场八段链的原文 ——
+这一场的绿**不覆盖**那四段，输出末行的"本次未跑 4 段"就是这句话。**这一段自己也是一次文档改动**：
+报告 §八 的 `docs` 行数与体积在把它写进去之后重数，并和它进同一个 commit，所以 §八 那行说的是
+"含本段的这棵树"，不是上一版。
 ---
 
 ## 五 · 已验证的决策（可以直接依赖）
