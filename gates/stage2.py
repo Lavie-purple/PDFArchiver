@@ -8,11 +8,11 @@
 
 新增的两条为什么必须由门禁跑、而不是"测试里有就算验过"：
 
-1. **G2 端到端验收（真 PDF / 真 worker / 真监听）** —— 阶段 2 的验收原文要的是
+1. **新 · 阶段 2 端到端验收（真 PDF / 真 worker / 真监听）** —— 阶段 2 的验收原文要的是
    "必须运行自动化测试并**展示真实搜索结果**"。门禁把 `tests/e2e` 的 `-s` 输出里
    那几行 `查询「…」` 原文抓回来打印，并把"检索到的行数"作为实测数字写进结论。
    没有这几行，门禁只是在报一个绿勾，而不是在展示证据。
-2. **G2 后台生命周期** —— 冷启动只证明界面打得开；worker 线程起没起、监听根挂没挂上、
+2. **新 · 后台生命周期** —— 冷启动只证明界面打得开；worker 线程起没起、监听根挂没挂上、
    关窗有没有对账行，是 `state.log` 里的 `background.started` / `shutdown` 两件事。
    这一条同时兜住阶段 2 真崩过的那类事故：后台静默失灵时，界面上是看不出来的。
 
@@ -52,7 +52,7 @@ def gate_e2e_acceptance() -> Row:
     note = "" if ok else out[-1500:]
     for line in evidence[:8]:
         print(f"        证据：{line.strip()[:200]}")
-    return Row("G2 端到端验收（真 PDF / 真 worker / 真监听，展示真实搜索结果）", ok, summary, note)
+    return Row("新 · 阶段 2 端到端验收（真 PDF / 真 worker / 真监听，展示真实搜索结果）", ok, summary, note)
 
 
 def gate_background_lifecycle() -> Row:
@@ -63,11 +63,11 @@ def gate_background_lifecycle() -> Row:
         p = _run([sys.executable, "main.py", "--data-dir", str(work), "--exit-after", "1.0"])
         wall = time.perf_counter() - t0
         if p.returncode != 0:
-            return Row("G2 后台生命周期（worker + 监听 + 关窗对账）", False, f"退出码 {p.returncode}",
+            return Row("新 · 后台生命周期（worker + 监听 + 关窗对账）", False, f"退出码 {p.returncode}",
                        (p.stdout + p.stderr)[-800:])
         log_file = work / "logs" / "state.log"
         if not log_file.is_file():
-            return Row("G2 后台生命周期（worker + 监听 + 关窗对账）", False, "state.log 不存在", str(work))
+            return Row("新 · 后台生命周期（worker + 监听 + 关窗对账）", False, "state.log 不存在", str(work))
         events = [json.loads(l) for l in log_file.read_text(encoding="utf-8").splitlines() if l.strip()]
         by_name = {e["event"]: e for e in events}
         ready = by_name.get("window.ready")
@@ -88,7 +88,7 @@ def gate_background_lifecycle() -> Row:
         measured = (f"冷启动 {cold:.3f}s｜进程总耗时 {wall:.3f}s｜"
                     f"worker {started.get('threads') if started else '—'} 线程｜"
                     f"回收中断 {started.get('recovered') if started else '—'}")
-        return Row(f"G2 后台生命周期（worker + 监听 + 关窗对账，冷启动 ≤ {G1_COLD_START_MAX}s [约定]）",
+        return Row(f"新 · 后台生命周期（worker + 监听 + 关窗对账，冷启动 ≤ {G1_COLD_START_MAX}s [约定]）",
                    not problems, measured, "；".join(problems))
     finally:
         rmtree(work, ignore_errors=True)
