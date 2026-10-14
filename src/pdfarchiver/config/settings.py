@@ -17,6 +17,8 @@ DEFAULTS: dict[str, Any] = {
     "busy_timeout_ms": 5000,      # 与 db/engine.py 的连接工厂同源
     "log_keep_files": 5,          # diagnostics/logs.py 的轮转份数
     "archive_default_template": "{category}/{year}/{name}.pdf",  # 阶段 4 才执行，先占口径
+    "scan_poll_seconds": 5,       # 阶段 2：巡检器多久取一次文件事件（`services/patrol.py`）
+    "scan_verify_minutes": 30,    # 阶段 2：即使一条事件都没有，最迟多久保证走一遍全量对账（P4：根被改名是 0 事件）
 }
 
 SETTINGS_VERSION = 1

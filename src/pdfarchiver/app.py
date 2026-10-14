@@ -18,7 +18,7 @@ from pdfarchiver.config.paths import AppPaths
 from pdfarchiver.config.settings import SettingsError
 from pdfarchiver.db.engine import DatabaseError
 from pdfarchiver.diagnostics.logs import append_crash, state_event
-from pdfarchiver.services.bootstrap import bootstrap
+from pdfarchiver.services.bootstrap import AppContext, bootstrap
 from pdfarchiver.ui.main_window import MainWindow
 
 log = logging.getLogger("pdfarchiver.app")
@@ -60,9 +60,32 @@ def run(argv: list[str] | None = None, process_started_at: float | None = None) 
         state_event(ctx.paths.logs_dir, "window.ready", cold_start_seconds=round(cold, 3))
     if args.exit_after > 0:
         QtCore.QTimer.singleShot(int(args.exit_after * 1000), window.close)
+    if not _start_background(ctx, window):
+        ctx.shutdown()
+        return EXIT_BOOTSTRAP_FAILED
     code = app.exec()
     ctx.shutdown()  # 幂等：closeEvent 里已经调过一次，这里兜住不用窗口关闭路径退出的情况
     return code
+
+
+def _start_background(ctx: AppContext, window: MainWindow) -> bool:
+    """起 worker 线程 + 文件监听 + 巡检定时器。
+
+    放在窗口起来之后，是为了让 G1 的冷启动只量"进程起来到窗口就绪"，不把开线程的耗时算进
+    一个和界面无关的指标里。后台起不来就是启动失败：留下原文、以非 0 退出，
+    不许带着一个没人领任务的队列继续跑 —— 那正是"界面看着正常、其实什么都没发生"。
+    """
+    try:
+        queue = ctx.start_background()
+    except (DatabaseError, OSError) as exc:
+        dest = append_crash(f"后台启动失败 {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                            ctx.paths.logs_dir)
+        print(f"后台启动失败：{exc}\n完整堆栈已写入 {dest}", file=sys.stderr)
+        return False
+    window.start_patrol()
+    log.info("后台与巡检已就绪：worker %d，回收中断后队列状态 %s",
+             queue.thread_count, ctx.jobs.counts_by_state())
+    return True
 
 
 if __name__ == "__main__":  # 允许 `python -m pdfarchiver.app` 直接跑

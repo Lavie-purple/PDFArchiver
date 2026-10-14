@@ -6,6 +6,9 @@
    而"迁移失败 + 快照路径"才有。
 
 阶段 1 不做的事：不扫描目录、不建全文索引、不起 worker、不连 GPU。
+阶段 2 把扫描/索引的服务对象**装配好**了，但仍然不在这里起线程：
+`bootstrap()` 只负责"依赖齐不齐"，`AppContext.start_background()` 才决定"跑不跑" ——
+界面测试和只看库状态的调用方不该被两个 worker 线程和文件监听拖住。
 """
 from __future__ import annotations
 
@@ -22,22 +25,64 @@ from pdfarchiver.db.migrate import MigrationReport, current_version, migrate
 from pdfarchiver.db.repositories.catalog import CatalogRepository
 from pdfarchiver.db.repositories.documents import DocumentRepository
 from pdfarchiver.db.repositories.jobs import JobRepository
+from pdfarchiver.db.repositories.metadata import MetadataRepository
 from pdfarchiver.db.repositories.roots import RootRepository
 from pdfarchiver.db.repositories.settings import SettingsRepository
+from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.diagnostics.logs import install_crash_hooks, setup_logging, state_event
+from pdfarchiver.fs.exclude import Exclusions
+from pdfarchiver.fs.watcher import EventBuffer, WatchManager
+from pdfarchiver.jobs.queue import DEFAULT_MAX_ATTEMPTS, WorkQueue
+from pdfarchiver.search.service import SearchService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
+from pdfarchiver.services.index_service import IndexService
+from pdfarchiver.services.patrol import Patrol
+from pdfarchiver.services.scan_service import ScanService
 from pdfarchiver.services.session_service import SessionService
 from pdfarchiver.services.status_service import StatusService
 
 log = logging.getLogger("pdfarchiver.bootstrap")
 
 
+@dataclass(frozen=True)
+class BackgroundState:
+    """后台此刻的状态读数。没起线程时也要能回答，好让界面把"没启动"说成一句事实而不是留白。
+
+    存在的全部理由：`queue` 与 `watch` 不在界面可用字段清单里（见 `AppContext` 文档），
+    而 worker 数、监听根数、事件积压这三样正是阶段 2 第 10 项要显示的内容。
+    """
+
+    running: bool
+    worker_threads: int
+    max_attempts: int
+    watched_roots: int
+    watcher_alive: bool
+    pending_events: int
+
+    def lines(self) -> list[str]:
+        if not self.running:
+            return ["  后台未启动：没有 worker 线程、没有文件监听，任务行只会被排进队列而没人领"]
+        out = [f"  后台：worker 线程 {self.worker_threads}｜监听根 {self.watched_roots}"
+               f"｜事件缓冲待处理 {self.pending_events}"]
+        if not self.watcher_alive and self.watched_roots:
+            # 线程死了不会有任何报错：根还列着、队列还在跑，只有事件不再进来。
+            # 不说出来，"改了文件但程序没反应"就只能靠人猜。
+            out.append("  ⚠ 文件监听线程已不在：磁盘变化只能等周期校验，最快 "
+                       "也要到下一轮全量对账")
+        return out
+
+
 @dataclass
 class AppContext:
     """一次启动的全部运行时依赖。UI 只认这个对象，不自己拼路径、不自己开连接。
 
-    界面**只许用** `paths` / `settings` / `status` / `session` 四个字段；
-    其余的仓储对象是给服务层和测试用的，界面直取等于绕过依赖方向。
+    界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
+    `patrol` 这几个字段（后四个是阶段 2 的服务入口）和 `background_state()`；仓储对象是给服务层和
+    测试用的，界面直取等于绕过依赖方向。`queue` / `watch` / `events` 是**私有运行时**，
+    界面要那三样的数字就走 `background_state()`，不许自己摸线程对象。
+
+    `watch` / `queue` 在 `start_background()` 之前是 None —— 阶段 1 的界面测试
+    和"只看库"的调用方不该被起线程这件事拖住，也不该在没人要扫描时占着两个 worker。
     """
 
     paths: AppPaths
@@ -49,18 +94,71 @@ class AppContext:
     catalog: CatalogRepository
     roots: RootRepository
     jobs: JobRepository
+    texts: TextRepository
+    metadata: MetadataRepository
     app_settings: SettingsRepository
     status: StatusService
     session: SessionService
+    scan: ScanService
+    indexer: IndexService
+    search: SearchService
+    patrol: Patrol
+    events: EventBuffer
     bootstrap_seconds: float
     schema_version: int
+    watch: WatchManager | None = None
+    queue: WorkQueue | None = None
     _closed: bool = field(default=False, repr=False)
 
+    def start_background(self) -> WorkQueue:
+        """起 worker 线程 + 事件监听 + 断点续扫。重复调用返回同一个队列（幂等）。
+
+        顺序是硬的：`recover()` 必须早于 `start()`（否则上次被杀留下的 `running` 行
+        会被当成"还在跑"而永远没人领），`watch()` 必须早于首次扫描（否则全量扫描期间
+        新落盘的文件没人记事件，只能等下一次周期校验）。
+        """
+        if self.queue is not None:
+            return self.queue
+        self.queue = WorkQueue(self.jobs, {"scan": self.scan.handle, "index": self.indexer.handle},
+                               engine=self.engine, threads=int(self.settings["worker_threads"]))
+        recovered = self.queue.recover()
+        resuming = self.scan.resume_pending()
+        self.watch = WatchManager(self.events)
+        for root in self.roots.list_enabled():
+            self.watch.watch(root.root_path, root.root_key)
+        self.watch.start()
+        self.queue.start()
+        state_event(self.paths.logs_dir, "background.started",
+                    threads=int(self.settings["worker_threads"]),
+                    recovered=recovered["requeued"], resume_index=resuming,
+                    watched=len(self.watch.observed_roots))
+        log.info("后台已启动：worker %d，监听根 %d，回收中断 %d，续排索引 %d",
+                 self.queue.thread_count, len(self.watch.observed_roots),
+                 recovered["requeued"], resuming)
+        return self.queue
+
+    def background_state(self) -> BackgroundState:
+        """后台此刻的只读快照；`start_background()` 之前 `running=False`，其余取零值。"""
+        if self.queue is None:
+            return BackgroundState(running=False, worker_threads=0, max_attempts=DEFAULT_MAX_ATTEMPTS,
+                                   watched_roots=0, watcher_alive=False,
+                                   pending_events=self.events.snapshot()["pending"])
+        return BackgroundState(running=True, worker_threads=self.queue.thread_count,
+                               max_attempts=self.queue.max_attempts,
+                               watched_roots=len(self.watch.observed_roots) if self.watch else 0,
+                               watcher_alive=bool(self.watch.is_alive()) if self.watch else False,
+                               pending_events=self.events.snapshot()["pending"])
+
     def shutdown(self) -> None:
-        """关连接并留下对账行。重复调用不报错（Qt 的 aboutToQuit 可能和显式关闭都来一次）。"""
+        """停后台、关连接并留下对账行。重复调用不报错（Qt 的 aboutToQuit 可能和显式关闭都来一次）。"""
         if self._closed:
             return
         self._closed = True
+        if self.watch is not None:
+            self.watch.stop()
+        if self.queue is not None:
+            if not self.queue.stop():
+                log.warning("有 worker 未按时退出，其任务行留在 running 等下次回收")
         self.engine.close_thread_connection()
         state_event(self.paths.logs_dir, "shutdown", schema_version=self.schema_version)
 
@@ -102,8 +200,17 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     documents = DocumentRepository(engine)
     roots = RootRepository(engine)
     jobs = JobRepository(engine)
+    texts = TextRepository(engine)
+    metadata = MetadataRepository(engine)
     status = StatusService(engine, documents, catalog, roots, jobs, app_settings)
     session = SessionService(app_settings)
+
+    events = EventBuffer()
+    scan = ScanService(documents, roots, jobs, exclusions=Exclusions.of())
+    indexer = IndexService(documents, texts, metadata)
+    search = SearchService(documents, metadata, texts)
+    patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
+                    verify_minutes=int(settings["scan_verify_minutes"]))
 
     integrity = engine.integrity_check()
     if integrity != "ok":
@@ -127,5 +234,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
 
     return AppContext(paths=paths, settings=settings, engine=engine, migration=report, seed=seed,
                       documents=documents, catalog=catalog, roots=roots, jobs=jobs,
+                      texts=texts, metadata=metadata,
                       app_settings=app_settings, status=status, session=session,
+                      scan=scan, indexer=indexer, search=search, patrol=patrol, events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

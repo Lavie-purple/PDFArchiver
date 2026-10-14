@@ -103,8 +103,11 @@ def install_crash_hooks(log_dir: Path) -> None:
     sys.excepthook = hook
 
     def thread_hook(args: threading.ExceptHookArgs) -> None:
+        # `ExceptHookArgs` 是 structseq，字段是 exc_type/exc_value/exc_traceback —— 没有 `exc_info`。
+        # 写成 args.exc_info 的后果不是"日志少一行"，而是钩子自己抛异常、原始现场被
+        # "Exception in threading.excepthook" 顶掉，worker 线程里到底炸了什么永远看不到。
         dump(f"线程异常 {args.thread.name if args.thread else '?'}",
-             "".join(traceback.format_exception(*args.exc_info)))
+             "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
 
     threading.excepthook = thread_hook
 

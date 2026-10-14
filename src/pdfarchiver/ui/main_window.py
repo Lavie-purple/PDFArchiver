@@ -26,7 +26,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctx = ctx
         self._cold_start = cold_start_seconds
         self._pages: dict[str, QtWidgets.QWidget] = {}
-        self.setWindowTitle(f"PDF 归档工具 · 阶段 1 骨架 {__version__}")
+        self.setWindowTitle(f"PDF 归档工具 · 阶段 2 {__version__}")
         self.resize(1000, 680)
 
         split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -95,6 +95,35 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _status_text(self) -> str:
         return f"{self.ctx.paths.describe()}｜结构版本 {self.ctx.schema_version}"
+
+    # ---- 后台巡检 ----
+
+    def start_patrol(self) -> None:
+        """把巡检器接到界面线程的定时器上（SPEC 阶段 2 第 5 条的其中一条腿）。
+
+        间隔取 `patrol.poll_seconds`，不另读一遍设置：那是 `bootstrap` 已经按设置算好的同一个数，
+        这里再乘一次 1000 之外的任何解释都会变成第二个口径。
+        定时器每 tick 只做"取事件 + 排任务"，目录走查和正文抽取都在 worker 线程里，
+        界面线程一次都不能等（`services/patrol.py` 分工）。
+        """
+        timer = QtCore.QTimer(self)
+        timer.timeout.connect(self.patrol_tick)
+        timer.start(int(self.ctx.patrol.poll_seconds * 1000))
+        self._patrol_timer = timer
+
+    def patrol_tick(self) -> None:
+        """一次轮询。异常在这里挡住：定时器一旦因为一轮失败而停摆，此后所有文件事件都没人管了。"""
+        try:
+            report = self.ctx.patrol.poll()
+        except Exception as exc:  # noqa: BLE001 - 边界：巡检要碰磁盘和库，任何异常都得留下原文并让定时器活着
+            log.exception("巡检轮询失败，定时器继续跑，下一轮还会试")
+            self.statusBar().showMessage(f"巡检出错：{type(exc).__name__}: {exc}")
+            return
+        page = self._pages.get("status")
+        if isinstance(page, StatusPage) and page.isVisible():
+            page.reload()  # 没有事件时也要重查：worker 线程一直在推进度
+        if report.did_anything:
+            self.statusBar().showMessage("巡检：" + report.summarize())
 
     # ---- 生命周期 ----
 

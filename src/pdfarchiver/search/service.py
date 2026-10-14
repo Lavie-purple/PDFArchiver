@@ -1,0 +1,272 @@
+"""检索层：把一条查询变成四类字段的命中结果（SPEC 3.4 / 阶段 2 第 8、9 条）。
+
+四条通道各跑各的 SQL，最后在这里合并排序：
+  文件名 `documents.name`、路径 `documents.path`、元数据 `document_metadata.*`、正文 `content_fts`/`text_pages`。
+
+四条不能含糊的规矩：
+
+1. **筛选口径只有一份**。四条通道都用 `documents.where_for_filter` 编译出来的同一个
+   `DocFilter`。"按分类筛完搜正文"和"按分类筛完看文件名"如果各拼一次 WHERE，
+   两边就会在某个角落分家（漏掉 `missing_since IS NULL` 是最好犯的一种）。
+2. **结果里标口径**。正文通道要写明走的是 trigram 还是慢速 LIKE（`indexing/fts.py`），
+   每条命中要写明命中在哪个字段。用户搜"人工"看到 0 条会以为程序坏了，
+   看到"慢速匹配 3 条"才知道是查询词太短。
+3. **每条通道限量**。`CHANNEL_LIMIT` 是硬上限（G6 禁止全量渲染）：一次检索最多物化
+   4×200 行，超出部分只报"该通道被截断"，不假装"一共 12,000 条都取回来了"。
+4. **四个计数各说各的事**，不许混用一个"总数"：`matching_documents` 是符合筛选条件的
+   **文档**数（SQL 数出来的，与查询词无关）；`counts_by_field` 是各通道**取回的行数**
+   （分页前、受 `CHANNEL_LIMIT` 限制）；`len(hits)` 是本页行数。
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+from pdfarchiver.db.models import Document
+from pdfarchiver.db.repositories.documents import DocFilter, DocumentRepository, SORTS
+from pdfarchiver.db.repositories.metadata import MetadataRepository
+from pdfarchiver.db.repositories.text import TextRepository
+from pdfarchiver.indexing.fts import VIA_FTS, channel_for, describe_channel, match_expression
+from pdfarchiver.indexing.snippets import Snippet, snippet_for
+
+CHANNEL_LIMIT = 200   # 每条通道的行数上限：4 条通道 ×200 行的片段计算与物化，按 p1 实测 trigram 6.4ms/条、LIKE 499ms/次，留足首屏 500ms 门禁（G2）
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+FIELD_FILENAME = "filename"
+FIELD_PATH = "path"
+FIELD_METADATA = "metadata"
+FIELD_BODY = "body"
+FIELD_BROWSE = "browse"
+
+FIELD_LABELS = {
+    FIELD_FILENAME: "文件名",
+    FIELD_PATH: "路径",
+    FIELD_METADATA: "元数据",
+    FIELD_BODY: "正文",
+    FIELD_BROWSE: "浏览",
+}
+# 相关性权重：文件名 > 元数据 > 路径 > 正文。归档工具的主用途是"找回那份文件"，
+# 名字里带词的文档几乎就是用户要找的那份；正文命中一万次也不该把它挤下去。
+FIELD_WEIGHT = {FIELD_FILENAME: 0, FIELD_METADATA: 1, FIELD_PATH: 2, FIELD_BODY: 3}
+
+
+@dataclass(frozen=True)
+class Criteria:
+    """一次检索的完整输入。字段类型全是内置值 —— UI 层不许 import `db`，
+    所以这里不收 `DocFilter`，由 `doc_filter()` 换算。"""
+
+    text: str = ""
+    in_fields: tuple[str, ...] = (FIELD_FILENAME, FIELD_METADATA, FIELD_PATH, FIELD_BODY)
+    root_key: str | None = None
+    category_ids: tuple[int, ...] = ()
+    tag_ids: tuple[int, ...] = ()
+    tag_match_all: bool = False
+    modified_from: int | None = None      # UTC unix 秒，比的是文件修改时间（口径见 DocFilter）
+    modified_to: int | None = None
+    fts_status: str | None = None
+    min_pages: int | None = None
+    min_size_bytes: int | None = None
+    include_missing: bool = False         # True=磁盘上已经不存在的文档也参与
+    missing_only: bool = False
+    sort: str = "relevance"
+    limit: int = DEFAULT_PAGE_SIZE
+    offset: int = 0
+
+    def doc_filter(self) -> DocFilter:
+        return DocFilter(
+            root_key=self.root_key, category_ids=self.category_ids, tag_ids=self.tag_ids,
+            tag_match_all=self.tag_match_all, modified_from=self.modified_from,
+            modified_to=self.modified_to, fts_status=self.fts_status,
+            min_pages=self.min_pages, min_size_bytes=self.min_size_bytes,
+            include_missing=self.include_missing, missing_only=self.missing_only)
+
+    def validate(self) -> None:
+        unknown = [f for f in self.in_fields if f not in FIELD_LABELS]
+        if unknown:
+            raise ValueError(f"未知检索字段 {unknown}；可选 {sorted(FIELD_LABELS)}")
+        if not self.in_fields:
+            raise ValueError("至少要选一个检索字段，一个都不选等于声明\"什么都不搜\"")
+        if len(set(self.in_fields)) != len(self.in_fields):
+            raise ValueError(f"检索字段重复：{list(self.in_fields)}")
+        if self.sort != "relevance" and self.sort not in SORTS:
+            raise ValueError(f"未知排序 {self.sort!r}；可选 relevance + {sorted(SORTS)}")
+        if not 1 <= self.limit <= MAX_PAGE_SIZE:
+            raise ValueError(f"单页条数要在 1–{MAX_PAGE_SIZE} 之间，收到 {self.limit}")
+        if self.offset < 0:
+            raise ValueError(f"偏移不能为负，收到 {self.offset}")
+        if self.missing_only and self.include_missing:
+            raise ValueError("missing_only（只看缺失）与 include_missing（包含缺失）含义相反，不能同时要")
+
+
+@dataclass(frozen=True)
+class Hit:
+    doc: Document
+    field: str            # FIELD_* 之一：这条命中是从哪类字段找到的
+    snippet: Snippet | None
+    page_no: int | None   # 正文命中的页码（1 基，与阅读器显示的一致）；其他通道为 None
+    score: float          # 正文 trigram 通道的 bm25（越小越相关）；其他通道恒 0.0
+    field_detail: str | None = None   # 元数据命中时的具体列名，如 author / title
+
+    @property
+    def field_label(self) -> str:
+        return FIELD_LABELS[self.field]
+
+    def highlight(self) -> tuple[int, int] | None:
+        """片段内的高亮区间（界面据此把片段切成 前文/命中/后文 三段）。
+        定位不到时返回 None —— 不高亮，不编一个位置出来。"""
+        if self.snippet is None or not self.snippet.matched:
+            return None
+        return self.snippet.query_start - self.snippet.start, self.snippet.query_end - self.snippet.start
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    criteria: Criteria
+    hits: list[Hit]
+    channel: str                       # fts / like_fallback / ""（没勾正文或没打字）
+    matching_documents: int            # 符合筛选条件的文档数（与查询词无关）
+    counts_by_field: dict[str, int]    # 各通道取回的行数（分页前）
+    truncated_fields: tuple[str, ...]  # 取满 CHANNEL_LIMIT 的通道，后面还有但没取
+    took_ms: int
+
+    @property
+    def channel_label(self) -> str:
+        if not self.criteria.text.strip():
+            return f"浏览模式（未输入查询词，排序 {self.criteria.sort}）"
+        if not self.channel:
+            return "只检索文件名 / 路径 / 元数据（本次没有搜正文）"
+        return describe_channel(self.channel, self.criteria.text)
+
+    def lines(self) -> list[str]:
+        """给人读的结果摘要。阶段 2 验收要"展示真实搜索结果"，交的就是这个，不是截图里的假表格。"""
+        counts = "、".join(f"{FIELD_LABELS[name]} {n} 行"
+                           for name, n in sorted(self.counts_by_field.items(),
+                                                 key=lambda kv: FIELD_WEIGHT[kv[0]])) or "0 行"
+        cut = f"｜截断通道：{'、'.join(FIELD_LABELS[n] for n in self.truncated_fields)}" \
+            if self.truncated_fields else ""
+        return [f"查询「{self.criteria.text or '（空）'}」｜口径：{self.channel_label}"
+                f"｜符合筛选的文档 {self.matching_documents} 份｜取回 {counts}"
+                f"｜本页 {len(self.hits)} 行｜耗时 {self.took_ms}ms{cut}"]
+
+    def rows(self) -> list[str]:
+        out: list[str] = []
+        for hit in self.hits:
+            where = f"第 {hit.page_no} 页" if hit.page_no else \
+                f"{hit.field_label}" + (f"·{hit.field_detail}" if hit.field_detail else "")
+            out.append(f"[{where}] {hit.doc.name}｜{hit.snippet.line() if hit.snippet else hit.doc.path}")
+        return out
+
+
+class SearchService:
+    def __init__(self, documents: DocumentRepository, metadata: MetadataRepository,
+                 text: TextRepository) -> None:
+        self.documents = documents
+        self.metadata = metadata
+        self.text = text
+
+    def search(self, criteria: Criteria) -> SearchResult:
+        criteria.validate()
+        t0 = time.perf_counter()
+        filters = criteria.doc_filter()
+        needle = criteria.text.strip()
+        matching = self.documents.count_matching(filters)
+
+        if not needle:
+            hits = self._browse(filters, criteria)
+            return SearchResult(criteria=criteria, hits=hits, channel="", matching_documents=matching,
+                                counts_by_field={FIELD_BROWSE: len(hits)}, truncated_fields=(),
+                                took_ms=self._ms(t0))
+
+        groups: dict[str, tuple[list[Hit], bool]] = {}
+        for name in criteria.in_fields:
+            rows, truncated = self._channel(name, needle, filters)
+            if rows:
+                groups[name] = (rows, truncated)
+
+        merged = self._order(groups, criteria)
+        return SearchResult(
+            criteria=criteria, hits=merged[criteria.offset:criteria.offset + criteria.limit],
+            channel=channel_for(needle) if FIELD_BODY in criteria.in_fields else "",
+            matching_documents=matching,
+            counts_by_field={name: len(rows) for name, (rows, _) in groups.items()},
+            truncated_fields=tuple(sorted(name for name, (_, cut) in groups.items() if cut)),
+            took_ms=self._ms(t0))
+
+    # —— 各通道 ——————————————————————————————————————————————
+
+    def _channel(self, name: str, needle: str,
+                 filters: DocFilter) -> tuple[list[Hit], bool]:
+        if name == FIELD_FILENAME:
+            return self._from_docs(self.documents.field_hits(
+                needle, column="name", filters=filters, limit=CHANNEL_LIMIT + 1),
+                FIELD_FILENAME, needle, lambda d: d.name)
+        if name == FIELD_PATH:
+            return self._from_docs(self.documents.field_hits(
+                needle, column="path", filters=filters, limit=CHANNEL_LIMIT + 1),
+                FIELD_PATH, needle, lambda d: d.path)
+        if name == FIELD_METADATA:
+            rows = self.metadata.field_hits(needle, filters=filters, limit=CHANNEL_LIMIT + 1)
+            docs = self.documents.by_ids([r.doc_id for r in rows])
+            return self._truncate([
+                Hit(doc=docs[r.doc_id], field=FIELD_METADATA, snippet=snippet_for(r.value, needle),
+                    page_no=None, score=0.0, field_detail=r.field) for r in rows if r.doc_id in docs])
+        if name == FIELD_BODY:
+            return self._body(needle, filters)
+        raise ValueError(f"未实现的检索通道 {name}")
+
+    def _body(self, needle: str, filters: DocFilter) -> tuple[list[Hit], bool]:
+        if channel_for(needle) == VIA_FTS:
+            rows = self.text.search_fts(match_expression(needle), filters, limit=CHANNEL_LIMIT + 1)
+        else:
+            rows = self.text.search_like(needle, filters, limit=CHANNEL_LIMIT + 1)
+        docs = self.documents.by_ids([r.doc_id for r in rows])
+        return self._truncate([
+            Hit(doc=docs[r.doc_id], field=FIELD_BODY, snippet=snippet_for(r.body, needle),
+                page_no=r.page_no, score=r.score) for r in rows if r.doc_id in docs])
+
+    def _from_docs(self, docs: list[Document], name: str, needle: str,
+                   source) -> tuple[list[Hit], bool]:  # noqa: ANN001 - source 是 str→str 的小函数
+        return self._truncate([Hit(doc=d, field=name, snippet=snippet_for(source(d), needle),
+                                   page_no=None, score=0.0) for d in docs])
+
+    def _browse(self, filters: DocFilter, criteria: Criteria) -> list[Hit]:
+        sort = "name" if criteria.sort == "relevance" else criteria.sort
+        docs = self.documents.list_sorted(filters, sort=sort, limit=criteria.limit, offset=criteria.offset)
+        return [Hit(doc=d, field=FIELD_BROWSE, snippet=None, page_no=None, score=0.0) for d in docs]
+
+    @staticmethod
+    def _truncate(hits: list[Hit]) -> tuple[list[Hit], bool]:
+        """多取一行只为判断"到底有没有被截断"，那一行不参与结果。"""
+        return hits[:CHANNEL_LIMIT], len(hits) > CHANNEL_LIMIT
+
+    # —— 合并排序 ————————————————————————————————————————————
+
+    def _order(self, groups: dict[str, tuple[list[Hit], bool]], criteria: Criteria) -> list[Hit]:
+        """行级结果，一条命中一行 —— 同一份文档正文命中 3 页就是 3 行，四种排序下都是。
+        （分页单位若是"文档"，`counts_by_field` 和页码就没法自洽。）
+
+        `relevance`：先字段权重，正文组内按 bm25（越小越相关），其他组内按文件名字序。
+        其余排序：整表按文档属性重排，同文档的多行保持相邻。结果集已被 `CHANNEL_LIMIT`
+        限住，这几百行在 Python 里排是 O(n log n)，不必给 SQL 加第二种排序口径。"""
+        rows: list[Hit] = []
+        for name, (hits, _) in groups.items():
+            rows += sorted(hits, key=lambda h: (h.doc.name.casefold(), h.doc.id or 0, h.page_no or 0)) \
+                if name != FIELD_BODY or criteria.sort != "relevance" else hits
+        if criteria.sort == "relevance":
+            return sorted(rows, key=lambda h: (FIELD_WEIGHT[h.field],
+                                               h.score if h.field == FIELD_BODY else 0.0,
+                                               h.doc.id or 0, h.page_no or 0))
+        key_of = {
+            "name": lambda h: (h.doc.name.casefold(), h.doc.id or 0, h.page_no or 0),
+            "path": lambda h: (h.doc.path.casefold(), h.doc.id or 0, h.page_no or 0),
+            "mtime": lambda h: (-h.doc.mtime_ns, h.doc.id or 0, h.page_no or 0),
+            "size": lambda h: (-h.doc.size_bytes, h.doc.id or 0, h.page_no or 0),
+            "pages": lambda h: (-(h.doc.page_count or 0), h.doc.id or 0, h.page_no or 0),
+            "indexed": lambda h: (-(h.doc.last_indexed_at or 0), h.doc.id or 0, h.page_no or 0),
+        }[criteria.sort]
+        return sorted(rows, key=key_of)
+
+    @staticmethod
+    def _ms(t0: float) -> int:
+        return int((time.perf_counter() - t0) * 1000)

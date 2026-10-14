@@ -1,8 +1,11 @@
-"""「运行状态与自检」页 —— 阶段 1 唯一有真实内容的一屏。
+"""「运行状态与自检」页 —— 阶段 1 建起来，阶段 2 在上面加了任务读数。
 
 它不属于 A1–A8 任何一屏，也不参与产品布局：它是 AGENTS.md 那条「启动必须打印当前默认值 /
 用户覆盖值 / 来源文件」和 SPEC 4.3「数据库损坏要能被知道」在界面上的落点。
-内容全部来自 `StatusService.read()` 的真查询，页面里没有任何写死的数字。
+阶段 2 第 10 项（显示扫描与索引任务的进度、错误和重试）继续落在这一屏，
+因为这一屏的契约本来就是"把库里算出来的事实打出来"—— 加一块读数不需要新布局、新按钮。
+内容全部来自 `StatusService.read()` / `read_tasks()` / `AppContext.background_state()` 的真查询，
+页面里没有任何写死的数字。
 """
 from __future__ import annotations
 
@@ -48,12 +51,18 @@ class StatusPage(QtWidgets.QWidget):
                 for i in NAV_ITEMS if not i.implemented]
 
     def reload(self) -> None:
-        """重查一遍库再渲染。刷新按钮存在的全部意义就是让"重启后数据还在"这件事可当场验证。"""
+        """重查一遍库再渲染。刷新按钮存在的全部意义就是让"重启后数据还在"这件事可当场验证。
+
+        任务块每次都是新查询、不缓存：进度缓存了等于在界面上展示一个已经过去的时刻。
+        """
+        bg = self.ctx.background_state()
         st = self.ctx.status.read()
+        tasks = self.ctx.status.read_tasks(max_attempts=bg.max_attempts)
         parts = ["== 运行时 =="] + self._runtime_block()
         parts += ["", "== 设置（生效值 / 是否覆盖 / 来源）==", self.ctx.settings.describe()]
         parts += ["", "== 数据库 =="] + [f"  {ln}" for ln in st.lines()]
         parts += ["", f"== 默认分类写入结果 ==\n  {self.ctx.seed.describe()}"]
+        parts += ["", "== 扫描与索引任务：进度 / 错误 / 重试 ==", *bg.lines(), *tasks.lines()]
         parts += ["", "== 本阶段未实现 =="] + self._pending_block()
-        parts += ["", "本阶段刻意没做：目录扫描、全文索引、OCR、语义搜索、任何文件移动。"]
+        parts += ["", "尚未实现：OCR、语义搜索、归档改名 —— 界面上没有任何按钮会移动或删除磁盘上的文件。"]
         self.view.setPlainText("\n".join(parts))
