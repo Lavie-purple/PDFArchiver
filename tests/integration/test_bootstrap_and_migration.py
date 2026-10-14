@@ -28,6 +28,8 @@ STAGE1_TABLES = {
 # 0002 建的正文表与全文索引表。content_fts 是外部内容表，SQLite 会另建 content_fts_* 影子表，
 # 所以下面一律用"包含"断言，不用 == 全表清单 —— 影子表名是 SQLite 的实现细节，不该被我们钉死。
 STAGE2_TABLES = {"text_pages", "content_fts"}
+# 0003 只加列、不加表，所以这里是一张列清单而不是表清单。
+STAGE3_DOCUMENT_COLUMNS = {"ocr_pages_done", "last_ocr_at"}
 
 
 def _tables(db: Path) -> set[str]:
@@ -65,10 +67,10 @@ def test_空库首启建出全部表(data_root: Path) -> None:
     try:
         tables = _tables(ctx.paths.catalog_db)
         assert STAGE1_TABLES | STAGE2_TABLES <= tables
-        assert ctx.schema_version == 2
+        assert ctx.schema_version == 3
         assert ctx.status.read().integrity == "ok"
         assert ctx.migration.did_anything and ctx.migration.applied == [
-            "0001_initial", "0002_text_and_fts"]
+            "0001_initial", "0002_text_and_fts", "0003_ocr_tracking"]
     finally:
         ctx.shutdown()
 
@@ -83,7 +85,10 @@ def test_0002建出的全文索引表结构与触发器齐全(data_root: Path) -
             "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='text_pages'")}
         assert {"tx_pages_ai", "tx_pages_ad", "tx_pages_au"} == triggers
         cols = [r[1] for r in conn.execute("PRAGMA table_info(text_pages)")]
-        assert cols == ["rowid", "doc_id", "page_no", "source_kind", "char_count", "body", "indexed_at"]
+        # 最后一列 ocr_version 是 0003 追加的：OCR 的幂等判定按页比这个数，它必须在库里，
+        # 而且必须在 `body` 之后 —— 老库升级上来的行靠 DEFAULT NULL 留空，位置错了会串列。
+        assert cols == ["rowid", "doc_id", "page_no", "source_kind", "char_count", "body",
+                        "indexed_at", "ocr_version"]
         # 外部内容表必须指向 text_pages，且列名与内容表一致 —— 不一致时 rebuild 直接 SQL logic error
         fts_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='content_fts'").fetchone()[0]
         assert "content='text_pages'" in fts_sql and "tokenize='trigram'" in fts_sql
@@ -112,7 +117,7 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
     second = bootstrap(data_root)
     try:
         assert second.migration.did_anything is False
-        assert second.migration.from_version == second.migration.to_version == 2
+        assert second.migration.from_version == second.migration.to_version == 3
         assert sorted(p.name for p in second.paths.backups_dir.glob("*.db")) == snaps_before, \
             "没有待应用迁移时不许产生新快照"
         assert second.catalog.count_tags() == 1
@@ -122,20 +127,34 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
         second.shutdown()
 
 
+def _columns(db: Path, table: str) -> set[str]:
+    conn = sqlite3.connect(str(db))
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    finally:
+        conn.close()
+
+
 def test_每一步迁移前都有可用快照且快照停在迁移之前(data_root: Path) -> None:
     ctx = bootstrap(data_root)
     ctx.shutdown()
     snaps = sorted(p.name for p in ctx.paths.backups_dir.glob("pre-migration-*.db"))
-    assert snaps == sorted(snaps) and len(snaps) == 2, \
-        "应用了 0001 与 0002 两个迁移，就该有两次迁移前快照"
+    assert len(snaps) == 3 and snaps == sorted(snaps), \
+        "应用了 0001/0002/0003 三个迁移，就该有三次迁移前快照"
     assert all(n.startswith("pre-migration-000") for n in snaps)
 
     s1 = ctx.paths.backups_dir / snaps[0]
     s2 = ctx.paths.backups_dir / snaps[1]
+    s3 = ctx.paths.backups_dir / snaps[2]
     assert "documents" not in _tables(s1), "0001 之前的快照里不该有 documents"
     mid = _tables(s2)
     assert "documents" in mid, "0002 之前的快照必须有 0001 的成果"
     assert not (STAGE2_TABLES & mid), "快照必须在迁移**之前**拍，否则回退点就是脏的"
+    # 0003 只加列，所以它的回退点只能用列来验：有 0002 的表、没有 0003 的列。
+    assert STAGE2_TABLES <= _tables(s3), "0003 之前的快照必须有 0002 的成果"
+    assert not (STAGE3_DOCUMENT_COLUMNS & _columns(s3, "documents")), "加列迁移的快照必须停在加列之前"
+    assert STAGE3_DOCUMENT_COLUMNS <= _columns(ctx.paths.catalog_db, "documents")
+
     conn = sqlite3.connect(str(s2))
     try:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -211,8 +230,9 @@ def test_坏迁移修好后能继续往前(data_root: Path) -> None:
         migrate(engine, backup_dir=data_root / "backups", migrations_dir=bad)
 
     report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
-    assert report.applied == ["0002_text_and_fts"], "真实 0002 必须能接着坏迁移留下的 v1 库往上走"
-    assert current_version(engine.connect()) == 2
+    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking"], \
+        "真实迁移必须能接着坏迁移留下的 v1 库一路往上走"
+    assert current_version(engine.connect()) == 3
     assert STAGE2_TABLES <= _tables(db)
     assert engine.integrity_check() == "ok"
     engine.close_thread_connection()

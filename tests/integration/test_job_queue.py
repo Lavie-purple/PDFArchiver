@@ -285,7 +285,93 @@ def test_永久失败直接判死不退队重试(ctx, make_queue, doc_ids):
     assert q.live_count() == 0, "永久失败的任务不许留在队列里等下次回收"
 
 
-# —— 取消与打断：两种"停"不许混 ————————————————————————————————
+# —— 取消与打断：三种"停"不许混 ————————————————————————————————
+
+def test_处理函数自己判停时落cancelled并留下原因(ctx, make_queue, doc_ids):
+    """阶段 5 新增的第三种停：OCR 的每日页预算跑满、单页耗时超过上限 —— 与用户和退出都无关。
+    留在 `running` 会让界面一直显示"正在跑"而 worker 早已去领下一条，
+    `wait_until_idle()` 也永远等不到空闲（这条就是这么发现的）。"""
+
+    def stops_itself(job, monitor):
+        monitor.set_total(5)
+        monitor.advance()
+        raise JobCancelled("跑到第 2 页之前今天的页预算用满")
+
+    q = make_queue({"index": stops_itself}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    assert _start_and_wait(q), "处理函数判停后队列等不到空闲 —— 停被当成了还在跑"
+
+    row = ctx.jobs.get(int(job.id))
+    assert row.state == "cancelled", row.state
+    assert row.last_error == "跑到第 2 页之前今天的页预算用满"
+    assert (row.done, row.total) == (1, 5), "真实跑过的那一页进度不许被抹掉，也不许补齐成 5"
+    assert q.recover() == {"requeued": 0, "failed": 0}, \
+        "判停是终态：下次启动自动重跑一份被明确停下的文档，就绕过了「只跑显式点名的」"
+
+
+def test_退出闸门已拉下时处理函数判停仍按打断处理(ctx, make_queue, doc_ids):
+    """两种停同时发生时**闸门优先**：退出时没人知道它做到哪儿，那行是给 `recover()` 的输入，
+    把它写成 cancelled 就等于宣布"这份不用再看了"。"""
+    entered = threading.Event()
+
+    def stops_after_shutdown(job, monitor):
+        entered.set()
+        while not monitor.cancelled():
+            time.sleep(0.01)
+        raise JobCancelled("今天的页预算用满")
+
+    q = make_queue({"index": stops_after_shutdown}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    q.start()
+    assert entered.wait(5.0)
+    assert q._stop.set() is None          # type: ignore[union-attr]
+    q.cancel(int(job.id))                 # type: ignore[arg-type]
+    assert q.wait_until_idle(timeout=5.0)
+    assert ctx.jobs.get(int(job.id)).state == "cancelled", \
+        "用户已经按了取消，这行就该是 cancelled，退出分支不许把它改回去"      # type: ignore[union-attr]
+
+
+def test_处理函数自己判停时落cancelled并留下原因(ctx, make_queue, doc_ids):
+    """阶段 5 新增的第三种停：OCR 的每日页预算跑满、单页耗时超过上限 —— 与用户和退出都无关。
+    留在 `running` 会让界面一直显示"正在跑"而 worker 早已去领下一条，
+    `wait_until_idle()` 也永远等不到空闲（这条就是这么发现的）。"""
+
+    def stops_itself(job, monitor):
+        monitor.set_total(5)
+        monitor.advance()
+        raise JobCancelled("跑到第 2 页之前今天的页预算用满")
+
+    q = make_queue({"index": stops_itself}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    assert _start_and_wait(q), "处理函数判停后队列等不到空闲 —— 停被当成了还在跑"
+
+    row = ctx.jobs.get(int(job.id))
+    assert row.state == "cancelled", row.state
+    assert row.last_error == "跑到第 2 页之前今天的页预算用满", "原因没进库，界面就答不出为什么停"
+    assert (row.done, row.total) == (1, 5), "真实跑过的那一页不许被抹掉，也不许补齐成 5"
+    assert q.recover() == {"requeued": 0, "failed": 0}, \
+        "判停是终态：下次启动自动重跑一份被明确停下的文档，就绕过了「只跑显式点名的」"
+
+
+def test_退出闸门已拉下时处理函数判停仍按打断处理(ctx, make_queue, doc_ids):
+    """两种停同时发生时**闸门优先**：退出时没人知道它做到哪儿，那行是 `recover()` 的输入，
+    把它写成 cancelled 就等于宣布"这份不用再看了"。"""
+    entered = threading.Event()
+
+    def stops_after_shutdown(job, monitor):
+        entered.set()
+        while not monitor.cancelled():
+            time.sleep(0.01)
+        raise JobCancelled("今天的页预算用满")
+
+    q = make_queue({"index": stops_after_shutdown}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    q.start()
+    assert entered.wait(5.0)
+    assert q.stop(timeout=5.0) is True
+    assert ctx.jobs.get(int(job.id)).state == "running", "退出打断被写成了 cancelled"  # type: ignore[union-attr]
+    assert q.recover() == {"requeued": 1, "failed": 0}
+
 
 def test_用户取消正在跑的任务后状态保持cancelled(ctx, make_queue, doc_ids):
     entered = threading.Event()

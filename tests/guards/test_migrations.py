@@ -75,14 +75,32 @@ def test_真实0002升级后旧数据行数一条不丢(old_db, tmp_path) -> Non
     engine, db = old_db
     before = _counts(db)
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
-    assert report.applied == ["0002_text_and_fts"]
-    assert current_version(engine.connect()) == 2
+    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking"]
+    assert current_version(engine.connect()) == 3
 
     after = _counts(db, ignore=NEW_TABLES_AT_2)
     assert after == before, "带数据升级把老表的内容弄丢或弄多了"
     assert after["tags"] == 3 and after["documents"] == 5 and after["monitored_roots"] == 1
     assert engine.integrity_check() == "ok"
     engine.close_thread_connection()
+
+
+def test_真实0003加列后老行的OCR列是空而不是假值(old_db, tmp_path) -> None:
+    """0003 给 `text_pages` 与 `documents` 各加了 OCR 相关的列，老库升级后必须留空。
+
+    `ocr_pages_done` 是**计数**，默认 0 说的是"一页都还没识别"，与"取不到就留空"不冲突；
+    另外两列（`last_ocr_at`、`ocr_version`）是"什么时候跑的、哪个版本跑的"，
+    老行没跑过就必须是 NULL —— 填 0 或空串会让状态页把"从没识别过"显示成"识别过但结果是空"。
+    """
+    engine, db = old_db
+    migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute("SELECT ocr_pages_done, last_ocr_at, ocr_status FROM documents"
+                           " ORDER BY id LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    assert row == (0, None, "na"), f"老行的 OCR 列被填了假值：{row}"
 
 
 def test_真实0002升级后旧内容仍然读得回来(old_db, tmp_path) -> None:
@@ -104,25 +122,25 @@ def test_真实0002升级后旧内容仍然读得回来(old_db, tmp_path) -> Non
 
 
 def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
-    """再加一步**合成**的 0003：证明这条守卫对将来的迁移同样成立，不是只认识 0002。"""
+    """再加一步**合成**的 0004：证明这条守卫对将来的迁移同样成立，不是只认识 0002/0003。"""
     engine, db = old_db
     migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     before = _counts(db, ignore=NEW_TABLES_AT_2)
     mdir = tmp_path / "migrations"
     shutil.copytree(REAL_MIGRATIONS, mdir)
-    (mdir / "0003_add_note.py").write_text(
-        "VERSION = 3\n\n\n"
+    (mdir / "0004_add_note.py").write_text(
+        "VERSION = 4\n\n\n"
         "def apply(conn):\n"
-        "    conn.execute('CREATE TABLE stage3_marker(id INTEGER PRIMARY KEY, note TEXT)')\n"
-        "    conn.execute(\"INSERT INTO stage3_marker(note) VALUES('新表')\")\n"
+        "    conn.execute('CREATE TABLE stage4_marker(id INTEGER PRIMARY KEY, note TEXT)')\n"
+        "    conn.execute(\"INSERT INTO stage4_marker(note) VALUES('新表')\")\n"
         "    conn.execute(\"ALTER TABLE tags ADD COLUMN note2 TEXT\")\n",
         encoding="utf-8")
 
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=mdir)
-    assert report.applied == ["0003_add_note"]
-    assert current_version(engine.connect()) == 3
+    assert report.applied == ["0004_add_note"]
+    assert current_version(engine.connect()) == 4
 
-    after = _counts(db, ignore=NEW_TABLES_AT_2 | {"stage3_marker"})
+    after = _counts(db, ignore=NEW_TABLES_AT_2 | {"stage4_marker"})
     assert after == before, "升级把数据弄丢或弄多了"
     assert after["tags"] == 3 and after["documents"] == 5
     assert engine.integrity_check() == "ok"
@@ -158,7 +176,8 @@ def test_真实迁移目录从空库一路能跑到最新版(tmp_path) -> None:
     engine = Engine(db)
     report = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     newest = discover(REAL_MIGRATIONS)[-1].order
-    assert report.to_version == newest == 2
+    assert report.to_version == newest == 3, \
+        "水位必须停在迁移目录里的最新一版；这里同时是「版本号变了就要同步改 docs/DATABASE 与门禁」的哨兵"
     assert engine.integrity_check() == "ok"
     # 再跑一次必须什么都不做（幂等），否则重启会把同一迁移执行多遍
     again = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
