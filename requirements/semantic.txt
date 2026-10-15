@@ -13,7 +13,9 @@ numpy==2.4.6                # 与 base.txt 同版本，不要在这里钉出第�
 #   - 项目边界：模型只在**离线**状态下推理；只有「首次下载权重」是一次真实外部调用，
 #     必须给超时 + 可取消 + 失败回显服务端原文（AGENTS.md 排障条）。
 #
-# 模型与体积（p6 实测，权重不进 git，落 data/models/，已在 .gitignore）：
+# 模型与体积（p6 实测，权重不进 git，落 **<数据根>/models/**，即 config/paths.py 的 `models_dir`；已在 .gitignore）：
+#   ⚠ 唯一口径是 `config/paths.py` 的 models_dir（该目录故意不自动创建）。
+#     旧版本这里写的是 `data/models/`，那是第二个口径，程序不会去读 —— 见 ISSUES I37 / D-037。
 #   model_optimized.onnx  fp32  90.4MB   <- 默认
 #   model_int8.onnx       int8  22.8MB   <- 只省体积；DirectML 上**反而更慢**
 #                                            (79.3 vs 146.9 chunks/s)，不许当提速手段用。

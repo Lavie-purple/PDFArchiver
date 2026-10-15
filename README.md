@@ -58,7 +58,7 @@ docs/
   OCR.md             OCR 这一层的装与验 / 配置项 / 怎么用 / 结果读数 / 故障处理（**没有界面入口，读这个**）
   UI-SCREENS.md      界面清单（AGENTS.md 门禁：线框未逐屏确认前不写界面代码）
   ROADMAP.md         分阶段实施计划与每阶段准入门槛
-  ISSUES.md          已知问题台账 I1–I36（收尾必须逐条销账；当前 CLOSED 11｜MITIGATED 8｜OPEN 17）
+  ISSUES.md          已知问题台账 I1–I38（收尾必须逐条销账；**条数不写死**，现数命令见 `docs/stage-reports/最终交付报告.md` §六）
   CHANGELOG.md       阶段变更与版本记录
   REPO-JOURNAL.md    仓库结构/命名/忽略规则变更记录
   stage-reports/     每阶段交付报告（阶段 0、1、2、5、最终交付）
