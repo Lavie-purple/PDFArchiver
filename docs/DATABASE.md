@@ -53,7 +53,9 @@ CREATE TABLE documents(
   id                INTEGER PRIMARY KEY,
   path              TEXT NOT NULL,              -- 规范化展示路径（realpath 结果，保留原大小写）
   path_key          TEXT NOT NULL COLLATE NOCASE,  -- 身份键 = path.casefold()
-  volume_id         TEXT,                       -- 卷序列号（GetVolumeInformationEx）
+  volume_id         TEXT,                       -- ⚠️ **死列**：0001 建了它，但全项目代码零读写，恒 NULL。
+                                              --   判"同盘/跨盘"用 0002 加的 `device_id`（`os.stat().st_dev`，盘符级）；
+                                              --   卷序列号这条路**没实现**，要用就先实现再改口径（ISSUES I40）
   file_id           INTEGER,                    -- NTFS 文件 ID（os.stat().st_ino，实测可用）
   name              TEXT NOT NULL,
   ext               TEXT NOT NULL,
