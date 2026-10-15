@@ -139,6 +139,15 @@ Q7 也必须在此之前答：外壳里没有产品界面，扫描完总得有�
 | 新 | 预览与实际执行的文件集合**逐条一致**（先算 sha256 集合差，非 0 即中止） |
 | 新 | DB 事务回滚**不等于**磁盘回滚 —— 断言存在一条测试专门验这点 |
 
+**开工前置**（2026-10-15 出 `docs/UI-WIREFRAMES.md` §S3／§S4 时对账出来的三件，**先补这三件再动执行器**）：
+
+| # | 要补的口径 | 为什么现在就该记在这儿 |
+| --- | --- | --- |
+| 1 | `AppPaths` 加 `journal_dir`（唯一口径）并让 `mkdirs()` 建它 | journal 落哪个目录全项目没定义，执行器与对账工具会各拼一路 —— **ISSUES I41**（同型事故见 I27） |
+| 2 | `config/settings.py` 的 `DEFAULTS` 加「归档目标根目录」键 | 现在只有 `archive_default_template = "{category}/{year}/{name}.pdf"`，**模板拼得出层级却落不到根** —— **D-042** 第 1 条后果 |
+| 3 | `services/bootstrap.py` 注册 `archive` 处理函数 | 队列种类常量 `KINDS`（`db/repositories/jobs.py:26`）里**已经有 `archive`**，而 `claim()` 按已注册种类筛 → 投放即**永远 `queued`**，界面表现是"点了没反应"（**I23** 那一族）。S4 第 3 问选甲（走后台队列）时这是第一行必修 |
+| 4 | 定死「跳过的项进不进 journal」并给两边词表加牙 | `operation_items.state` 有 `skipped`、§5.2 的 journal 七态没有，DDL 无 `CHECK` —— **ISSUES I42**（**D-042** 的「冲突默认跳过」直接踩在上面） |
+
 ---
 
 ## 阶段 5 · OCR —— 已完成（引擎层 + 队列 + 幂等 + 索引 + 限量；OCR 相关界面屏按线框禁令未动）
