@@ -18,7 +18,7 @@ src/pdfarchiver/
     engine.py★            #   连接工厂（每线程独立连接）、WAL、busy_timeout、Backup 快照、integrity_check
     migrate.py★           #   先快照后动结构；一个迁移一个事务（isolation_level=None + BEGIN IMMEDIATE）
     models.py★            #   表结构常量与行数据类
-    migrations/★          #   0001_initial.py（13 张表）+ 0002_text_and_fts.py★（阶段 2：正文表 + 外部内容 FTS + 三触发器）
+    migrations/★          #   0001_initial.py（12 张表；空库首启实测 13 张 = 这 12 张 + `schema_version`，见 docs/DATABASE.md §2.5）+ 0002_text_and_fts.py★（阶段 2：正文表 + 外部内容 FTS + 三触发器）
     repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata；只有这里能写 SQL
     sqltext.py★           #   SQL 片段的唯一拼装处（占位符与 IN 列表），仓储层共用
   fs/                     # 文件扫描与监测层

@@ -105,7 +105,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `file_operations` | 操作批次 | `status` planned\|previewed\|running\|partially_done\|done\|failed\|undone；`journal_path` |
 | `operation_items` | 逐文件条目 | `src`/`dst`/`kind`(move\|rename\|copy)/`state` pending\|done\|failed\|skipped + `error` + `reversible` |
 | `processing_jobs` | 任务队列 | `kind` scan\|index\|ocr\|vector\|archive；`state` queued\|running\|paused\|done\|failed\|cancelled；`attempts`、`progress` |
-| `duplicate_groups` | 内容重复 | 按 `sha256` 分组；只报告不删除 |
+| `duplicate_groups` | 内容重复 —— **故意不建**（阶段 4 再定分组口径） | 设计意图是「按 `sha256` 分组；只报告不删除」，但**库里没有这张表**：`0001_initial.py:235` 与 `0002_text_and_fts.py:86` 两处注释明写不建，断言 `test_阶段1刻意不建的表确实不存在` 反向钉住。在此之前去重读取**只许** `GROUP BY sha256` 现算现查（走 `ix_documents_sha`，见 `docs/UI-WIREFRAMES.md` §S5）；要建它必须走**第 4 条迁移**（`VERSION = 4`），不许运行时 `ALTER` —— 出处 **ISSUES I44** |
 | `app_settings` | **应用内部状态**（导航记忆、列宽、"默认模板已种过"标记） | key/value，value 存 JSON。**不存用户设置** —— 用户设置唯一口径是 `config/settings.json`（D-019）。坏 JSON 回落默认值但必须留 warning，不许静默 |
 | `schema_version` | 迁移水位 | 单行；`version`、`applied_at` |
 
@@ -155,6 +155,20 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 每日页预算的**已用页数**不进 `documents`，进 `app_settings`（内部状态，D-019/D-032）——
 它是"今天跑了多少"，不是"这份文档的财产"。
 
+### 2.5 表数只有一个口径（2026-10-15 补，ISSUES I44）
+
+"现在有几张表"在文档里出现过 **12 / 13** 两个数说同一件事（`docs/ARCHITECTURE.md` 一 与 `docs/DATABASE.md` 四 曾写
+"`0001_initial` 13 张表"，而本节一 的存储布局写"0001 的 12 张表"），AGENTS.md 禁止核心概念多口径，所以定死：
+
+| 口径 | 数 | 怎么来的（可现跑复算，不许抄旧数） |
+| --- | --- | --- |
+| 迁移文件里的 `CREATE TABLE` | 0001 = **12**、0002 = **1**（`text_pages`）+ 1 张 FTS5 虚表 `content_fts`、0003 = **0** | `grep -c CREATE TABLE src/pdfarchiver/db/migrations/*.py` |
+| 空库首启后的"表" | 阶段 1 当时报的 **13** = 上面 12 张 + `schema_version` | `schema_version` 由 `db/migrate.py:20` 的 `SCHEMA_TABLE` 建，**不在任何迁移文件里** |
+| 当前 `sqlite_master` 里 `type='table'` 且非 `sqlite_%` | **19** | = 内容表 14（含 `content_fts`）+ `schema_version` + FTS5 自动建的 4 张影子表 `content_fts_config / _data / _docsize / _idx` |
+
+**写法规矩**：说"首版几张表"一律带上面哪一行；说"现有几张表"必须现跑现数并写明 `sqlite_master` 那个口径；
+历史阶段报告里的 13 是**它自己时点的读数**，不改写，但今后新文档不许再把它当成当前数。
+
 ## 三 · FTS5 的正确接法（三条踩过坑的硬规则）
 
 P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
@@ -200,7 +214,7 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
 - 守卫测试：`tests/guards/test_migrations.py` 用**带数据的旧版本库**跑一遍全量迁移，5 条断言已实测通过 ——
   逐表行数不变（新表除外）、旧内容读得回来、`PRAGMA integrity_check` = ok、`PRAGMA foreign_key_check` 空、
    WAL 与外键设置在库里持久。反向注入 I7（把回滚改成 `COMMIT`）确实让它变红。
-- **阶段 1 只有 `0001_initial`（13 张表）**。`text_pages` / `content_fts` / `duplicate_groups`
+- **阶段 1 只有 `0001_initial`（它建 12 张表；空库首启实测 13 张，多出的那张是 `schema_version`，由 `db/migrate.py` 建）**。`text_pages` / `content_fts` / `duplicate_groups`
   是**有意没建**，不是遗漏：分词器（Q1）与索引体积策略（Q2）未答，duplicate 分组口径属阶段 4。
   有断言反向钉住它们不存在（`test_阶段1刻意不建的表确实不存在`）。
   → 阶段 2 会以 **`0002`** 第一次真跑"带数据升级"，届时 `test_migrations.py` 里的合成 0002 要换成真实 0002 再验一次。
