@@ -10,6 +10,9 @@ agents.md
 05-构建原理.md
 06-待验证条款池.md
 个人用的启动方式.md
+# 本机启动便利品：docs/USAGE.md §二 已写明源码运行命令
+# （.venv\Scripts\python.exe -m pdfarchiver.app），这个 .bat 只是同一件事的本机快捷方式
+start.bat
 # 过程与经验沉淀（需求契约 / 工时埋点 / AI 记忆文件）
 SPEC.md
 PROJECT_SPEC.md
@@ -37,6 +40,9 @@ data/
 models/
 .cache/
 .probe_work/
+
+# ── 设计参考图（ImageGen 一次性产物，2026-10-17 现数 6 张 / 6.9MB，全仓库零引用；留着当参考不入库）──
+vibe_images/
 
 # ── 系统文件 ──
 .DS_Store
