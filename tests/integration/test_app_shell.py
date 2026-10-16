@@ -545,10 +545,12 @@ def test_判重进度的状态词表对齐仓储的状态口径() -> None:
 
 AVAILABLE_WIDTH = MIN_WINDOW_WIDTH - NAV_WIDTH - 1
 
-# 环境里的临时路径太短，顶不出这个坏法；自己钉一条 243 字符的。
+# 环境里的临时路径太短，顶不出这个坏法；自己钉一条 247 字符的（现测 len(str(...)) = 247）。
 # 尾段是一整串无空格 ASCII（Qt 把 CJK 逐字当可断点，全中文的长路径自己就能折断），
 # 结尾留一个独特文件名，用来区分"中段省略"和"尾段截断"。
-LONG_DB_PATH = (Path("C:/Users/lavie/AppData/Local/PdfArchiver/profiles")
+# 用户名位写成 local 而不是真用户名：这条只是形状夹具，规则见 docs/REPO-JOURNAL.md R-003
+# （commit 前 `git grep` 本机用户名与私人目录名，命中即改；同类事故已出过一次，提交 0e808d0）。
+LONG_DB_PATH = (Path("C:/Users/local/AppData/Local/PdfArchiver/profiles")
                 / ("log" * 60) / "catalog-final.db")
 
 
