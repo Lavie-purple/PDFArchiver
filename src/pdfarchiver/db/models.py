@@ -42,6 +42,8 @@ class Document:
     category_confirmed: int = 0
     last_scanned_at: int | None = None
     last_indexed_at: int | None = None
+    last_read_page: int | None = None
+    last_read_at: int | None = None
     last_error: str | None = None
     missing_since: int | None = None
     created_at: int = 0

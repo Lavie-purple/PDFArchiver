@@ -1,7 +1,10 @@
 """主窗口外壳：左导航 + 右页面 + 状态栏。
 
 这不是任何一屏的布局方案：右侧页面由 `ui/nav.py` 注册表决定，阶段 1 只有一页有内容。
-不设最小窗口宽度（那个数值是 Q7 里由你定的，我不替你猜），不做主题、不做图标。
+最小窗口 **1024×720** 是 **D-039** 定的（`[约定]`），默认开在 **1280×800** ——
+那是 p3 唯一有实测证据的布局档，也正是 S1 三栏刚好放得下的那一档（算术见
+`ui/pages/library_page.py`，降级形状是 **D-040**）。这条地板同时销掉 **ISSUES I52**
+（原来"不设最小窗宽"，窗口压到 900 以下时侧栏被一路榨瘪到 56px）。
 
 关窗必须真的把数据库连接关掉并留下对账行，否则"能启动能关闭"只是看起来成立。
 """
@@ -14,10 +17,43 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pdfarchiver import __version__
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.nav import NAV_ITEMS, NavItem
+from pdfarchiver.ui.pages.archive_page import ArchivePage
+from pdfarchiver.ui.pages.backup_page import BackupPage
+from pdfarchiver.ui.pages.categories_page import CategoriesPage
+from pdfarchiver.ui.pages.dedup_page import DedupPage
+from pdfarchiver.ui.pages.library_page import LibraryPage
+from pdfarchiver.ui.pages.operations_page import OperationsPage
 from pdfarchiver.ui.pages.pending_page import PendingPage
-from pdfarchiver.ui.pages.status_page import StatusPage
+from pdfarchiver.ui.pages.reader_page import ReaderPage
+from pdfarchiver.ui.pages.settings_page import SettingsPage
+from pdfarchiver.ui.theme import ThemeManager
 
 log = logging.getLogger("pdfarchiver.ui")
+
+# D-039 [约定]：最小窗口 1024×720。默认开在 1280×800 —— 线框就是按这一档画的，
+# 且 S1 的三栏（236 + 480 + 360 = 1076）加上 200px 导航刚好在这档放得下。
+MIN_WINDOW_WIDTH = 1024
+MIN_WINDOW_HEIGHT = 720
+DEFAULT_WINDOW_WIDTH = 1280
+DEFAULT_WINDOW_HEIGHT = 800
+
+# 导航栏宽度。布局守卫（`tests/integration/test_app_shell.py`）拿它算"一屏还能用多宽"，
+# 所以它是外壳的口径，不是测试里写死的第二个数。侧栏不参与 D-040 的降级授权 ——
+# 宽度不足时牺牲的是 S1 的右栏，不是这里。
+NAV_WIDTH = 200
+
+# 导航项对应的 Unicode 图标
+_NAV_ICONS: dict[str, str] = {
+    "library": "\U0001f4c1",      # 📁 文档库
+    "search": "\U0001f50d",       #  检索
+    "reader": "\U0001f4d6",       #  PDF 阅读
+    "archive": "\U0001f4e6",      # 📦 归档预览
+    "operations": "\U0001f4dd",   # 📝 操作日志
+    "duplicates": "\U0001f504",   # 🔄 重复检测
+    "monitor": "\U00002699\ufe0f", # ️ 监测设置
+    "categories": "\U0001f3f7\ufe0f", # 🏷️ 分类标签
+    "backup": "\U0001f4be",       # 💾 备份恢复
+}
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -27,22 +63,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cold_start = cold_start_seconds
         self._pages: dict[str, QtWidgets.QWidget] = {}
         self.setWindowTitle(f"PDF 归档工具 v{__version__}")
-        self.resize(1000, 680)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)  # D-039；同时是 I52 的甲案
+        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+
+        # 主题管理
+        self.theme = ThemeManager()
+        saved_theme = ctx.app_settings.get("ui.theme", ThemeManager.LIGHT)
+        self.theme.set_theme(saved_theme)
 
         split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.nav = QtWidgets.QListWidget()
+        self.nav.setObjectName("navList")
         self.nav.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.nav.setIconSize(QtCore.QSize(18, 18))
         for item in NAV_ITEMS:
-            self.nav.addItem(f"{item.title}（SPEC {item.spec}）"
-                             + ("" if item.implemented else " · 未实现"))
+            icon = _NAV_ICONS.get(item.page_id, "")
+            self.nav.addItem(f"  {icon}  {item.title}")
         self.stack = QtWidgets.QStackedWidget()
         split.addWidget(self.nav)
         split.addWidget(self.stack)
         split.setStretchFactor(1, 1)
+        split.setSizes([NAV_WIDTH, DEFAULT_WINDOW_WIDTH - NAV_WIDTH])
         self.setCentralWidget(split)
         self.nav.currentRowChanged.connect(self._on_nav_changed)
 
         self._build_menus()
+        self._apply_theme()
         self.statusBar().showMessage(self._status_text())
 
         self._select_by_page_id(ctx.session.last_nav_page() or NAV_ITEMS[0].page_id)
@@ -62,9 +108,47 @@ class MainWindow(QtWidgets.QMainWindow):
         refresh.triggered.connect(self._refresh_current)
         view_menu.addAction(refresh)
 
+        view_menu.addSeparator()
+        self._theme_action = QtGui.QAction("切换到暗色模式", self)
+        self._theme_action.triggered.connect(self._toggle_theme)
+        view_menu.addAction(self._theme_action)
+
+    def _apply_theme(self) -> None:
+        """将当前主题的 QSS 应用到整个应用。"""
+        qss = self.theme.generate_qss()
+        self.setStyleSheet(qss)
+        # 占位色不走 QSS，必须单独设进调色板（`ThemeManager.apply_palette`，ISSUES I50 乙）
+        self.theme.apply_palette(self)
+        # 更新菜单文字
+        label = "切换到浅色模式" if self.theme.theme == ThemeManager.DARK else "切换到暗色模式"
+        self._theme_action.setText(label)
+        # 持久化
+        try:
+            self.ctx.app_settings.set("ui.theme", self.theme.theme)
+        except Exception:
+            log.exception("保存主题偏好失败")
+
+    def _toggle_theme(self) -> None:
+        self.theme.toggle()
+        self._apply_theme()
+
     def _make_page(self, item: NavItem) -> QtWidgets.QWidget:
-        if item.page_id == "status":
-            return StatusPage(self.ctx, cold_start_seconds=self._cold_start)
+        if item.page_id == "monitor":
+            return SettingsPage(self.ctx, cold_start_seconds=self._cold_start)
+        if item.page_id == "categories":
+            return CategoriesPage(self.ctx)
+        if item.page_id == "library":
+            return LibraryPage(self.ctx)
+        if item.page_id == "reader":
+            return ReaderPage(self.ctx)
+        if item.page_id == "archive":
+            return ArchivePage(self.ctx)
+        if item.page_id == "operations":
+            return OperationsPage(self.ctx)
+        if item.page_id == "duplicates":
+            return DedupPage(self.ctx)
+        if item.page_id == "backup":
+            return BackupPage(self.ctx)
         return PendingPage(item)
 
     # ---- 导航 ----
@@ -80,6 +164,9 @@ class MainWindow(QtWidgets.QMainWindow):
         page = self._pages.get(item.page_id)
         if page is None:
             page = self._make_page(item)
+            # 页面惰性创建，晚于启动时那次 `_apply_theme` —— 占位色只有设在控件自身才
+            # 上屏（父控件 / 应用级实测被 QSS 覆盖），所以每建一页补设一次。**ISSUES I50**
+            self.theme.apply_palette(page)
             self._pages[item.page_id] = page
             self.stack.addWidget(page)
         self.stack.setCurrentWidget(page)
@@ -88,7 +175,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_current(self) -> None:
         page = self.stack.currentWidget()
-        if isinstance(page, StatusPage):
+        if isinstance(page, SettingsPage):
+            page.reload_status()
+            page.reload_settings()
+        elif isinstance(page, CategoriesPage):
+            page.reload()
+        elif isinstance(page, LibraryPage):
+            page.reload()
+        elif isinstance(page, DedupPage):
+            page.reload()
+        elif isinstance(page, BackupPage):
             page.reload()
         else:
             self.statusBar().showMessage("当前页没有可刷新的内容")
@@ -119,21 +215,34 @@ class MainWindow(QtWidgets.QMainWindow):
             log.exception("巡检轮询失败，定时器继续跑，下一轮还会试")
             self.statusBar().showMessage(f"巡检出错：{type(exc).__name__}: {exc}")
             return
-        page = self._pages.get("status")
-        if isinstance(page, StatusPage) and page.isVisible():
-            page.reload()  # 没有事件时也要重查：worker 线程一直在推进度
+        settings_page = self._pages.get("monitor")
+        if isinstance(settings_page, SettingsPage) and settings_page.isVisible():
+            # 这一条同时管住了状态读数：状态页现在是 S7 的上半区（D-040），
+            # `reload_status()` 就是让那块控件重查一遍 —— 少这一行，界面上的进度会停在
+            # 一个已经过去的时刻，而 worker 线程一直在推进度。
+            settings_page.reload_status()
+            settings_page.reload_settings()
+        duplicates_page = self._pages.get("duplicates")
+        if isinstance(duplicates_page, DedupPage) and duplicates_page.isVisible():
+            # 只刷进度那一行，不调整页 `reload()`：那一页的组表要查 500 组、每组再查一次成员，
+            # 挂在一个 5 秒一次的定时器上等于每 tick 做一次接近全量的重查。
+            duplicates_page.reload_progress()
         if report.did_anything:
             self.statusBar().showMessage("巡检：" + report.summarize())
 
     # ---- 生命周期 ----
 
     def set_cold_start_seconds(self, seconds: float) -> None:
-        """由组合根在窗口就绪后回填，再刷进状态页。放在构造参数里会漏掉窗口自身的构建耗时。"""
+        """由组合根在窗口就绪后回填，再刷进 S7 上半区那张状态页。
+
+        放在构造参数里会漏掉窗口自身的构建耗时。状态页现在不是独立的一屏了（**D-040**），
+        但它仍是同一个控件嵌在 `monitor` 里，所以这一条只换了去找它的路线，读数口径没变。
+        """
         self._cold_start = seconds
-        page = self._pages.get("status")
-        if isinstance(page, StatusPage):
-            page.cold_start_seconds = seconds
-            page.reload()
+        page = self._pages.get("monitor")
+        if isinstance(page, SettingsPage):
+            page.status_page.cold_start_seconds = seconds
+            page.reload_status()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802 - Qt 命名
         try:

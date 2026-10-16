@@ -248,6 +248,10 @@ class SearchService:
         return self._truncate([Hit(doc=d, field=name, snippet=snippet_for(source(d), needle),
                                    page_no=None, score=0.0) for d in docs])
 
+    def search_text(self, query: str, limit: int = 100) -> SearchResult:
+        """便捷入口：UI 不需要自己构造 Criteria。"""
+        return self.search(Criteria(text=query, limit=limit))
+
     def _browse(self, filters: DocFilter, criteria: Criteria) -> list[Hit]:
         sort = "name" if criteria.sort == "relevance" else criteria.sort
         docs = self.documents.list_sorted(filters, sort=sort, limit=criteria.limit, offset=criteria.offset)

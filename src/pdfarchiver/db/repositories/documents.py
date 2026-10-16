@@ -24,7 +24,8 @@ _COLS = """
   id, path, path_key, name, ext, size_bytes, mtime_ns, ctime_ns, file_id, device_id, sha256,
   page_count, text_bearing_rate, is_pdf, needs_pass, is_repaired, parse_status, text_status,
   ocr_status, ocr_pages_done, last_ocr_at, fts_status, vector_status, category_confirmed,
-  last_scanned_at, last_indexed_at, last_error, missing_since, created_at, updated_at
+  last_scanned_at, last_indexed_at, last_read_page, last_read_at, last_error, missing_since,
+  created_at, updated_at
 """
 
 
@@ -148,6 +149,15 @@ class DocumentRepository:
             f"SELECT {_COLS} FROM documents WHERE id=?", (doc_id,)).fetchone()
         return _to_doc(row) if row else None
 
+    def update_reading_progressress(self, doc_id: int, page: int) -> None:
+        """更新阅读进度。`page` 从 1 开始（与 text_pages.page_no 口径一致）。"""
+        from pdfarchiver.db.models import now_ts
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"更新阅读进度失败 doc_id={doc_id}"):
+            conn.execute(
+                "UPDATE documents SET last_read_page=?, last_read_at=? WHERE id=?",
+                (page, now_ts(), doc_id))
+
     def list(self, limit: int = 500, offset: int = 0) -> list[Document]:
         rows = self.engine.thread_connection().execute(
             f"SELECT {_COLS} FROM documents ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?",
@@ -175,6 +185,132 @@ class DocumentRepository:
         conn = self.engine.thread_connection()
         rows = conn.execute("SELECT ocr_status, count(*) AS n FROM documents GROUP BY ocr_status").fetchall()
         return {r["ocr_status"]: r["n"] for r in rows}
+
+    # —— 重复检测（S5） ————————————————————————————————————————
+
+    def count_hashed_vs_unhashed(self) -> tuple[int, int]:
+        """已算过哈希 / 未算过哈希的文件数。两者相加 = 全库文件数（含缺失）。
+
+        S5 顶栏的"参与 N 份｜未参与 M 份"读数唯一出处；不许界面自己数。
+        """
+        conn = self.engine.thread_connection()
+        hashed = conn.execute(
+            "SELECT count(*) FROM documents WHERE sha256 IS NOT NULL").fetchone()[0]
+        unhashed = conn.execute(
+            "SELECT count(*) FROM documents WHERE sha256 IS NULL").fetchone()[0]
+        return int(hashed), int(unhashed)
+
+    def unhashed_stats(self) -> dict:
+        """未算哈希且磁盘上还在的文件的统计：份数 + 总字节。
+
+        S5 ①段"待算哈希 N 份 ≈ M GB"读数的唯一出处。
+        只算 `missing_since IS NULL` 的 —— 已消失的文件不算哈希也没意义，
+        界面不许自己拼这条 SQL（AGENTS.md：SQL 只在仓储里）。
+        """
+        conn = self.engine.thread_connection()
+        row = conn.execute(
+            "SELECT count(*) AS cnt, coalesce(sum(size_bytes), 0) AS bytes "
+            "FROM documents WHERE sha256 IS NULL AND missing_since IS NULL"
+        ).fetchone()
+        return {"count": int(row["cnt"]), "total_bytes": int(row["bytes"])}
+
+    def count_hardlink_groups(self) -> int:
+        """跨全部重复组，有多少组含有硬链接（同 device_id+file_id 多路径）。
+
+        S5 ②段"硬链接同份 N 组 → 已从可回收里排除"读数的唯一出处。
+        """
+        conn = self.engine.thread_connection()
+        row = conn.execute("""
+            SELECT count(*) AS cnt FROM (
+                SELECT sha256, device_id, file_id, count(*) AS paths
+                FROM documents
+                WHERE sha256 IS NOT NULL AND device_id IS NOT NULL AND file_id IS NOT NULL
+                  AND missing_since IS NULL
+                GROUP BY sha256, device_id, file_id
+                HAVING count(*) > 1
+            )
+        """).fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def duplicate_groups(self, limit: int = 500) -> list[dict]:
+        """按 sha256 分组的重复文件组。返回格式：
+        [{"sha256": str, "count": int, "total_size": int, "waste_size": int}, ...]
+
+        `waste_size` = 同组内除第一份外的总大小（硬链接与缺失文件已排除，见 S5 定案）。
+        分组查询走 `ix_documents_sha` 索引，不许全表拉到 Python 侧分组（AGENTS.md 禁全量加载）。
+        """
+        conn = self.engine.thread_connection()
+        rows = conn.execute("""
+            SELECT sha256, count(*) AS count, sum(size_bytes) AS total_size,
+                   sum(size_bytes) - max(size_bytes) AS waste_size
+            FROM documents
+            WHERE sha256 IS NOT NULL
+            GROUP BY sha256
+            HAVING count(*) > 1
+            ORDER BY waste_size DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def duplicate_group_members(self, sha256: str) -> list[dict]:
+        """某一分组内的全部成员。返回每份的路径、大小、硬链接标记、缺失状态。
+
+        硬链接判定：同组内 `device_id + file_id` 相同的两份算硬链接（p7 实测 NTFS 可用）。
+        缺失文件：`missing_since IS NOT NULL`，必须显示但**不计入可回收**。
+        """
+        conn = self.engine.thread_connection()
+        rows = conn.execute(f"""
+            SELECT id, path, size_bytes, device_id, file_id, missing_since,
+                   last_indexed_at
+            FROM documents
+            WHERE sha256 = ?
+            ORDER BY missing_since IS NULL DESC, id
+        """, (sha256,)).fetchall()
+        members = []
+        seen_inodes: dict[tuple[int, int], int] = {}
+        for r in rows:
+            row_dict = dict(r)
+            is_hardlink = False
+            if row_dict["device_id"] is not None and row_dict["file_id"] is not None:
+                inode_key = (row_dict["device_id"], row_dict["file_id"])
+                if inode_key in seen_inodes:
+                    is_hardlink = True
+                else:
+                    seen_inodes[inode_key] = row_dict["id"]
+            row_dict["is_hardlink"] = is_hardlink
+            members.append(row_dict)
+        return members
+
+    def dedup_summary(self) -> dict:
+        """S5 汇总条的唯一出处：重复组数、多余副本数、可回收字节。
+
+        可回收 = 每组内除第一份外的 size 之和，**排除硬链接与缺失文件**。
+        三条独立用例必须全过：普通重复计得出、硬链接不计、missing_since 不为 NULL 的不计。
+        """
+        conn = self.engine.thread_connection()
+        groups = conn.execute("""
+            SELECT sha256, count(*) AS cnt FROM documents
+            WHERE sha256 IS NOT NULL
+            GROUP BY sha256 HAVING count(*) > 1
+        """).fetchall()
+        group_count = len(groups)
+        excess_count = sum(g["cnt"] - 1 for g in groups)
+
+        # 可回收：Python 侧算，遍历每个重复组
+        reclaimable = 0
+        for g in groups:
+            members = self.duplicate_group_members(g["sha256"])
+            kept = False
+            for m in members:
+                if m["missing_since"] is not None or m["is_hardlink"]:
+                    continue
+                if not kept:
+                    kept = True
+                else:
+                    reclaimable += m["size_bytes"]
+
+        return {"group_count": group_count, "excess_count": excess_count,
+                "reclaimable_bytes": reclaimable}
 
     def ids_needing_index(self, limit: int = 5000) -> list[int]:
         """重启/重建后把"没做完的活"重新排进队列用（验收：索引恢复）。
@@ -304,6 +440,22 @@ class DocumentRepository:
                 "UPDATE documents SET ocr_status=?, ocr_pages_done=?, last_ocr_at=?,"
                 " last_error=?, updated_at=? WHERE id=?",
                 (ocr_status, ocr_pages_done, ts, last_error, ts, doc_id))
+
+    def update_sha256(self, doc_id: int, sha256: str) -> None:
+        """判重服务写哈希的唯一入口。服务层不许直接写 SQL（AGENTS.md / ARCHITECTURE 守卫）。"""
+        conn = self.engine.thread_connection()
+        ts = now_ts()
+        with self.engine.transaction(conn, on_error=f"写哈希失败 doc_id={doc_id}"):
+            conn.execute("UPDATE documents SET sha256=?, updated_at=? WHERE id=?",
+                         (sha256, ts, doc_id))
+
+    def list_unhashed(self) -> list[dict]:
+        """取全部未算哈希且磁盘上还在的文档（判重任务用）。返回 id/path/path_key。"""
+        conn = self.engine.thread_connection()
+        rows = conn.execute(
+            "SELECT id, path, path_key FROM documents WHERE sha256 IS NULL AND missing_since IS NULL"
+            " ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
 
     def reset_ocr_tracking(self, doc_id: int) -> None:
         """正文被整本重抽时把 OCR 计数清零 —— OCR 的那些行已经被 `replace_pages` 删掉了。

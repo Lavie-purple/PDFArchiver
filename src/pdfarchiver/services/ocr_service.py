@@ -56,6 +56,12 @@ from pdfarchiver.parsing.pdf import PdfOpenError, PdfReader
 
 log = logging.getLogger("pdfarchiver.ocr.service")
 
+# ISSUES I21：连续 N 页超时就把这份判 failed（熔断器）。
+# 进程隔离故意不做（D-008 串行 + 页级幂等已保证杀进程不丢已入库的页），
+# 但如果整本都是病态页，逐页烧 GPU 时间而不产出就是浪费。
+# 阈值 3 = 给偶发慢页留余量（显卡临时被占），连续 3 页都超时基本说明这份文件有问题。
+CONSECUTIVE_TIMEOUT_LIMIT = 3
+
 
 @dataclass
 class OcrOutcome:
@@ -71,6 +77,7 @@ class OcrOutcome:
     skipped_current: bool = False
     stopped_on_budget: bool = False
     stopped_on_timeout: bool = False
+    stopped_on_circuit_breaker: bool = False  # ISSUES I21：连续超时熔断
     took_ms: int = 0
     last_error: str | None = None
 
@@ -84,6 +91,8 @@ class OcrOutcome:
             out += "｜今日页预算用满，停在半路"
         if self.stopped_on_timeout:
             out += "｜单页耗时超过上限，这份停下"
+        if self.stopped_on_circuit_breaker:
+            out += f"｜连续 {CONSECUTIVE_TIMEOUT_LIMIT} 页超时，熔断器触发"
         return out
 
     @property
@@ -323,6 +332,7 @@ class OcrService:
         if monitor is not None:
             monitor.set_total(len(todo))
         first_error: str | None = None
+        consecutive_timeouts = 0  # ISSUES I21：连续超时计数
         for image in reader.iter_page_images(dpi=self.engine.dpi):
             if image.page_no not in pending:
                 continue
@@ -334,20 +344,35 @@ class OcrService:
             if image.error is not None:
                 outcome.pages_failed += 1
                 first_error = first_error or f"第 {image.page_no} 页出图｜{image.error}"
+                consecutive_timeouts = 0  # 出图失败不算超时，重置计数
             else:
                 page: OcrPage = self.engine.recognize(image.page_no, image.pixels)
                 self.budget.consume()      # 烧掉的 GPU 时间不论成败都已发生，失败页同样计入预算
                 limit = page_timeout_ms(self.engine.provider)
                 if page.error is None and page.took_ms > limit:
                     outcome.pages_failed += 1
-                    self._stop_here(doc_id, outcome, reused,
-                                    f"第 {page.page_no} 页识别耗时 {page.took_ms:.0f}ms，"
-                                    f"超过单页上限 {limit}ms（{self.engine.provider} 实测最大值 ×2 反算）；"
-                                    "这一页不入库，整份停下等下次", timeout=True)
+                    consecutive_timeouts += 1
+                    # ISSUES I21：连续超时熔断 —— 整本都是病态页时及时停下，不继续烧 GPU
+                    if consecutive_timeouts >= CONSECUTIVE_TIMEOUT_LIMIT:
+                        outcome.stopped_on_circuit_breaker = True
+                        self._stop_here(
+                            doc_id, outcome, reused,
+                            f"连续 {consecutive_timeouts} 页识别超时"
+                            f"（上限 {limit}ms/页，{self.engine.provider}），"
+                            f"熔断器触发（阈值 {CONSECUTIVE_TIMEOUT_LIMIT}）；"
+                            "这份文件可能整本都是病态页，停下等下次手动检查",
+                            timeout=True)
+                    else:
+                        self._stop_here(doc_id, outcome, reused,
+                                        f"第 {page.page_no} 页识别耗时 {page.took_ms:.0f}ms，"
+                                        f"超过单页上限 {limit}ms（{self.engine.provider} 实测最大值 ×2 反算）；"
+                                        "这一页不入库，整份停下等下次", timeout=True)
                 elif page.error is not None:
                     outcome.pages_failed += 1
+                    consecutive_timeouts = 0  # 推理错误不算超时，重置计数
                     first_error = first_error or f"第 {page.page_no} 页识别｜{page.error}"
                 else:
+                    consecutive_timeouts = 0  # 成功页重置计数
                     body = normalize_page_text(page.text)
                     outcome.chars_added += len(body)
                     outcome.pages_recognized += 1
@@ -423,11 +448,15 @@ def _status_for(outcome: OcrOutcome, reused: int) -> str:
     - 被预算或单页上限停在半路 = `partial`；一页都来不及跑的写回 `pending`（状态不许前进，
       停在 `partial` 会让"今天什么都没跑"和"跑了一半"两个读数长得一模一样）；
     - 有失败但其余进去了 = `partial`；其余 `done`。
+    - **连续超时熔断 = `failed`**（ISSUES I21）：整本都是病态页，不是"跑了一半"，
+      是"这份文件有问题"，写 failed 才能让界面显示红色而不是黄色。
     **绝不因为"大部分成功"就写 done** —— 写 done 等于对界面宣布"这本书搜得全"。
     """
     nothing_done = not (outcome.pages_recognized or reused or outcome.pages_failed)
     if outcome.stopped_on_budget and nothing_done:
         return OCR_PENDING
+    if outcome.stopped_on_circuit_breaker:
+        return "failed"  # ISSUES I21：熔断器触发 = 整份判失败，不是 partial
     if outcome.pages_recognized == 0 and not reused and outcome.pages_failed:
         return "failed"
     if outcome.stopped_on_budget or outcome.stopped_on_timeout or outcome.pages_failed:

@@ -29,6 +29,19 @@ def data_root(tmp_path: Path) -> Path:
     return tmp_path / "appdata"
 
 
+def settle(qapp, rounds: int = 6) -> None:
+    """让 Qt 真的走完一轮重排。
+
+    一次 `processEvents()` 之后 `sectionSize()` 会留着**改尺寸之前**的读数：注入坏法时
+    窗口已经从 1000px 压到 356px，列宽却仍报 375px，守卫就这么假绿的（实测）。
+
+    放在 conftest 而不是某个测试文件里：界面几何的断言现在有两个模块要量
+    （`test_app_shell.py` 与 `test_ui_tier.py`），"要跑几轮才算稳"这条抄两份就会漂。
+    """
+    for _ in range(rounds):
+        qapp.processEvents()
+
+
 @pytest.fixture
 def ctx(data_root: Path):
     context = bootstrap(data_root)

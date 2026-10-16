@@ -8,18 +8,23 @@
 """
 from __future__ import annotations
 
+import inspect
+import sqlite3
 import threading
 import time
 from typing import Iterator
 
 import pytest
 
+from pdfarchiver.config.settings import DEFAULTS
+from pdfarchiver.db.engine import DEFAULT_BUSY_TIMEOUT_MS
 from pdfarchiver.db.models import Document
 from pdfarchiver.db.repositories.jobs import LIVE_STATES, STATES, TERMINAL_STATES
 from pdfarchiver.fs.identity import identity_key, normalize_path
-from pdfarchiver.jobs.queue import (DEFAULT_MAX_ATTEMPTS, IllegalTransition, JobCancelled,
+from pdfarchiver.jobs.queue import (DEFAULT_MAX_ATTEMPTS, FINISH_WRITE_ATTEMPTS,
+                                    FINISH_WRITE_BACKOFF_SECONDS, IllegalTransition, JobCancelled,
                                     LEGAL_TRANSITIONS, PermanentFailure, PROGRESS_STEP_PAGES,
-                                    WorkQueue, assert_transition, states)
+                                    ProgressMonitor, WorkQueue, assert_transition, states)
 from pdfarchiver.jobs.queue import TERMINAL_STATES as QUEUE_TERMINAL_STATES
 
 
@@ -67,6 +72,32 @@ def test_状态口径只有一套():
         assert targets <= set(STATES), f"{src} 的流转目标里有没定义过的状态"
         if src in TERMINAL_STATES:
             assert not targets, f"终态 {src} 不该还有出路"
+
+
+def test_某类任务该看的那一条_running压过排队压过历史(ctx) -> None:
+    """S5 的进度块只读这一条；选错就等于把「上次跑完的那次」显示成「正在跑的这次」。
+
+    `list()` 回来到 Python 里挑也能挑对，但全量首轮未终结表里挂着 8,000 条索引任务
+    （×10 档 8 万条），界面每 5 秒刷一次进度就每 5 秒做一次全量加载 —— 所以这个选择
+    必须由一条带回 `LIMIT 1` 的查询来做，且它与 `list()` 给的答案必须一致。
+    """
+    assert ctx.jobs.latest_of_kind("dedup") is None, "一条都没排过时不许返回别的种类的任务"
+
+    first = ctx.jobs.enqueue("dedup", doc_id=None)
+    ctx.jobs.succeed(first.id)
+    assert ctx.jobs.latest_of_kind("dedup").id == first.id
+
+    second = ctx.jobs.enqueue("dedup", doc_id=None)
+    ctx.jobs.claim(("dedup",))
+    third = ctx.jobs.enqueue("dedup", doc_id=None, dedupe=False)
+    assert ctx.jobs.latest_of_kind("dedup").id == second.id, "running 的那一条必须压过排队的"
+
+    ctx.jobs.succeed(second.id)
+    assert ctx.jobs.latest_of_kind("dedup").id == third.id, "没有在跑的了，就取最近那一条"
+
+    picked = [j.id for j in ctx.jobs.list(STATES) if j.kind == "dedup"]
+    assert set(picked) <= {first.id, second.id, third.id}
+    assert ctx.jobs.latest_of_kind("dedup").id == max(picked), "与 list() 手挑的结果不一致"
 
 
 def test_队列与仓储的终态是同一个定义():
@@ -303,15 +334,20 @@ def test_处理函数自己判停时落cancelled并留下原因(ctx, make_queue,
 
     row = ctx.jobs.get(int(job.id))
     assert row.state == "cancelled", row.state
-    assert row.last_error == "跑到第 2 页之前今天的页预算用满"
+    assert row.last_error == "跑到第 2 页之前今天的页预算用满", "原因没进库，界面就答不出为什么停"
     assert (row.done, row.total) == (1, 5), "真实跑过的那一页进度不许被抹掉，也不许补齐成 5"
     assert q.recover() == {"requeued": 0, "failed": 0}, \
         "判停是终态：下次启动自动重跑一份被明确停下的文档，就绕过了「只跑显式点名的」"
 
 
-def test_退出闸门已拉下时处理函数判停仍按打断处理(ctx, make_queue, doc_ids):
-    """两种停同时发生时**闸门优先**：退出时没人知道它做到哪儿，那行是给 `recover()` 的输入，
-    把它写成 cancelled 就等于宣布"这份不用再看了"。"""
+def test_退出闸门与用户取消同时按下时落cancelled(ctx, make_queue, doc_ids):
+    """两种停同时发生时**取消赢**：`request_cancel` 已经把行写成 `cancelled`，
+    退出分支不许把它改回 running 去等回收 —— 用户按了取消的文件不该下次开机再跑一遍。
+
+    与下一条的区别是这里**真的按了取消**；只拉闸门不取消的那条见
+    `test_退出闸门已拉下时处理函数判停仍按打断处理`。两条同名时前一条永远不会被执行，
+    「同时按下」这个分支就只剩注释在守着（见 tests/guards/test_test_hygiene.py）。
+    """
     entered = threading.Event()
 
     def stops_after_shutdown(job, monitor):
@@ -329,28 +365,6 @@ def test_退出闸门已拉下时处理函数判停仍按打断处理(ctx, make_
     assert q.wait_until_idle(timeout=5.0)
     assert ctx.jobs.get(int(job.id)).state == "cancelled", \
         "用户已经按了取消，这行就该是 cancelled，退出分支不许把它改回去"      # type: ignore[union-attr]
-
-
-def test_处理函数自己判停时落cancelled并留下原因(ctx, make_queue, doc_ids):
-    """阶段 5 新增的第三种停：OCR 的每日页预算跑满、单页耗时超过上限 —— 与用户和退出都无关。
-    留在 `running` 会让界面一直显示"正在跑"而 worker 早已去领下一条，
-    `wait_until_idle()` 也永远等不到空闲（这条就是这么发现的）。"""
-
-    def stops_itself(job, monitor):
-        monitor.set_total(5)
-        monitor.advance()
-        raise JobCancelled("跑到第 2 页之前今天的页预算用满")
-
-    q = make_queue({"index": stops_itself}, threads=1)
-    job = ctx.jobs.enqueue("index", doc_ids[0])
-    assert _start_and_wait(q), "处理函数判停后队列等不到空闲 —— 停被当成了还在跑"
-
-    row = ctx.jobs.get(int(job.id))
-    assert row.state == "cancelled", row.state
-    assert row.last_error == "跑到第 2 页之前今天的页预算用满", "原因没进库，界面就答不出为什么停"
-    assert (row.done, row.total) == (1, 5), "真实跑过的那一页不许被抹掉，也不许补齐成 5"
-    assert q.recover() == {"requeued": 0, "failed": 0}, \
-        "判停是终态：下次启动自动重跑一份被明确停下的文档，就绕过了「只跑显式点名的」"
 
 
 def test_退出闸门已拉下时处理函数判停仍按打断处理(ctx, make_queue, doc_ids):
@@ -476,6 +490,222 @@ def test_任务行被人删掉时worker继续跑下一条(ctx, make_queue, doc_i
     assert q.wait_until_idle(timeout=10.0)
     assert ran == ["first", "second"]
     assert ctx.jobs.get(int(second.id)).state == "done"          # type: ignore[union-attr]
+    assert q.thread_count == 1
+
+
+# —— 收尾写失败：不许悄悄把任务留在 running（**ISSUES I46** 乙）————————————————
+
+def _flaky_succeed(jobs, *, fail_first: int, calls: list[int], monkeypatch) -> None:
+    """把「落 done」那次 UPDATE 的前 `fail_first` 次换成 `database is locked`，之后放通。
+
+    只拦 `succeed` 一个方法：I46 现场卡住的 13 份全是处理函数正常跑完、只差收尾那一行
+    UPDATE 的，拦在别处就验不到同一条路径。`fail_first=0` 退化成纯计数（用来断言
+    "根本没走到写库那一步"）。断言只数**被调几次 + 库里的行**，与文件开头那条口径一致。
+    """
+    real = jobs.succeed
+
+    def flaky(job_id: int) -> None:
+        calls.append(int(job_id))
+        if len(calls) <= fail_first:
+            raise sqlite3.OperationalError("database is locked")
+        real(job_id)
+
+    monkeypatch.setattr(jobs, "succeed", flaky)
+
+
+def test_收尾重试预算与退避表和忙等时长自洽():
+    """三条都是「改一个常量就会把收尾写变成静默卡死」的口径，不是风格检查。
+
+    ① 预算至少 2：等于 1 就没有「就地重试」了，瞬时锁只能等下一次迭代的重放。
+    ② 退避表比预算短会在 `except` 里再抛 `IndexError` —— 那一次失败既不重试也不重放，
+       任务行正好停在 `running`，就是这个改动要消灭的那个 bug 本身。
+    ③ 每条尝试自己先吃满 `busy_timeout`，最坏耗时是可算出来的：按 [约定] 上限 30s
+       （一次收尾拖住 worker 半分钟已经够久，再长就该改小重试次数而不是改大本断言）。
+    """
+    assert FINISH_WRITE_ATTEMPTS >= 2, (
+        f"收尾重试预算={FINISH_WRITE_ATTEMPTS}：等于 1 就是「一次锁就放弃、全靠重放」，"
+        "而重放要等 worker 走到下一次迭代 —— 瞬时锁的正解是就地立刻再写一次")
+    assert len(FINISH_WRITE_BACKOFF_SECONDS) >= FINISH_WRITE_ATTEMPTS - 1, (
+        f"重试 {FINISH_WRITE_ATTEMPTS} 次要睡 {FINISH_WRITE_ATTEMPTS - 1} 个退避间隔，"
+        f"表里只有 {len(FINISH_WRITE_BACKOFF_SECONDS)} 个")
+    worst = FINISH_WRITE_ATTEMPTS * DEFAULT_BUSY_TIMEOUT_MS / 1000 + sum(FINISH_WRITE_BACKOFF_SECONDS)
+    assert worst <= 30.0, f"[约定] 单条收尾最坏 {worst:.0f}s > 30s（3×5s 忙等 + 1+3s 退避）"
+
+
+def test_worker线程数默认值两处同口径():
+    """**I46** 甲：SQLite 只有单一写者，写密集的 index 任务并行 = 撞锁。默认降到 1 之后，
+    「默认值」有了两个写法（`WorkQueue` 的 `threads=` 形参默认、`DEFAULTS["worker_threads"]`），
+    只改一处就会出现「界面报 1 个 worker、直接构造队列时开 2 个」的第二个口径。
+
+    用户仍可在 settings.json 里覆盖成 2 —— 这条守的是默认值，不是禁掉这个能力。
+    """
+    default_threads = inspect.signature(WorkQueue.__init__).parameters["threads"].default
+    assert default_threads == int(DEFAULTS["worker_threads"]) == 1, (
+        f"`WorkQueue(threads=)`={default_threads}、`DEFAULTS`={DEFAULTS['worker_threads']}，"
+        "两者必须同为 1（见 ISSUES I46 甲）")
+
+
+def test_收尾写瞬时失败重试后仍落done(ctx, make_queue, doc_ids, monkeypatch):
+    """`database is locked` 在写密集任务里是常态（I46 现场 27 次）：一次瞬时锁
+    就把这一行判死留在 `running`，界面显示"正在跑"而 worker 早已去领下一条。"""
+    calls: list[int] = []
+    _flaky_succeed(ctx.jobs, fail_first=1, calls=calls, monkeypatch=monkeypatch)
+
+    q = make_queue({"index": lambda job, monitor: None}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    assert _start_and_wait(q, timeout=20.0), "收尾写失败一次就把任务永久留在了 running"
+    assert calls == [int(job.id)] * 2, "没重试 —— 一次瞬时锁就放弃，或重试了不止一次"
+    assert ctx.jobs.get(int(job.id)).state == "done"       # type: ignore[union-attr]
+    assert q.thread_count == 1 and q.live_count() == 0, "worker 被收尾写的异常带走了"
+
+
+def test_收尾写连试失败会在同一进程里重放到终态(ctx, make_queue, doc_ids, monkeypatch):
+    """重试预算烧完不等于结束：I46 的 13 份就是这么卡住的 —— 兜底 `except` 把异常吞掉，
+    行停在 `running`，而 `recover()` 只在启动时跑一次，本进程再无回收路径，
+    排空判定 `queued + running` **永不归零**。"""
+    calls: list[int] = []
+    _flaky_succeed(ctx.jobs, fail_first=FINISH_WRITE_ATTEMPTS, calls=calls, monkeypatch=monkeypatch)
+
+    q = make_queue({"index": lambda job, monitor: None}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    assert _start_and_wait(q, timeout=25.0), (
+        f"收尾写试满 {FINISH_WRITE_ATTEMPTS} 次后这一行永远停在 running —— 就是 I46 的机制")
+    assert len(calls) == FINISH_WRITE_ATTEMPTS + 1, f"重放没发生：一共只写了 {len(calls)} 次"
+    assert ctx.jobs.get(int(job.id)).state == "done"       # type: ignore[union-attr]
+    assert q._pending_finals == [] and q.thread_count == 1, "重放成功后不许还挂在待重放列表里"
+
+
+def _gate_locked_succeed(jobs, *, calls: list[int], gate: threading.Event, monkeypatch) -> None:
+    """收尾写在 `gate` 拉起前一律撞 `database is locked`，拉起后放通。
+
+    放行条件用队列**自己的退出闸门**，而不是测试里再数一次：那样"重放会不会成功"是由
+    `_stop` 因果决定的，不靠测试和 worker 抢时间 —— 慢机器上抢时间的写法会假红。
+    """
+    real = jobs.succeed
+
+    def flaky(job_id: int) -> None:
+        calls.append(int(job_id))
+        if not gate.is_set():
+            raise sqlite3.OperationalError("database is locked")
+        real(job_id)
+
+    monkeypatch.setattr(jobs, "succeed", flaky)
+
+
+def test_线程退出前把等重放的收尾落库(ctx, make_queue, doc_ids, monkeypatch):
+    """真语料那 13 份正是「跑完最后一条、正好关窗口」时撞上的：重放若只做在下一次迭代开头，
+    进程就没有下一次迭代了。
+
+    排布：A 的收尾写烧光重试预算挂进重放队列 → worker 去领 B 并阻塞在退出闸门上 →
+    先放开写库、再拉闸门 → B 返回后 worker 没有下一次迭代了，只有 `finally` 里那次重放
+    能把 A 落成 done。同时钉住模块说明第 3 条与第 5 条**没被合并**：B 是退出打断，故意留在
+    `running` 等下次启动回收；A 是写失败，必须在本进程内落终态。
+    """
+    calls: list[int] = []
+    gate = threading.Event()
+    _gate_locked_succeed(ctx.jobs, calls=calls, gate=gate, monkeypatch=monkeypatch)
+
+    def blocked(job, monitor):
+        while not monitor.cancelled():
+            time.sleep(0.01)
+
+    q = make_queue({"index": lambda job, monitor: None, "scan": blocked}, threads=1)
+    job_a = int(ctx.jobs.enqueue("index", doc_ids[0]).id)      # A 立刻跑完，只差收尾那一行
+    job_b = int(ctx.jobs.enqueue("scan", doc_ids[1]).id)       # B 阻塞在闸门上，占住 worker
+    q.start()
+    # 等到 worker 走进 B 的处理函数：领取发生在重放之后，而 `_run_one(B)` 会一直阻塞到闸门
+    # 拉起，所以这一刻 A 必定已烧光预算、稳稳挂在重放队列里（不是抢时间的观测）。
+    deadline = time.monotonic() + 20.0
+    while ctx.jobs.get(job_b).state != "running":
+        assert time.monotonic() < deadline, f"worker 没领走 B（写库一共被调 {len(calls)} 次）"
+        time.sleep(0.05)
+    assert len(q._pending_finals) == 1, "A 的收尾没挂进重放队列"
+    assert ctx.jobs.get(job_a).state == "running", "写失败的任务被顺手改成了别的状态"
+
+    gate.set()        # 必须先放开写库、再拉退出闸门：反过来的话 `finally` 那次重放还会撞锁
+    assert q.stop(timeout=25.0) is True, "worker 没退出：收尾重放把自己关在了循环里"
+    assert ctx.jobs.get(job_a).state == "done", "退出前的那次重放没落库，A 会卡在 running"
+    assert calls.count(job_a) >= FINISH_WRITE_ATTEMPTS + 1, "重放压根没发生"
+    assert q._pending_finals == [] and q.thread_count == 0
+    assert ctx.jobs.get(job_b).state == "running", "退出打断被重放机制顺手改成了终态"
+    assert q.recover() == {"requeued": 1, "failed": 0}, "只有 B 该被回收：A 已经是 done"
+
+
+def test_收尾流转不合法时不重试也不重放(ctx, make_queue, doc_ids, monkeypatch):
+    """那一行已经不在 `running` 了（被人改成 `paused`）：`running → done` 被表挡的是**语义**，
+    重放只会一直撞同一面墙。
+
+    判据是**读了几次当前状态**：每一次收尾尝试（含重放）都必须先 `get` 一次，所以
+    「只撞一次」= 2 次读（`_finish_success` 一次 + 记下真实状态供日志一次），
+    「进了重试预算」≥ 3 次。按尝试次数而不是按 `_pending_finals` 判，是因为重放侧对
+    非法流转本来就该停手 —— 注入第 4 条坏法时那一度被清空，看着像没事。
+
+    同步点用「worker 回到循环顶部再次领取」而不是死等：那一刻 `_run_one` 必定已经返回，
+    收尾是停手还是进了重试预算都已是既成事实（绿的时候 0.1s，坏法下才付重试睡眠的钱）。
+    本条**不能**用 `wait_until_idle` 当同步点：那一行是 `paused`，而排空判定只看
+    queued/running —— 拿它当"跑完了"的信号会在收尾还在睡退避时就开始断言（实测被
+    注入第 4 条坏法骗过一轮）。
+    """
+    calls: list[int] = []
+    _flaky_succeed(ctx.jobs, fail_first=0, calls=calls, monkeypatch=monkeypatch)
+    reads: dict[int, int] = {}
+    real_get = ctx.jobs.get
+
+    def counted_get(job_id: int):
+        reads[int(job_id)] = reads.get(int(job_id), 0) + 1
+        return real_get(job_id)
+
+    claims: list[int] = []
+    real_claim = ctx.jobs.claim
+
+    def counted_claim(kinds):
+        claims.append(1)
+        return real_claim(kinds)
+
+    monkeypatch.setattr(ctx.jobs, "get", counted_get)
+    monkeypatch.setattr(ctx.jobs, "claim", counted_claim)
+
+    def hijacked(job, monitor):
+        conn = ctx.engine.thread_connection()
+        conn.execute("UPDATE processing_jobs SET state='paused' WHERE id=?", (int(job.id),))
+        conn.commit()
+
+    q = make_queue({"index": hijacked}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    q.start()
+    deadline = time.monotonic() + 20.0
+    while len(claims) < 2:
+        assert time.monotonic() < deadline, f"worker 没回到循环顶部（只领到 {len(claims)} 次）"
+        time.sleep(0.02)
+
+    assert reads.get(int(job.id), 0) <= 2, (
+        f"非法流转被当成瞬时故障重试了：当前状态被读了 {reads.get(int(job.id))} 次"
+        "（合法路径只读 2 次），撞墙的记录每次迭代还会再撞一遍")
+    assert calls == [], "非法流转不该走到写库那一步"
+    assert ctx.jobs.get(int(job.id)).state == "paused"     # type: ignore[union-attr]
+    assert q._pending_finals == [], "撞墙的记录不许挂进重放队列（挂进去就每次迭代白撞一遍）"
+    assert q.thread_count == 1, "worker 被非法流转带走了"
+
+
+def test_攒着的进度写不进去也不许挡住收尾(ctx, make_queue, doc_ids, monkeypatch):
+    """`flush()` 在 `_run_one` 的 `finally` 里：它一抛就把整个 `_run_one` 顶成异常，
+    收尾那行**根本没机会执行** —— `_worker_loop` 的兜底 `except` 把这件事变成一条日志，
+    行留在 `running`。和 `_write_final` 是同一个坏法的两个入口（进度停在 92% 是观感问题，
+    收尾没落库才是「永远留在 running」），所以按 AGENTS.md「同类问题一次声明规则」一起钉。
+    """
+    calls: list[int] = []
+    _flaky_succeed(ctx.jobs, fail_first=0, calls=calls, monkeypatch=monkeypatch)
+
+    def flush_boom(self) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ProgressMonitor, "flush", flush_boom)
+    q = make_queue({"index": lambda job, monitor: None}, threads=1)
+    job = ctx.jobs.enqueue("index", doc_ids[0])
+    assert _start_and_wait(q, timeout=10.0), \
+        "flush 抛异常把 `_run_one` 顶了出去，收尾没执行，这一行留在 running"
+    assert calls == [int(job.id)], "进度写失败之后收尾根本没跑"
+    assert ctx.jobs.get(int(job.id)).state == "done"       # type: ignore[union-attr]
     assert q.thread_count == 1
 
 

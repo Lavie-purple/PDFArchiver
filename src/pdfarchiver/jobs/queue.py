@@ -4,7 +4,7 @@
 分开的理由写在仓库文件里：状态机必须能在没有线程的情况下被单测跑完，
 否则"两个 worker 抢到同一个任务"这种竞态只能靠运气复现。
 
-四条写死在这里的规矩：
+五条写死在这里的规矩：
 1. **一个 worker 线程一条连接**。仓储一律走 `engine.thread_connection()`（线程本地），
    所以线程退出前必须 `close_thread_connection()`，否则连接跟着死掉的线程留在那儿。
 2. **状态只能按 `LEGAL_TRANSITIONS` 走**。每次写状态前先从库里读回**当前**状态再查表 ——
@@ -19,6 +19,13 @@
 4. **进度按工作量回写，且必须节流**。全量索引要跑 200 万页（docs/VERIFICATION 语料实测），
    每页一次 UPDATE 就是把磁盘带宽花在没人看的数字上；按 `PROGRESS_STEP_PAGES` 攒着写，
    结束时补一次真值。百分比由仓储里的 `done/total` 算，不由这里传（AGENTS.md：不许模拟进度）。
+5. **收尾写要么落库，要么进重放队列，不许留在 `running`**。瞬时库锁（`database is locked`）
+   在写密集任务里是常态：`I46` 现场 27 次「收尾流程出错」被兜底 `except` 吞掉，任务行停在
+   `running` 而本进程再无回收路径（`recover()` 只在启动时跑一次），排空判定 `queued + running`
+   永不归零，真语料最后 13 份因此卡住。所以收尾写带重试预算（`FINISH_WRITE_ATTEMPTS`），
+   连试不成就把这一条挂起来，由同一个 worker 下次迭代和退出前各重放一次。
+   注意第 3 条说的「退出打断留在 `running`」是**故意**的（那是 `recover()` 的输入），
+   与本条说的「写失败留在 `running`」不是同一件事，别合并处理。
 """
 from __future__ import annotations
 
@@ -39,6 +46,13 @@ log = logging.getLogger("pdfarchiver.jobs")
 DEFAULT_MAX_ATTEMPTS = 3
 PROGRESS_STEP_PAGES = 64   # p2 实测正文提取 ≈147.9 页/秒 → 约 0.43s 回写一次；界面 0.5s 刷新，再密也没人看
 IDLE_POLL_SECONDS = 0.05   # wait_until_idle 的轮询步长；只影响等待精度，不参与任务状态判定
+# [约定] **收尾写**（落 done / 回 queued / 落 failed）瞬时失败的重试预算。**ISSUES I46** 乙。
+# 这不是「多试几次总会对」的安慰数：每次尝试自己已经吃满 `busy_timeout`（默认 5,000ms，
+# 与 `db/engine.py` 的连接工厂同源），三次加退避 1s、3s 的最坏等待 ≈ 3×5+4 = **19s**，
+# 短到不至于让整条队列看不动，长到能吃掉一次大写事务的锁窗口。
+# 三次全失败也**不许把任务留在 `running` 没人认领** —— 挂进重放队列，同一个进程里还会再试。
+FINISH_WRITE_ATTEMPTS = 3
+FINISH_WRITE_BACKOFF_SECONDS = (1.0, 3.0)
 TERMINAL_STATES = frozenset(TERMINAL_STATES)  # 定义在仓储层，与 SQL 里的"终结"同源
 
 LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -131,7 +145,7 @@ class WorkQueue:
     队列状态就是数据库状态，进程被杀后重启才知道上次到底排了什么（验收：重启后能继续扫描）。"""
 
     def __init__(self, jobs: JobRepository, handlers: dict[str, Handler], *,
-                 engine: Engine, threads: int = 2,
+                 engine: Engine, threads: int = 1,
                  max_attempts: int = DEFAULT_MAX_ATTEMPTS,
                  poll_seconds: float = 0.2) -> None:
         if not handlers:
@@ -151,6 +165,11 @@ class WorkQueue:
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._threads: list[threading.Thread] = []
+        # 收尾写连试三次仍失败的任务在这里等重放（**ISSUES I46** 乙）。`threads` 的本机默认
+        # 与 `config/settings.py::DEFAULTS["worker_threads"]` 同为 1，是同一个口径的两个写法，
+        # 所以两处任一被改回去都要有测试拦住（见 tests/integration/test_job_queue.py）。
+        self._pending_finals: list[tuple[Job, str, str]] = []
+        self._finals_lock = threading.Lock()
 
     # —— 生命周期 ————————————————————————————————————————————
 
@@ -243,6 +262,7 @@ class WorkQueue:
                 if self._paused.is_set():
                     time.sleep(self._poll)
                     continue
+                self._replay_finals()      # 上次写不进去的收尾，库一旦可写就立刻补落
                 try:
                     job = self._jobs.claim(self._kinds)
                 except Exception:  # 领取失败（锁库、表被外部改动）不许弄死线程：留原文，退避后再试
@@ -257,6 +277,9 @@ class WorkQueue:
                 except Exception:  # 收尾环节自己出错（非法流转、库锁）也不许带走线程
                     log.exception("任务 %s(%s) 收尾流程出错，worker 继续处理下一条", job.id, job.kind)
         finally:
+            # 线程要退了，先把手里等重放的收尾最后试一次 —— 否则这些行会一路留在
+            # `running`，只能等下次启动的 `recover()`，而那段时间里界面显示"正在跑"。
+            self._replay_finals()
             self._engine.close_thread_connection()
 
     def _run_one(self, job: Job) -> None:
@@ -275,7 +298,13 @@ class WorkQueue:
         except Exception as exc:  # 一个坏文件不许把 worker 拖死，但原文必须留下（AGENTS.md 排障条）
             outcome = f"error:{type(exc).__name__}: {exc}"
         finally:
-            monitor.flush()
+            # 进度 flush 失败不能挡住收尾：进度停在 92% 是观感问题，收尾没落库才是
+            # 「这一行永远留在 running」的问题（见 `_write_final`）。原文照样进日志。
+            try:
+                monitor.flush()
+            except Exception:
+                log.exception("任务 %s(%s) 收尾前把攒着的进度写出去失败，"
+                              "进度可能停在最后一个整档，但照常落终态", job.id, job.kind)
 
         if outcome == "done" and self._stop.is_set():
             # 处理函数没抛 JobCancelled 就正常返回，但退出闸门已经拉下 —— 不能信"它做完了"：
@@ -283,6 +312,10 @@ class WorkQueue:
             # 永远标成"已处理"，而它只跑了一半。宁可下次启动重跑一遍（索引是可重入的）。
             outcome = "cancelled"
 
+        self._write_final(job, outcome, stop_reason)
+
+    def _dispatch_final(self, job: Job, outcome: str, stop_reason: str) -> None:
+        """把一次收尾按**结果**派给对应的落库动作 —— 只在 `_write_final` / `_replay_finals` 里被调用。"""
         if outcome == "done":
             self._finish_success(job)
         elif outcome == "cancelled":
@@ -291,6 +324,60 @@ class WorkQueue:
             self._finish_permanent(job, outcome[len("permanent:"):])
         else:
             self._record_failure(job, outcome[len("error:"):])
+
+    def _write_final(self, job: Job, outcome: str, stop_reason: str) -> None:
+        """收尾写的重试预算与「写不进去时去哪」—— **不许悄悄把任务留在 `running`**。
+
+        `I46` 的现场是：27 次「收尾流程出错」全被 `_worker_loop` 的兜底 `except` 吞掉，任务行
+        停在 `running` 而本进程再无回收路径（`recover()` 只在启动时跑一次），于是排空判定
+        `pending = queued + running` **永不归零**，真语料最后 13 份就是这么卡住的。
+        现在：库锁一类的瞬时失败按 `FINISH_WRITE_ATTEMPTS` 重试；仍写不进就挂进重放队列，
+        由同一个 worker 在下一次迭代开头（以及线程退出前）再落一次。
+        `IllegalTransition` **不在重试范围内**：它意味着那一行已经不在 `running` 了
+        （`running → done/queued/failed/cancelled` 四条都合法，只有别的状态才会被表挡住），
+        重放只会一直撞同一面墙，所以留下原文和当时的真实状态就停手。
+        """
+        for attempt in range(FINISH_WRITE_ATTEMPTS):
+            try:
+                self._dispatch_final(job, outcome, stop_reason)
+                return
+            except IllegalTransition:
+                current = self._jobs.get(int(job.id or 0))
+                log.exception("任务 %s(%s) 的收尾流转不合法，那一行现在的状态是 %s —— "
+                              "不重试也不重放（它没留在 running）",
+                              job.id, job.kind, current.state if current else "（已不在表里）")
+                return
+            except Exception:
+                if attempt + 1 < FINISH_WRITE_ATTEMPTS:
+                    delay = FINISH_WRITE_BACKOFF_SECONDS[attempt]
+                    log.warning("任务 %s(%s) 收尾写第 %d/%d 次失败，%.1fs 后重试",
+                                job.id, job.kind, attempt + 1, FINISH_WRITE_ATTEMPTS, delay)
+                    time.sleep(delay)
+                else:
+                    log.exception("任务 %s(%s) 收尾写连试 %d 次都没成，挂进重放队列"
+                                  "（库一旦可写就落终态，不用等下次启动）",
+                                  job.id, job.kind, FINISH_WRITE_ATTEMPTS)
+                    with self._finals_lock:
+                        self._pending_finals.append((job, outcome, stop_reason))
+
+    def _replay_finals(self) -> None:
+        """把之前写不进去的收尾重新落库。空队列时只是一次取列表，不额外查库。"""
+        with self._finals_lock:
+            pending = self._pending_finals
+            self._pending_finals = []
+        for job, outcome, stop_reason in pending:
+            try:
+                self._dispatch_final(job, outcome, stop_reason)
+                log.info("任务 %s(%s) 的收尾在重放时落库成功", job.id, job.kind)
+            except IllegalTransition:
+                current = self._jobs.get(int(job.id or 0))
+                log.error("任务 %s(%s) 重放时流转不合法，现在的状态是 %s，停手",
+                          job.id, job.kind, current.state if current else "（已不在表里）")
+            except Exception:
+                log.exception("任务 %s(%s) 收尾重放仍失败，本进程内下一轮还会再试",
+                              job.id, job.kind)
+                with self._finals_lock:
+                    self._pending_finals.append((job, outcome, stop_reason))
 
     def _finish_permanent(self, job: Job, error: str) -> None:
         """直接落 failed，不进 `retry_later` —— 重试次数是留给瞬时故障的预算。"""

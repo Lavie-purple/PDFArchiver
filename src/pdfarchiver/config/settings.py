@@ -12,11 +12,16 @@ from typing import Any
 
 # 阶段 1 只有这几项是真被代码使用的；不加"将来可能用"的配置项。
 DEFAULTS: dict[str, Any] = {
-    "worker_threads": 2,          # docs/ARCHITECTURE 三：默认 2
+    "worker_threads": 1,          # **ISSUES I46** 甲：SQLite 只有单一写者，写密集的 index 任务
+                                  # 开两个 worker 没有并行收益，只有互相抢写锁（实测 27 次
+                                  # 「收尾流程出错」全由 `database is locked` 引起）。
+                                  # 想调回 2 仍然可以（settings.json 覆盖），不是禁掉这个能力。
     "gpu_tasks_concurrent": 1,    # D-008：同一时刻最多一个 GPU 任务（p5 显存实测逼出来的）
     "busy_timeout_ms": 5000,      # 与 db/engine.py 的连接工厂同源
     "log_keep_files": 5,          # diagnostics/logs.py 的轮转份数
     "archive_default_template": "{category}/{year}/{name}.pdf",  # 阶段 4 才执行，先占口径
+    "archive_target_root": "",    # 阶段 4：归档目标根目录。空字符串 = 未配置，界面必须显式设置后才能执行
+                                    # （D-019：不许默认猜一个路径，避免误操作）
     "scan_poll_seconds": 5,       # 阶段 2：巡检器多久取一次文件事件（`services/patrol.py`）
     "scan_verify_minutes": 30,    # 阶段 2：即使一条事件都没有，最迟多久保证走一遍全量对账（P4：根被改名是 0 事件）
     "ocr_daily_page_budget": 6000,  # 阶段 5：每日 OCR 页预算，跑满即停。6,000 = 8 小时 ÷ 实测最慢

@@ -266,7 +266,7 @@ def main() -> int:
                               if ln.startswith("E   ") or "AssertionError" in ln
                               or "ArchitectureError" in ln or "PytestUnknownMark" in ln), "")
                 results.append((case, caught, failed, errored, passed, first.strip()[:110]))
-                print(f"  {'RED  ' if caught else 'GREEN'}  I{case.inject} {case.坏法}")
+                print(f"  {'RED  ' if caught else 'GREEN'}  p10 #{case.inject} {case.坏法}")
                 print("         -> " + " + ".join(t.split("::")[-1] for t in case.node.split())
                       + f"｜failed={failed} error={errored} passed={passed}")
                 if first:
@@ -277,7 +277,7 @@ def main() -> int:
         missed = [r for r in results if not r[1]]
         print(f"\n抓到 {len(results) - len(missed)}/{len(results)} 条坏法")
         for case, _, _, _, _, _ in missed:
-            print(f"  未抓到：I{case.inject} {case.坏法} —— 对应断言是摆设，按 AGENTS.md 必须删或重写")
+            print(f"  未抓到：p10 #{case.inject} {case.坏法} —— 对应断言是摆设，按 AGENTS.md 必须删或重写")
         print("VERDICT: " + ("ALL GREEN" if not missed else "RED"))
         return 0 if not missed else 1
     finally:

@@ -51,6 +51,104 @@ class CatalogRepository:
     def count_categories(self) -> int:
         return self.engine.thread_connection().execute("SELECT count(*) FROM categories").fetchone()[0]
 
+    def rename_category(self, category_id: int, new_name: str) -> Category:
+        """改名并更新所有子分类的 name_path。"""
+        new_name = new_name.strip()
+        if not new_name:
+            raise DatabaseError("分类名不能为空", ValueError("空分类名"))
+        conn = self.engine.thread_connection()
+        old = conn.execute("SELECT id,name,parent_id,name_path,note,created_at FROM categories WHERE id=?",
+                           (category_id,)).fetchone()
+        if old is None:
+            raise DatabaseError(f"分类不存在：{category_id}", ValueError("外键前置检查"))
+        parent_path = old["name_path"].rsplit("/", 1)[0] if "/" in old["name_path"] else ""
+        new_path = f"{parent_path}/{new_name}" if parent_path else new_name
+        ts = now_ts()
+        with self.engine.transaction(conn, on_error=f"改名分类 {category_id} 失败"):
+            conn.execute("UPDATE categories SET name=?, name_path=?, updated_at=? WHERE id=?",
+                         (new_name, new_path, ts, category_id))
+            # 更新所有子分类的 name_path
+            children = conn.execute(
+                "SELECT id, name_path FROM categories WHERE name_path LIKE ? || '/%'",
+                (old["name_path"],)).fetchall()
+            for child in children:
+                new_child_path = new_path + child["name_path"][len(old["name_path"]):]
+                conn.execute("UPDATE categories SET name_path=?, updated_at=? WHERE id=?",
+                             (new_child_path, ts, child["id"]))
+        return self._get_category(category_id)
+
+    def reparent_category(self, category_id: int, new_parent_id: int | None) -> Category:
+        """移动到新的父分类下，更新 name_path 和所有子分类的 name_path。"""
+        conn = self.engine.thread_connection()
+        old = conn.execute("SELECT id,name,name_path FROM categories WHERE id=?",
+                           (category_id,)).fetchone()
+        if old is None:
+            raise DatabaseError(f"分类不存在：{category_id}", ValueError("外键前置检查"))
+        if new_parent_id is not None:
+            parent = conn.execute("SELECT name_path FROM categories WHERE id=?",
+                                  (new_parent_id,)).fetchone()
+            if parent is None:
+                raise DatabaseError(f"父分类不存在：{new_parent_id}", ValueError("外键前置检查"))
+            new_parent_path = parent["name_path"]
+        else:
+            new_parent_path = ""
+        new_path = f"{new_parent_path}/{old['name']}" if new_parent_path else old["name"]
+        ts = now_ts()
+        with self.engine.transaction(conn, on_error=f"移动分类 {category_id} 失败"):
+            conn.execute("UPDATE categories SET parent_id=?, name_path=?, updated_at=? WHERE id=?",
+                         (new_parent_id, new_path, ts, category_id))
+            # 更新所有子分类的 name_path
+            children = conn.execute(
+                "SELECT id, name_path FROM categories WHERE name_path LIKE ? || '/%'",
+                (old["name_path"],)).fetchall()
+            for child in children:
+                new_child_path = new_path + child["name_path"][len(old["name_path"]):]
+                conn.execute("UPDATE categories SET name_path=?, updated_at=? WHERE id=?",
+                             (new_child_path, ts, child["id"]))
+        return self._get_category(category_id)
+
+    def delete_category(self, category_id: int) -> None:
+        """删除分类及其所有子分类，同时删除 document_categories 关联。"""
+        conn = self.engine.thread_connection()
+        cat = conn.execute("SELECT name_path FROM categories WHERE id=?", (category_id,)).fetchone()
+        if cat is None:
+            raise DatabaseError(f"分类不存在：{category_id}", ValueError("外键前置检查"))
+        with self.engine.transaction(conn, on_error=f"删除分类 {category_id} 失败"):
+            # 删除所有子分类的关联
+            conn.execute(
+                "DELETE FROM document_categories WHERE category_id IN"
+                " (SELECT id FROM categories WHERE name_path LIKE ? || '%')",
+                (cat["name_path"],))
+            # 删除所有子分类
+            conn.execute("DELETE FROM categories WHERE name_path LIKE ? || '%'", (cat["name_path"],))
+
+    def merge_categories(self, source_id: int, target_id: int) -> None:
+        """将 source 的所有文档关联移到 target，然后删除 source。"""
+        conn = self.engine.thread_connection()
+        source = conn.execute("SELECT id, name_path FROM categories WHERE id=?", (source_id,)).fetchone()
+        target = conn.execute("SELECT id FROM categories WHERE id=?", (target_id,)).fetchone()
+        if source is None:
+            raise DatabaseError(f"源分类不存在：{source_id}", ValueError("外键前置检查"))
+        if target is None:
+            raise DatabaseError(f"目标分类不存在：{target_id}", ValueError("外键前置检查"))
+        with self.engine.transaction(conn, on_error=f"合并分类 {source_id} -> {target_id} 失败"):
+            # 移动关联（跳过已存在的）
+            conn.execute(
+                "UPDATE OR IGNORE document_categories SET category_id=?"
+                " WHERE category_id=?", (target_id, source_id))
+            # 删除剩余的（已存在于 target 的）
+            conn.execute("DELETE FROM document_categories WHERE category_id=?", (source_id,))
+            # 删除源分类及其子分类
+            conn.execute("DELETE FROM categories WHERE name_path LIKE ? || '%'", (source["name_path"],))
+
+    def _get_category(self, category_id: int) -> Category:
+        row = self.engine.thread_connection().execute(
+            "SELECT id,name,parent_id,name_path,note,created_at,updated_at FROM categories WHERE id=?",
+            (category_id,)).fetchone()
+        if row is None:
+            raise DatabaseError(f"分类不存在：{category_id}", ValueError("查询失败"))
+        return Category(**dict(row))
+
     # ---- 标签 ----
 
     def add_tag(self, name: str, color: str | None = None) -> Tag:
@@ -71,6 +169,41 @@ class CatalogRepository:
 
     def count_tags(self) -> int:
         return self.engine.thread_connection().execute("SELECT count(*) FROM tags").fetchone()[0]
+
+    def rename_tag(self, tag_id: int, new_name: str) -> Tag:
+        new_name = new_name.strip()
+        if not new_name:
+            raise DatabaseError("标签名不能为空", ValueError("空标签名"))
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"改名标签 {tag_id} 失败"):
+            conn.execute("UPDATE tags SET name=? WHERE id=?", (new_name, tag_id))
+        return self._get_tag(tag_id)
+
+    def delete_tag(self, tag_id: int) -> None:
+        """删除标签及其所有 document_tags 关联。"""
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"删除标签 {tag_id} 失败"):
+            conn.execute("DELETE FROM document_tags WHERE tag_id=?", (tag_id,))
+            conn.execute("DELETE FROM tags WHERE id=?", (tag_id,))
+
+    def merge_tags(self, source_id: int, target_id: int) -> None:
+        """将 source 的所有文档关联移到 target，然后删除 source。"""
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"合并标签 {source_id} -> {target_id} 失败"):
+            # 移动关联（跳过已存在的）
+            conn.execute(
+                "UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?",
+                (target_id, source_id))
+            # 删除剩余的（已存在于 target 的）
+            conn.execute("DELETE FROM document_tags WHERE tag_id=?", (source_id,))
+            conn.execute("DELETE FROM tags WHERE id=?", (source_id,))
+
+    def _get_tag(self, tag_id: int) -> Tag:
+        row = self.engine.thread_connection().execute(
+            "SELECT id,name,color,note,created_at FROM tags WHERE id=?", (tag_id,)).fetchone()
+        if row is None:
+            raise DatabaseError(f"标签不存在：{tag_id}", ValueError("查询失败"))
+        return Tag(**dict(row))
 
     # ---- 文档 ↔ 分类 / 标签 ----
 
@@ -118,3 +251,10 @@ class CatalogRepository:
             " FROM categories c JOIN document_categories d ON d.category_id=c.id"
             " WHERE d.doc_id=? ORDER BY c.name_path COLLATE NOCASE", (doc_id,)).fetchall()
         return [Category(**dict(r)) for r in rows]
+
+    def docs_in_category(self, category_id: int, limit: int = 1000) -> list[int]:
+        """返回某分类下的文档 ID 列表。"""
+        rows = self.engine.thread_connection().execute(
+            "SELECT doc_id FROM document_categories WHERE category_id = ?",
+            (category_id,)).fetchall()
+        return [r["doc_id"] for r in rows[:limit]]

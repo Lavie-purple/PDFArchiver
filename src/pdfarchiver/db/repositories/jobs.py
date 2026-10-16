@@ -23,7 +23,7 @@ from pdfarchiver.db.models import Job, now_ts
 # 合法状态与种类在这里定义一处；`jobs/queue.py` 的流转规则 import 它们。
 # 仓储只保证"写进去的是一个合法状态字符串"，不解释业务含义。
 STATES = ("queued", "running", "paused", "done", "failed", "cancelled")
-KINDS = ("scan", "index", "ocr", "vector", "archive")
+KINDS = ("scan", "index", "ocr", "vector", "archive", "dedup")
 
 _JOB_COLS = ("id, kind, doc_id, state, priority, attempts, progress, total, done,"
              " last_error, created_at, started_at, finished_at")
@@ -232,6 +232,26 @@ class JobRepository:
             f"SELECT {_JOB_COLS} FROM processing_jobs WHERE state IN ({marks})"
             " ORDER BY priority, id", states).fetchall()
         return [Job(**dict(r)) for r in rows]
+
+    def latest_of_kind(self, kind: str) -> Job | None:
+        """这一类任务「此刻最该当进度看」的那一条：running → paused → queued → 最近结束的。
+
+        不在界面里用 `list()` 挑：未终结表在全量首轮挂着 8,000 条索引任务（×10 档 8 万条），
+        定时器每 5 秒刷一次进度就每 5 秒做一次全量加载。
+        `state IN (六态)` 看着像没过滤，它是**索引入口**：`ix_jobs_state_kind` 的前导列是
+        `state`，只写 `WHERE kind=?` 会退化成整表扫描。（六态 = LIVE + TERMINAL，
+        两者相加等于全部合法状态由 `test_job_queue.py` 钉着。）
+        """
+        conn = self.engine.thread_connection()
+        states = LIVE_STATES + TERMINAL_STATES
+        marks = ",".join("?" * len(states))
+        row = conn.execute(
+            f"SELECT {_JOB_COLS} FROM processing_jobs"
+            f" WHERE state IN ({marks}) AND kind=?"
+            " ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'paused' THEN 1"
+            " WHEN 'queued' THEN 2 ELSE 3 END, id DESC LIMIT 1",
+            (*states, kind)).fetchone()
+        return Job(**dict(row)) if row else None
 
     def recent_finished(self, limit: int = 10) -> list[Job]:
         conn = self.engine.thread_connection()

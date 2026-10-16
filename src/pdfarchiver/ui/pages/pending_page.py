@@ -13,12 +13,14 @@ class PendingPage(QtWidgets.QWidget):
     def __init__(self, item: NavItem, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         label = QtWidgets.QLabel(
-            f"<b>{item.title}</b>（SPEC {item.spec}）<br><br>"
-            f"本屏尚未实现。阻塞原因：{item.blocked_by}<br><br>"
-            "AGENTS.md 规定线框未经逐屏确认前不写界面代码，所以这里不放任何占位控件。")
+            f"<b>{item.title}</b><br><br>"
+            f"本屏尚未实现。阻塞原因：{item.blocked_by}")
         label.setWordWrap(True)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
         label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setObjectName("muted")
+        label.setStyleSheet("font-size: 14px; padding: 16px;")
         lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(label)
         lay.addStretch(1)

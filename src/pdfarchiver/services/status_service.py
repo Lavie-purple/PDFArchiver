@@ -34,10 +34,29 @@ MAX_ERROR_LINES = 10
 
 
 def format_ts(ts: int | None) -> str:
-    """UTC 秒 → 给人读的时刻。None 一律显示"从未"，不冒充 1970-01-01。"""
+    """UTC 秒 → 给人读的时刻。None 一律显示"从未"，不冒充 1970-01-01。
+
+    **界面时间的唯一出口**（整改计划第 7 条 · 用户勾甲，2026-10-16）：界面上一律 UTC，
+    并且必须带 `Z` —— 不带标注的时刻在用户眼里就是本地时间，本项目为这类账已经付过一次
+    （**D-022**：日志三出口因为"裸本地时间却标 `Z`"注入过一条坏法）。
+    """
     if ts is None:
         return "从未"
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S") + "Z"
+
+
+def format_day(ts: int | None) -> str:
+    """UTC 秒 → 给人读的**日期**（日粒度）。与 `format_ts` 同一个口径、同一个模块。
+
+    存在的全部理由是 **S5 线框自己要求的粒度**：`docs/UI-WIREFRAMES.md` §S5 数据来源表
+    写的是「必须显示"已消失（日期）"」，画的那行也是 `missing_since 2026-09-11（已消失）` ——
+    在路径摘要那种一行的注语里塞时分秒会把注语本身变成噪音。
+    它不是第二个时间口径：同一份 UTC，只是截到日；因此它也只许和 `format_ts` 住在一起，
+    界面自己 `strftime` 拼串由 `test_界面不许自己拼时间串` 钉住。
+    """
+    if ts is None:
+        return "从未"
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
 
 
 @dataclass(frozen=True)
@@ -50,7 +69,6 @@ class CatalogStatus:
     roots: int
     jobs_by_state: dict[str, int]
     app_setting_keys: int
-    integrity: str
     db_path: str
 
     def lines(self) -> list[str]:
@@ -63,7 +81,6 @@ class CatalogStatus:
             f"监测根目录 = {self.roots}",
             f"任务 = {jobs}",
             f"应用内部状态条数 = {self.app_setting_keys}",
-            f"完整性检查 integrity_check = {self.integrity}",
             f"库文件 = {self.db_path}",
         ]
 
@@ -173,7 +190,6 @@ class StatusService:
             roots=self.roots.count(),
             jobs_by_state=self.jobs.counts_by_state(),
             app_setting_keys=self.app_settings.count(),
-            integrity=self.engine.integrity_check(),
             db_path=str(self.engine.path),
         )
 

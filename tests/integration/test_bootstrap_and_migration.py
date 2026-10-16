@@ -67,10 +67,14 @@ def test_空库首启建出全部表(data_root: Path) -> None:
     try:
         tables = _tables(ctx.paths.catalog_db)
         assert STAGE1_TABLES | STAGE2_TABLES <= tables
-        assert ctx.schema_version == 3
-        assert ctx.status.read().integrity == "ok"
+        assert ctx.schema_version == 6
+        # 启动路径不再跑同步库检查（2026-10-16 判死：6.1GB 真库上 integrity_check 19h+、
+        # quick_check 452s+）。这里在 MB 级测试库上直接查 PRAGMA，验的是"迁移建出来的库健康"。
+        conn = ctx.engine.thread_connection()
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert ctx.migration.did_anything and ctx.migration.applied == [
-            "0001_initial", "0002_text_and_fts", "0003_ocr_tracking"]
+            "0001_initial", "0002_text_and_fts", "0003_ocr_tracking",
+            "0004_reading_history", "0005_stage4_vocab", "0006_drop_volume_id"]
     finally:
         ctx.shutdown()
 
@@ -117,7 +121,7 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
     second = bootstrap(data_root)
     try:
         assert second.migration.did_anything is False
-        assert second.migration.from_version == second.migration.to_version == 3
+        assert second.migration.from_version == second.migration.to_version == 6
         assert sorted(p.name for p in second.paths.backups_dir.glob("*.db")) == snaps_before, \
             "没有待应用迁移时不许产生新快照"
         assert second.catalog.count_tags() == 1
@@ -139,8 +143,8 @@ def test_每一步迁移前都有可用快照且快照停在迁移之前(data_ro
     ctx = bootstrap(data_root)
     ctx.shutdown()
     snaps = sorted(p.name for p in ctx.paths.backups_dir.glob("pre-migration-*.db"))
-    assert len(snaps) == 3 and snaps == sorted(snaps), \
-        "应用了 0001/0002/0003 三个迁移，就该有三次迁移前快照"
+    assert len(snaps) == 6 and snaps == sorted(snaps), \
+        "应用了 0001/0002/0003/0004/0005/0006 六个迁移，就该有六次迁移前快照"
     assert all(n.startswith("pre-migration-000") for n in snaps)
 
     s1 = ctx.paths.backups_dir / snaps[0]
@@ -230,9 +234,11 @@ def test_坏迁移修好后能继续往前(data_root: Path) -> None:
         migrate(engine, backup_dir=data_root / "backups", migrations_dir=bad)
 
     report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
-    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking"], \
+    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking",
+                              "0004_reading_history", "0005_stage4_vocab",
+                              "0006_drop_volume_id"], \
         "真实迁移必须能接着坏迁移留下的 v1 库一路往上走"
-    assert current_version(engine.connect()) == 3
+    assert current_version(engine.connect()) == 6
     assert STAGE2_TABLES <= _tables(db)
     assert engine.integrity_check() == "ok"
     engine.close_thread_connection()

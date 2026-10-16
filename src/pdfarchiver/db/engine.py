@@ -67,7 +67,11 @@ class Engine:
             self._local.conn = None
 
     def integrity_check(self) -> str:
-        """返回 'ok' 或第一条损坏描述。绝不抛 —— 损坏库要能被读出来才能上报给人。"""
+        """返回 'ok' 或第一条损坏描述。绝不抛 —— 损坏库要能被读出来才能上报给人。
+
+        **代价与库大小同量级**（SQLite 文档口径）：2026-10-16 实测在 6.1GB 真语料库上
+        阻塞 19 小时+未完。只许用于离线核查（p12）与小库测试，禁止进启动路径和 UI 刷新。
+        """
         conn = self.connect()
         try:
             rows = conn.execute("PRAGMA integrity_check").fetchall()

@@ -1,7 +1,10 @@
 """架构守卫（docs/ARCHITECTURE 二）。
 
-用 AST 扫，不靠人记。三条规则各自能骗过它一次以上，所以每条都配了反向注入实验
-（见 docs/TESTING.md 的"反向注入"一节）。
+用 AST 扫，不靠人记。现 7 条：import 方向 / SQL 只属于 repositories / 不许静默吞异常 /
+不许本机路径字面量 / 导航入口分组 / 语义层模型根单源 / 界面不许自己拼时间串。
+按 AGENTS.md「每写完一条断言先真注入一次」，每条都要能被一次真注入变红才算守卫；
+已做过的坏法记录在 docs/TESTING.md 的"反向注入"一节（阶段 1 那批起脚本化，
+`tests/probes/p9_reverse_injection.py`）。
 
 跑法：
     python -m pytest tests/guards/test_architecture.py -q
@@ -39,7 +42,9 @@ FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 # SQL 只许出现在真正管库的地方（docs/ARCHITECTURE 一：只有 repositories 能写 SQL）。
-SQL_ALLOWED_PATHS = ("db/repositories/", "db/migrations/", "db/migrate.py", "db/engine.py")
+# semantic/vector_store.py 是向量存储层（管理 .npy + vector_meta 表），属数据基础设施，同 db/engine.py。
+SQL_ALLOWED_PATHS = ("db/repositories/", "db/migrations/", "db/migrate.py", "db/engine.py",
+                     "semantic/vector_store.py")
 SQL_RE = re.compile(
     r"\b(SELECT\s+\S+\s+FROM|INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|"
     r"CREATE\s+(UNIQUE\s+)?TABLE|CREATE\s+(UNIQUE\s+)?INDEX|PRAGMA\s+\w+)\b", re.I)
@@ -48,6 +53,9 @@ MAX_NAV_ITEMS_BEFORE_GROUPING = 20  # AGENTS.md「入口超 20 项就上分组 +
 
 # 阶段 1 验收 6：代码里不许出现本机路径字面量（盘符 / 家目录）。
 MACHINE_LOCAL_PATH_RE = re.compile(r"[A-Za-z]:[\\/]{1,2}|[/\\]home[/\\]|[/\\]Users[/\\]")
+
+# 界面层造出一个时间字符串所需的全部方法名（见 check_ui_time_formatting_single_exit）。
+TIME_BUILDERS = frozenset({"strftime", "fromtimestamp", "utcfromtimestamp", "localtime"})
 
 
 class ArchitectureError(AssertionError):
@@ -184,14 +192,91 @@ def check_nav_entries_grouped() -> list[str]:
     return problems
 
 
+def check_semantic_model_path_single_source() -> list[str]:
+    """ISSUES I37：语义层的模型根只许从 config.paths.models_dir 取，不许出现第二处路径字面量。
+
+    与「探针自己的传感器也是代码」同族：如果 semantic/ 里有人硬编码了 `data/models/` 或
+    `.probe_work/models/`，阶段 6 的"缺模型即降级"判据就会看错地方，永远报"模型缺失"。
+    """
+    # 只查 semantic/ 目录下的 .py 文件
+    semantic_dir = PKG / "semantic"
+    if not semantic_dir.exists():
+        return []
+
+    # 禁止的路径字面量模式（排除 docstring 与注释）
+    banned_patterns = [
+        re.compile(r'["\'](?:data|\.probe_work|models)[/\\]'),  # data/models/ .probe_work/models/
+        re.compile(r'["\'][^"\']*models[^"\']*["\']'),  # 任何含 "models" 的字符串常量
+    ]
+    # 允许的引用（config.paths.models_dir 是唯一合法来源）
+    allowed_patterns = [
+        re.compile(r'self\._paths\.models_dir'),
+        re.compile(r'paths\.models_dir'),
+        re.compile(r'config\.paths'),
+    ]
+
+    problems: list[str] = []
+    for path in semantic_dir.rglob("*.py"):
+        rel = path.relative_to(SRC.parent).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        skip_ids = _docstring_ids(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if id(node) in skip_ids:
+                    continue
+                val = node.value
+                # 检查是否包含路径字面量（排除合法引用）
+                if "models" in val.lower() and not any(p.search(val) for p in allowed_patterns):
+                    # 只报真正像路径的（含 / 或 \）
+                    if "/" in val or "\\" in val:
+                        problems.append(
+                            f"{rel}:{node.lineno} 字符串常量里有模型路径字面量 `{val[:50]}`；"
+                            "ISSUES I37：语义层模型根只许从 config.paths.models_dir 取")
+    return problems
+
+
+def check_ui_time_formatting_single_exit() -> list[str]:
+    """界面层不许自己拼时间串 —— 全站唯一出口是 `services/status_service`（整改计划第 7 条勾甲）。
+
+    三个方法名就是造一个时间字符串所需的全部工具：`strftime`（拼串）、`fromtimestamp`
+    （把秒变成带时区的 datetime）、`localtime` / `utcfromtimestamp`（同一件事的另外两条路）。
+    拦这三个而不是拦 `import datetime`，是因为这条规则要钉的是**显示口径**：
+    UI 里 import datetime 却不调它们，造不出一个能被读成"本地时间却标 Z"的串。
+
+    为什么留两个出口不算破口：`format_ts`（到秒 + `Z`）与 `format_day`（到日）读同一份
+    UTC 秒，只差截断粒度，且 §S5 线框自己要求日粒度（「必须显示"已消失（日期）"」）。
+    口径唯一指的是**时区与标注**，不是指函数个数；两条都住在同一个模块里，才拦得住漂移。
+    """
+    ui_dir = PKG / "ui"
+    problems: list[str] = []
+    for path in sorted(ui_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in TIME_BUILDERS:
+                rel = path.relative_to(SRC.parent).as_posix()
+                problems.append(
+                    f"{rel}:{node.lineno} 调了 `.{node.attr}(...)` —— 界面自己拼时间串就是第二个口径；"
+                    "显示一律走 services/status_service.format_ts（到秒，带 `Z`）或 format_day（到日）"
+                    "（AGENTS.md「禁止核心概念有多个口径」，D-022 把同一条规则写给了日志）")
+    return problems
+
+
 def all_problems() -> list[str]:
     return (check_import_direction() + check_sql_only_where_it_belongs()
             + check_no_silent_swallow() + check_no_machine_local_path_literal()
-            + check_nav_entries_grouped())
+            + check_nav_entries_grouped() + check_semantic_model_path_single_source()
+            + check_ui_time_formatting_single_exit())
 
 
 def test_架构守卫全绿() -> None:
     problems = all_problems()
+    if problems:
+        raise ArchitectureError("\n".join(problems))
+
+
+def test_界面不许自己拼时间串() -> None:
+    """单独点名：第 7 条勾甲的落地判据。合进 `test_架构守卫全绿` 会让失败信息淹没在六条规则里。"""
+    problems = check_ui_time_formatting_single_exit()
     if problems:
         raise ArchitectureError("\n".join(problems))
 

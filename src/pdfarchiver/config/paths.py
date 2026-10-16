@@ -83,10 +83,16 @@ class AppPaths:
     def models_dir(self) -> Path:
         return self.root / "models"
 
+    @property
+    def journal_dir(self) -> Path:
+        """归档/去重/备份等批次执行的 journal 目录（ISSUES I41 定死唯一口径）。"""
+        return self.data_dir / "journal"
+
     def mkdirs(self) -> None:
-        """幂等：已存在不报错。只建运行时真要写的五个目录，**不建 `models`**（模型是阶段 6 按需下载，
+        """幂等：已存在不报错。建运行时真要写的目录，**不建 `models`**（模型是阶段 6 按需下载，
         提前建出来只会让人以为里面有东西）。"""
-        for d in (self.data_dir, self.backups_dir, self.cache_dir, self.config_dir, self.logs_dir):
+        for d in (self.data_dir, self.backups_dir, self.cache_dir, self.config_dir,
+                  self.logs_dir, self.journal_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def describe(self) -> str:

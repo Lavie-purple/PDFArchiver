@@ -47,6 +47,45 @@ REPORT_GLOB = "docs/stage-reports/最终交付报告.md"
 FIVE_COLUMNS = ["已实现且已通过测试", "已实现但尚未充分验证", "部分实现", "尚未实现", "已知问题及其影响"]
 PLACEHOLDER_RE = re.compile(r"TBD|TODO|待填|<<[^>]*>>|此处省略")
 
+LEDGER_ROW_RE = re.compile(r"^\| ISSUES I(\d+)\b")
+LEDGER_STATUS_RE = re.compile(r"\*\*(OPEN|MITIGATED|CLOSED|WONTFIX)\*\*")
+
+
+def ledger_check(text: str) -> tuple[list[str], list[str]]:
+    """台账自身的三条口径：每行**有且只有一个**合法状态、编号从 I1 连续、不重号。
+    返回 (缺陷列表, 读数列表)。
+
+    为什么要在门禁里数，而不是只在文档里写一句"收尾逐条销账"：2026-10-16 收尾时发现
+    `docs/stage-reports/最终交付报告.md` §六 那条"现数命令"的正则**已经过期成打空**了 ——
+    **ISSUES I35** 的命名空间改写把行首从 `| I<n> |` 变成了 `| ISSUES I<n> |`，命令没跟着改，
+    跑出来是 `0 Counter({})`，看着像台账空了。**静默失效的判定等于没有判定**，所以这条进了链。
+    """
+    defects: list[str] = []
+    nums: list[int] = []
+    seen: set[int] = set()
+    tally: dict[str, int] = {}
+    for line in text.splitlines():
+        m = LEDGER_ROW_RE.match(line)
+        if not m:
+            continue
+        n = int(m.group(1))
+        nums.append(n)
+        if n in seen:
+            defects.append(f"I{n} 重号")
+        seen.add(n)
+        states = LEDGER_STATUS_RE.findall(line)
+        if len(states) != 1:
+            defects.append(f"I{n} 的状态字段有 {len(states)} 个（要正好 1 个，"
+                           f"且只能是 OPEN/MITIGATED/CLOSED/WONTFIX 加粗之一）")
+        else:
+            tally[states[0]] = tally.get(states[0], 0) + 1
+    gaps = [n for n in range(1, max(nums) + 1) if n not in seen] if nums else ["空台账"]
+    if gaps:
+        defects.append(f"编号断档：{gaps}")
+    reading = [f"{len(nums)} 行｜I1–I{max(nums) if nums else 0} 连续",
+               "｜".join(f"{k} {v}" for k, v in sorted(tally.items()))]
+    return defects, reading
+
 
 def _gate(name: str, cmd: list[str], *, hint: str = "") -> Row:
     """把一个"探针/脚本自己判生死"的东西接进门禁：退出码 0 且末行 ALL GREEN 才算过。"""
@@ -91,11 +130,17 @@ def gate_docs() -> list[Row]:
                    if (REPO / d).is_file() and "实测" not in (REPO / d).read_text(encoding="utf-8", errors="replace")]
     rows.append(Row("每份用户文档都引用了当次实测读数", not no_evidence,
                     f"没有「实测」字样的 {no_evidence or '无'}"))
+
+    ledger = REPO / "docs/ISSUES.md"
+    defects, summary = ledger_check(ledger.read_text(encoding="utf-8", errors="replace")) \
+        if ledger.is_file() else (["台账文件不存在"], [])
+    rows.append(Row("已知问题台账逐条有状态、编号连续不重号", not defects,
+                    "｜".join(summary) + (f" ── {defects}" if defects else "")))
     return rows
 
 
 def gate_docs_injection() -> Row:
-    """上面那四条的坏法注入：临时造一份残缺报告与一份占位符文档，要求被抓到。"""
+    """上面那五条的坏法注入：临时造一份残缺报告、一份占位符文档与一份坏台账，要求被抓到。"""
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="final_docs_") as td:
@@ -113,8 +158,18 @@ def gate_docs_injection() -> Row:
             bad.append("占位符 TBD 没被抓到")
         if "实测" in (root / "docs" / "USAGE.md").read_text(encoding="utf-8"):
             bad.append("好读数误判（不该算坏法）")
+        # 台账坏法两条：编号断档（缺 I2）+ 某行状态字段不是那四个词之一
+        ledger_bad, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b |\n"
+                                     "| ISSUES I3 | c | **FIXED someday** | d |\n")
+        if len(ledger_bad) != 2:
+            bad.append(f"台账坏行只抓到 {len(ledger_bad)} 项（应 2 项：编号断档 + 状态字段非法）")
+        ledger_good, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b |\n"
+                                      "| ISSUES I2 | c | **WONTFIX** | d |\n")
+        if ledger_good:
+            bad.append(f"好台账被误判：{ledger_good}")
     return Row("交付文档门禁自己有没有牙（坏法注入实测）", not bad,
-               "残缺报告 + TBD 文档：抓到 " + ("、".join(bad) if bad else "两条都变红"))
+               "残缺报告 + TBD 文档 + 坏台账：抓到 "
+               + ("、".join(bad) if bad else "三条坏法全红、好台账不误判"))
 
 
 def segment_guards() -> list[Row]:
@@ -158,9 +213,9 @@ def segment_consistency(data_root: str | None) -> list[Row]:
         rows.append(_gate(f"一致性核查 p12 对指定数据根（{data_root}）",
                           [sys.executable, P12, "--data-root", data_root]))
     else:
-        rows.append(Row("一致性核查 p12 对真实数据根", True,
+        rows.append(Row("一致性核查 p12 对真实数据根", False,
                         "本次未跑：没给 --data-root。默认数据根 %LOCALAPPDATA%\\PdfArchiver 在本机不存在，"
-                        "**不许把这行读成「真实现场已核查」**"))
+                        "**这行是 RED，不许把它读成「真实现场已核查」；要变绿必须给 --data-root**"))
     return rows
 
 

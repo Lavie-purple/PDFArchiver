@@ -23,9 +23,11 @@ from pdfarchiver.config.settings import DEFAULTS, Settings, SettingsError, load
 from pdfarchiver.db.engine import Engine
 from pdfarchiver.db.migrate import MigrationReport, current_version, migrate
 from pdfarchiver.db.repositories.catalog import CatalogRepository
+from pdfarchiver.db.repositories.collections import CollectionRepository
 from pdfarchiver.db.repositories.documents import DocumentRepository
 from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.metadata import MetadataRepository
+from pdfarchiver.db.repositories.operations import OperationRepository
 from pdfarchiver.db.repositories.roots import RootRepository
 from pdfarchiver.db.repositories.settings import SettingsRepository
 from pdfarchiver.db.repositories.text import TextRepository
@@ -36,7 +38,14 @@ from pdfarchiver.jobs.queue import DEFAULT_MAX_ATTEMPTS, WorkQueue
 from pdfarchiver.ocr.budget import OcrBudget
 from pdfarchiver.ocr.engine import OcrEngine, OcrUnavailable
 from pdfarchiver.search.service import SearchService
+from pdfarchiver.semantic.search_service import SemanticSearchService
+from pdfarchiver.semantic.classify_service import AIClassifyService
+from pdfarchiver.semantic.embedding import EmbeddingService
+from pdfarchiver.semantic.vector_store import VectorStore
+from pdfarchiver.services.archive_service import ArchiveService
+from pdfarchiver.services.backup_service import BackupService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
+from pdfarchiver.services.dedup_service import DedupService
 from pdfarchiver.services.index_service import IndexService
 from pdfarchiver.services.ocr_service import OcrService
 from pdfarchiver.services.patrol import Patrol
@@ -88,6 +97,9 @@ class AppContext:
     （AGENTS.md），现在只有测试与门禁通过它排队。装配无条件进行、引擎惰性加载，
     没装可选层的应用照旧能扫描与全文检索。
 
+    `archive` 是阶段 4 的服务入口（归档执行），阶段 4 落地前调用即抛 `NotImplementedError`。
+    装配无条件进行，但阶段 4 前没有任何界面或后台会触发它。
+
     `watch` / `queue` 在 `start_background()` 之前是 None —— 阶段 1 的界面测试
     和"只看库"的调用方不该被起线程这件事拖住，也不该在没人要扫描时占着两个 worker。
     """
@@ -99,6 +111,8 @@ class AppContext:
     seed: SeedResult
     documents: DocumentRepository
     catalog: CatalogRepository
+    collections: CollectionRepository
+    operations: OperationRepository
     roots: RootRepository
     jobs: JobRepository
     texts: TextRepository
@@ -109,7 +123,12 @@ class AppContext:
     scan: ScanService
     indexer: IndexService
     search: SearchService
+    semantic_search: SemanticSearchService
+    ai_classify: AIClassifyService
     ocr: OcrService
+    archive: ArchiveService
+    dedup: DedupService
+    backup: BackupService
     patrol: Patrol
     events: EventBuffer
     bootstrap_seconds: float
@@ -129,7 +148,8 @@ class AppContext:
             return self.queue
         self.queue = WorkQueue(self.jobs,
                                {"scan": self.scan.handle, "index": self.indexer.handle,
-                                "ocr": self.ocr.handle},
+                                "ocr": self.ocr.handle, "archive": self.archive.handle,
+                                "dedup": self.dedup.handle},
                                engine=self.engine, threads=int(self.settings["worker_threads"]))
         recovered = self.queue.recover()
         resuming = self.scan.resume_pending()
@@ -205,6 +225,8 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
         raise
 
     catalog = CatalogRepository(engine)
+    collections = CollectionRepository(engine)
+    operations = OperationRepository(engine)
     app_settings = SettingsRepository(engine)
     seed = seed_default_categories(catalog, app_settings)
     documents = DocumentRepository(engine)
@@ -219,6 +241,10 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     scan = ScanService(documents, roots, jobs, exclusions=Exclusions.of())
     indexer = IndexService(documents, texts, metadata)
     search = SearchService(documents, metadata, texts)
+    semantic_search = SemanticSearchService(paths.root)
+    embedding = EmbeddingService(paths.root)
+    vector_store = VectorStore(paths.root)
+    ai_classify = AIClassifyService(catalog, documents, embedding, vector_store)
     ocr_engine = OcrEngine()
     ocr = OcrService(documents, texts, jobs, ocr_engine,
                      OcrBudget(app_settings, int(settings["ocr_daily_page_budget"])))
@@ -228,14 +254,17 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
         log.info("OCR 层可用，版本指纹 %s（引擎与模型要到首次识别才加载）", ocr_engine.version_stamp)
     except OcrUnavailable as exc:  # 消息本身就是"缺哪个包、怎么装"，原样写进日志
         log.warning("OCR 层不可用，扫描与全文检索照旧：%s", exc)
+    archive = ArchiveService(operations, documents, paths)
+    dedup = DedupService(documents, jobs)
+    backup = BackupService(paths, engine)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
 
-    integrity = engine.integrity_check()
-    if integrity != "ok":
-        log.error("数据库完整性检查未通过：%s", integrity)
-        state_event(paths.logs_dir, "db.integrity_problem", detail=integrity)
-
+    # 启动路径**不跑任何同步库检查**（AGENTS.md 禁止启动阻塞）：
+    # PRAGMA integrity_check 在 6.1GB 真语料库上实测 19 小时+未完，
+    # quick_check 冷/热缓存各实测 452s / 478s —— 都与库同量级，谁都躲不掉。
+    # 库健康核查的唯一入口是离线探针 p12（tests/probes/p12_consistency.py，可自行限速）；
+    # 真损坏时第一条坏 SQL 会以 error + 原文进日志，不会静默。
     if report.did_anything:
         log.info("迁移完成 %s→%s，应用 %s，快照 %s", report.from_version, report.to_version,
                  report.applied, [str(p.name) for p in report.snapshots])
@@ -252,9 +281,11 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     state_event(paths.logs_dir, "startup.done", seconds=round(elapsed, 3), schema_version=schema_version)
 
     return AppContext(paths=paths, settings=settings, engine=engine, migration=report, seed=seed,
-                      documents=documents, catalog=catalog, roots=roots, jobs=jobs,
-                      texts=texts, metadata=metadata,
+                      documents=documents, catalog=catalog, collections=collections,
+                      operations=operations, roots=roots, jobs=jobs, texts=texts, metadata=metadata,
                       app_settings=app_settings, status=status, session=session,
-                      scan=scan, indexer=indexer, search=search, ocr=ocr, patrol=patrol,
-                      events=events,
+                      scan=scan, indexer=indexer, search=search,
+                      semantic_search=semantic_search, ai_classify=ai_classify,
+                      ocr=ocr, archive=archive,
+                      dedup=dedup, backup=backup, patrol=patrol, events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

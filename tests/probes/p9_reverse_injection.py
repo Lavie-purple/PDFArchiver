@@ -65,7 +65,8 @@ CASES: list[Case] = [
                append=True)]),
     Case("4", "导航注册表里塞进重复的 page_id", ARCH,
          [Edit("src/pdfarchiver/ui/nav.py", "",
-               '\nNAV_ITEMS.append(NavItem(PAGE_STATUS, "重复入口", "probe", False))  # 注入\n', append=True)]),
+               '\nNAV_ITEMS.append(NavItem("library", "重复入口", "probe", False))  # 注入\n',
+               append=True)]),
     Case("5", "把阶段 4 才定口径的分组表提前建出来",
          "tests/integration/test_bootstrap_and_migration.py::test_阶段4的表在阶段2仍然不存在",
          [Edit("src/pdfarchiver/db/migrations/0001_initial.py", "        APP_SETTINGS,\n    ]",
@@ -336,7 +337,7 @@ def main() -> int:
                               if ln.startswith("E   ") or "AssertionError" in ln
                               or "ArchitectureError" in ln or "Failed" in ln), "")
                 results.append((case, caught, failed, errored, passed, first.strip()[:110]))
-                print(f"  {'RED  ' if caught else 'GREEN'}  I{case.inject} {case.坏法}")
+                print(f"  {'RED  ' if caught else 'GREEN'}  p9 注入 I{case.inject} {case.坏法}")
                 print("         -> " + " + ".join(t.split("::")[-1] for t in case.node.split())
                       + f"｜failed={failed} error={errored} passed={passed}")
                 if first:
@@ -347,7 +348,7 @@ def main() -> int:
         missed = [r for r in results if not r[1]]
         print(f"\n抓到 {len(results) - len(missed)}/{len(results)} 条坏法")
         for case, _, _, _, _, _ in missed:
-            print(f"  未抓到：I{case.inject} {case.坏法} —— 对应断言是摆设，按 AGENTS.md 必须删或重写")
+            print(f"  未抓到：p9 注入 I{case.inject} {case.坏法} —— 对应断言是摆设，按 AGENTS.md 必须删或重写")
         print("VERDICT: " + ("ALL GREEN" if not missed else "RED"))
         return 0 if not missed else 1
     finally:

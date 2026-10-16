@@ -76,8 +76,10 @@ def test_真实0002升级后旧数据行数一条不丢(old_db, tmp_path) -> Non
     engine, db = old_db
     before = _counts(db)
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
-    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking"]
-    assert current_version(engine.connect()) == 3
+    assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking",
+                              "0004_reading_history", "0005_stage4_vocab",
+                              "0006_drop_volume_id"]
+    assert current_version(engine.connect()) == 6
 
     after = _counts(db, ignore=NEW_TABLES_AT_2)
     assert after == before, "带数据升级把老表的内容弄丢或弄多了"
@@ -123,14 +125,14 @@ def test_真实0002升级后旧内容仍然读得回来(old_db, tmp_path) -> Non
 
 
 def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
-    """再加一步**合成**的 0004：证明这条守卫对将来的迁移同样成立，不是只认识 0002/0003。"""
+    """再加一步**合成**的 0007：证明这条守卫对将来的迁移同样成立，不是只认识 0002/0003。"""
     engine, db = old_db
     migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     before = _counts(db, ignore=NEW_TABLES_AT_2)
     mdir = tmp_path / "migrations"
     shutil.copytree(REAL_MIGRATIONS, mdir)
-    (mdir / "0004_add_note.py").write_text(
-        "VERSION = 4\n\n\n"
+    (mdir / "0007_add_note.py").write_text(
+        "VERSION = 7\n\n\n"
         "def apply(conn):\n"
         "    conn.execute('CREATE TABLE stage4_marker(id INTEGER PRIMARY KEY, note TEXT)')\n"
         "    conn.execute(\"INSERT INTO stage4_marker(note) VALUES('新表')\")\n"
@@ -138,8 +140,8 @@ def test_升级到新版本后行数一条不丢(old_db, tmp_path) -> None:
         encoding="utf-8")
 
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=mdir)
-    assert report.applied == ["0004_add_note"]
-    assert current_version(engine.connect()) == 4
+    assert report.applied == ["0007_add_note"]
+    assert current_version(engine.connect()) == 7
 
     after = _counts(db, ignore=NEW_TABLES_AT_2 | {"stage4_marker"})
     assert after == before, "升级把数据弄丢或弄多了"
@@ -177,7 +179,7 @@ def test_真实迁移目录从空库一路能跑到最新版(tmp_path) -> None:
     engine = Engine(db)
     report = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     newest = discover(REAL_MIGRATIONS)[-1].order
-    assert report.to_version == newest == 3, \
+    assert report.to_version == newest == 6, \
         "水位必须停在迁移目录里的最新一版；这里同时是「版本号变了就要同步改 docs/DATABASE 与门禁」的哨兵"
     assert engine.integrity_check() == "ok"
     # 再跑一次必须什么都不做（幂等），否则重启会把同一迁移执行多遍
