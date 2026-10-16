@@ -83,7 +83,7 @@ tests/
   guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
   #                         本机路径字面量 / 导航分组（AST）、迁移不丢数据
   e2e/★                   # 阶段 2 已建：真 worker + 真 watchdog + 真 PDF，11 条全链验收
-  load/                   # ×10 量级压测仍未建（等 Q8 给出真实监测范围，见 ISSUES I16/I20）
+  load/                   # ×10 量级压测仍未建（等 Q8 给出真实监测范围，见 ISSUES I16/ISSUES I20）
 gates/
   stage1.py★              # 阶段 1 门禁链：G21→架构守卫→全量回归→冷启动实测→反向注入，末行 VERDICT
   stage2.py★              # 阶段 2 在其上加两步：后台生命周期（state.log 三行齐全）+ e2e 验收（搬回真实检索行）
@@ -108,7 +108,10 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
 - `ocr`/`semantic` 被 `search` 硬依赖：语义模块必须可整个缺席
 - 任何层 import `fileops.execute`（只有 `services/archive_service` 能）
 
-守卫测试 `tests/guards/test_architecture.py` 用 AST 扫 import，违反即 RED。
+守卫测试 `tests/guards/test_architecture.py` 用 AST 扫（不止 import：现 7 条 = 依赖方向 / SQL 只属于
+repositories / 不许静默吞异常 / 不许本机路径字面量 / 导航入口分组 / 语义层模型根单源 /
+**界面不许自己拼时间串** —— 时间显示的唯一出口是 `services/status_service.format_ts` / `format_day`，
+理由同 D-022 给日志定的那一条），违反即 RED。逐条的坏法读数在 `docs/TESTING.md` 四。
 
 ## 三 · 线程与并发模型
 
@@ -119,15 +122,18 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
 
 模型：
 - 主线程：只做 UI 与轻量状态更新。
-- `jobs/` 维护 N 个 worker 线程（默认 2，可调），每个 worker 一条 DB 连接、一个 `DocContext`。
+- `jobs/` 维护 N 个 worker 线程（默认 **1**，可调；改小是 **ISSUES I46** 甲落地后的口径 ——
+  SQLite 只有单一写者，写密集的 `index` 任务开两个 worker 没有并行收益，只有互相抢写锁），
+  每个 worker 一条 DB 连接、一个 `DocContext`。
 
 **阶段 2 落地后这条链上真跑的线程**（`gates/stage2.py` 的 `state.log` 读数可核对：
-`background.started` 里 `threads=2` + 1 条 observer）：
+`background.started` 里 `threads=2` + 1 条 observer —— `threads` 是**当时**的默认值，
+ISSUES I46 甲之后同一行打印 `threads=1`，observer 那条不变）：
 
 | 线程 | 谁起 | 干什么 | 死了会怎样 |
 | --- | --- | --- | --- |
 | 主线程 | Qt | 渲染 + 状态栏 + **巡检定时器** | 应用没了 |
-| worker × `worker_threads`（默认 2） | `WorkQueue.start()` | 领 `scan` / `index` / `ocr` 任务；每线程一条 sqlite 连接（`engine.thread_connection()`） | `threading.excepthook` 落 `crash.log`（阶段 2 修好的一条，见 D-027） |
+| worker × `worker_threads`（默认 **1**，**ISSUES I46** 甲） | `WorkQueue.start()` | 领 `scan` / `index` / `ocr` 任务；每线程一条 sqlite 连接（`engine.thread_connection()`） | `threading.excepthook` 落 `crash.log`（阶段 2 修好的一条，见 D-027）；**收尾那一行 UPDATE 写不进去时不许把任务留在 `running`**，就地重试并在同进程重放到终态（乙，见 D-050） |
 | `WindowsApiObserver` | `WatchManager.start()` | 把磁盘事件塞进 `EventBuffer`，**不碰库** | **以前没人知道**：`watched_roots` 照旧是 1。现在有 `is_alive()` → `BackgroundState.watcher_alive` → 状态页 ⚠ 行 |
 
 两条纪律是阶段 2 实测逼出来的：
@@ -143,13 +149,13 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
   嵌入层（阶段 6）必须与 OCR 抢**同一把**全局锁，不能各锁各的。
 - **OCR 的内存纪律是"一次一张图"**：`parsing/pdf.py` 出图 + `ocr_service` 逐页落库，任何"先把 N 页都渲好再一起识别"
   的写法在 946 页的书上就是 946 × 单页位图。门禁 G8 实测峰值 806–1,131MiB（启动态 72.4MiB），
-  距离 1.2GB 的红线**余量不足 100MiB**（I16）—— 这也是为什么它只在**单 worker 实际推理**时成立。
+  距离 1.2GB 的红线**余量不足 100MiB**（ISSUES I16）—— 这也是为什么它只在**单 worker 实际推理**时成立。
 - **三种"停"各有各的收尾**（D-030，阶段 5 是被这条测出来的）：用户请求取消 → 库里已是 `cancelled`；
   退出闸门拉下 → 行留 `running`，交给下次启动的 `recover()`；处理函数自己判停（抛 `JobCancelled`，
   预算用满 / 单页超时都是这种）→ 落 `cancelled` **终态**并把原因写进 `last_error`，不消耗重试预算。
   三者混淆的代价不一样：把判停写成 `done` 就是"这半本书永远不再被补"，把退出写成 `cancelled` 就是"关个应用把在跑的任务作废"。
 - 取消：worker 每处理一页检查一次取消位；PyMuPDF 的页面级调用是可安全中断的粒度。
-  **但 ONNX 推理一旦提交就收不回来** —— 单页超时只能在返回之后判定，判超时的同时 GPU 时间已经烧掉（I21）。
+  **但 ONNX 推理一旦提交就收不回来** —— 单页超时只能在返回之后判定，判超时的同时 GPU 时间已经烧掉（ISSUES I21）。
 
 ## 四 · 三层检索的依赖关系（SPEC 第 4 条要求明确）
 
@@ -185,19 +191,19 @@ OCR 文本        ──► 同一张 FTS5，source_kind='ocr'     依赖：ocr 
 | D-016 | 全文与向量分库存放 | P1：trigram 索引 ≈ 原文 6.9×；P6：4.04M 向量 fp32 ≈ 7.7GB | 设计中 |
 | D-017 | 阅读器用 PyMuPDF 渲染 + QtPdf 备选 | P3：两条通道都出图，fitz 135ms/页中位、QtPdf 43–50ms | 已验证 |
 | D-009 | 不依赖文件监听作为唯一变更来源 | P4：被监听目录自身被重命名 → 0 事件；必须定期全量校验 | 已验证 |
-| D-018 | 阶段 1 的 UI 只交付**运行时外壳**：导航由注册表驱动，产品屏一律 `implemented=False` | 线框未逐屏确认（AGENTS.md 禁止写界面代码）+ Q7 未答；`test_没有占位控件` 与注入 I11 钉住"外壳里没有假控件" | 已验证（产品屏数仍等 Q7） |
-| D-019 | 用户设置存 `config/settings.json`，应用内部状态存 `app_settings` 表，**两处各一个口径** | 阶段 1 实测：`test_设置持久化跨重启`；启动打印"默认值/覆盖值/来源文件"，注入 I9 证明种子标记有约束力 | 已验证 |
-| D-021 | 性能数字由**被测进程自己**写进 `state.log`，门禁与界面读同一条字段 | 避免"门禁掐一次表、界面显示另一个数"两个口径；注入 I13/I14 证明读数真参与判定 | 已验证 |
-| D-022 | 日志时间戳唯一口径 = UTC ISO 8601 带 `Z`（`log_stamp()`），含 `app.log` 行首 | 反向注入 I16：裸本地时间标 `Z` 格式合法、时刻差 8 小时，只有跨表比时刻抓得住 | 已验证 |
-| D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 8 条（0003 之后重数）、注入 I6/I7 | 已验证 |
+| D-018 | 阶段 1 的 UI 只交付**运行时外壳**：导航由注册表驱动，产品屏一律 `implemented=False` | 线框未逐屏确认（AGENTS.md 禁止写界面代码）+ Q7 未答；`test_没有占位控件` 与注入 ISSUES I11 钉住"外壳里没有假控件" | 已验证（产品屏数仍等 Q7） |
+| D-019 | 用户设置存 `config/settings.json`，应用内部状态存 `app_settings` 表，**两处各一个口径** | 阶段 1 实测：`test_设置持久化跨重启`；启动打印"默认值/覆盖值/来源文件"，注入 ISSUES I9 证明种子标记有约束力 | 已验证 |
+| D-021 | 性能数字由**被测进程自己**写进 `state.log`，门禁与界面读同一条字段 | 避免"门禁掐一次表、界面显示另一个数"两个口径；注入 ISSUES I13/ISSUES I14 证明读数真参与判定 | 已验证 |
+| D-022 | 日志时间戳唯一口径 = UTC ISO 8601 带 `Z`（`log_stamp()`），含 `app.log` 行首 | 反向注入 ISSUES I16：裸本地时间标 `Z` 格式合法、时刻差 8 小时，只有跨表比时刻抓得住 | 已验证 |
+| D-023 | 结构迁移"先快照后动结构"，无备份目录直接拒绝；`isolation_level=None` + `BEGIN IMMEDIATE` | 阶段 1 实测：`test_迁移中途失败回到原样`、`tests/guards/test_migrations.py` 8 条（0003 之后重数）、注入 ISSUES I6/ISSUES I7 | 已验证 |
 | D-024 | 正文 + `content_fts` 进 `catalog.db` 本体；向量另库 | FTS5 外部内容表只能指向同库有 rowid 的表（p1）；分库等于放弃外部内容表、正文再拷一份（p2 膨胀 4.03–6.91×） | 已验证（迁移 0002 + G10 常驻） |
-| D-025 | 处理函数只有 `ProgressMonitor` 两支笔；`done` 的进度补齐在 `JobRepository.succeed()` 里做；收尾按库里状态判流转 | 阶段 2 实测：`test_进度按步长攒着写最后补齐`、`test_试满上限后不再算重试而是留下失败终态`、e2e 残尸回收；注入 I19/I23 | 已验证 |
+| D-025 | 处理函数只有 `ProgressMonitor` 两支笔；`done` 的进度补齐在 `JobRepository.succeed()` 里做；收尾按库里状态判流转 | 阶段 2 实测：`test_进度按步长攒着写最后补齐`、`test_试满上限后不再算重试而是留下失败终态`、e2e 残尸回收；注入 ISSUES I19/ISSUES I23 | 已验证 |
 | D-026 | `PermanentFailure` 只消耗 1 次尝试，重试预算（3 次）留给瞬时故障 | 阶段 2 实测：损坏/加密文件各 1 次即终态，好文件不受牵连（e2e）；重试上限的唯一持有者是 `WorkQueue.max_attempts` | 已验证 |
 | D-027 | 接第三方库回调的测试必须 import 产品里那个类；每个可能静默死掉的部件要有唯一
 
 **这张视图只同步到 D-027**：阶段 5 与最终交付轮的 **D-028…D-034**（OCR 限量停机 / 版本指纹 / 页级幂等 /
 被杀恢复 / 性能假红不改阈值 / 交付链只编排）没往这里搬，**权威登记在 `docs/DECISIONS.md`**。
-搬动它们不是本轮的事，写在这里是为了别让人以为这张表是全量。只读数字 | 阶段 2 两个真实事故：watchdog 缺 `dispatch`（observer 死掉而界面显示 1 个根在听）、`threading.excepthook` 读不存在的 `args.exc_info`（现场全丢）；注入 I38–I44，其中 I43 第一版抓不到、补"半路死亡"测试后才有牙 | 已验证 |
+搬动它们不是本轮的事，写在这里是为了别让人以为这张表是全量。只读数字 | 阶段 2 两个真实事故：watchdog 缺 `dispatch`（observer 死掉而界面显示 1 个根在听）、`threading.excepthook` 读不存在的 `args.exc_info`（现场全丢）；注入 ISSUES I38–ISSUES I44，其中 ISSUES I43 第一版抓不到、补"半路死亡"测试后才有牙 | 已验证 |
 
 ## 六 · 明确不做（阶段 0 决定，不是遗漏）
 

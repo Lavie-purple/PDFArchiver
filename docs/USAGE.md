@@ -43,6 +43,9 @@ PdfArchiver.exe --version              # PdfArchiver 0.5.0
 导航列 8 项，只有第 1 项有页面；其余 7 项显示的是"未实现 + 卡在哪个决定上"的说明文字，
 不是空壳控件。下面是从冻结产物之外、用同一份代码渲染出来的**逐字实测输出**（库里是 273 份的示例语料；
 唯一改动是路径里的本机用户名抹成 `...`，其余字符照抄）：
+**这句"只有第 1 项有页面"和下面那行 `worker_threads=2 [默认]` 都抓于 2026-10-15 的交付轮，均已过期** ——
+八屏界面此后已实现（**ISSUES I57** 记的就是这份文档整体没跟着更新），`worker_threads` 现行默认是 **1**
+（**ISSUES I46** 甲 / D-050）；这一整块是逐字照抄的现场读数，所以不改里面的数字，只在这里标明。
 
 ```
 == 运行时 ==
@@ -71,7 +74,6 @@ PdfArchiver.exe --version              # PdfArchiver 0.5.0
   监测根目录 = 1
   任务 = done=276
   应用内部状态条数 = 3
-  完整性检查 integrity_check = ok
   库文件 = ...\data_root\data\catalog.db
 
 == 默认分类写入结果 ==
@@ -111,7 +113,10 @@ OCR 后端已交付（装了可选层就能用，但没有界面入口）；语�
   正常双击启动的应用一定显示 worker 线程数与监听根数；显示成"后台未启动"就是启动失败。
 - `设置来源` 一行给出"内置默认值"还是"用户覆盖值 + 来源文件"，这是硬要求：
   你没写 `settings.json` 时它不会假装是你的选择。
-- `integrity_check` 只说数据库页结构没坏，**不代表**文件与库里对得齐。后者要跑 `tests/probes/p12_consistency.py`。
+- 状态页与启动路径**不跑任何同步库检查**（`integrity_check` / `quick_check` 的代价都与库大小同量级，
+  2026-10-16 在 6.1GB 真语料库上实测：`integrity_check` 19 小时+未完、`quick_check` 冷/热缓存 452s / 478s，
+  塞进启动路径会把应用冻死，见台账 **ISSUES I45**）。库健康核查的唯一入口是离线探针 `tests/probes/p12_consistency.py`
+  （可自行限速，不在产品启动路径里跑）。
 
 ## 四、第一次扫描：目前没有界面入口，所以用命令行
 
@@ -138,7 +143,7 @@ queue = ctx.start_background()                 # worker 线程 + 文件监听 + 
 ② 后台：worker 2 线程｜监听根 1 个
 ③ 队列排空耗时 2.4s｜任务状态 = {'done': 273}
 ④ 库： 结构版本 schema_version = 3 / 文档主记录 = 273（其中标记缺失 0） / 分类 = 14，标签 = 0 /
-      监测根目录 = 1 / 任务 = done=273 / 应用内部状态条数 = 1 / 完整性检查 integrity_check = ok
+      监测根目录 = 1 / 任务 = done=273 / 应用内部状态条数 = 1
 ```
 
 之后只要用同一个数据根启动应用，`roots` 表里那条根就会被自动监听 —— 也就是说
@@ -258,7 +263,7 @@ startup.begin → migration.applied → startup.done → background.started → 
 ```
 
 `window.ready` 里的 `cold_start_seconds` 就是界面上那行冷启动读数；阈值 1.5s 是**约定值**，
-不是实测保证 —— 满载机器上实测到过 3.129s（`docs/ISSUES.md` I25）。
+不是实测保证 —— 满载机器上实测到过 3.129s（`docs/ISSUES.md` ISSUES I25）。
 
 ## 九、性能与量级的真实边界
 
@@ -279,7 +284,7 @@ startup.begin → migration.applied → startup.done → background.started → 
 诚实清单（对应交付报告的五分栏）：
 
 - **真机首屏没有人眼看过**：所有界面实测都是 `offscreen` 平台渲染的真 Qt 控件文本，
-  截图级核对没做过（`docs/ISSUES.md` I17）。
+  截图级核对没做过（`docs/ISSUES.md` ISSUES I17）。
 - **你的真实语料（7,768 份 / 2,024,504 页）从来没被这台机器上的应用扫过**：
   `%LOCALAPPDATA%\PdfArchiver` 这个默认数据根在本机不存在。§四的实测用的是 273 份合成样本。
   要按真实量级验证，请按 §四脚本换 `roots.add(r"H:\文档", identity_key(r"H:\文档"))`，

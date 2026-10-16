@@ -108,7 +108,7 @@ AGENTS.md 元规则要求的入职手册件之一：记录**仓库结构、命�
 放 `packaging/` 而不是 `gates/`：这两个文件的主题是**产物**，`gates/` 只放"准出判据"。
 新增同类文件时按主题选目录，不要往 `gates/` 里堆。
 
-**2）探针不许自写产品的动作（I33 的规则化）。** 探针若声称在测"产品的某个入口函数"，
+**2）探针不许自写产品的动作（ISSUES I33 的规则化）。** 探针若声称在测"产品的某个入口函数"，
 就必须 **import 并调用那个入口**，再把入口自己报的数与探针独立数出来的数**双向对账**。
 本轮实测的代价：p14 的 ⑤ 因为在探针里自己写了一遍 `VALUES('rebuild')`，
 把产品的 `rebuild_all()` 摘掉之后它照样 9/9 全绿 —— 一条恒绿的断言比没有断言更糟，
@@ -118,11 +118,11 @@ AGENTS.md 元规则要求的入职手册件之一：记录**仓库结构、命�
 
 **3）`.probe_work/` 里的东西不能当引用目标。** 它是 gitignored 且**收尾清零**的现场目录，
 所以"出处见 `.probe_work/scratch_*.py`"这种引用会在收尾那一刻变成空指。
-本轮把三处这类引用改指长期存在的东西（p14 常驻探针、台账 I29），规则写进 `docs/README.md` 维护约定第 7 条。
+本轮把三处这类引用改指长期存在的东西（p14 常驻探针、台账 ISSUES I29），规则写进 `docs/README.md` 维护约定第 7 条。
 **同一批还测出一件更麻烦的**：`I<n>` 这个字形在本项目同时是台账编号、p9 坏法编号与 p10 坏法编号
-（`docs/ISSUES.md` 的行号｜`docs/TESTING.md` 四 I1–I46｜`p10_reverse_injection_ocr.py` 代码里是裸数字），
+（`docs/ISSUES.md` 的行号｜`docs/TESTING.md` 四 ISSUES I1–ISSUES I46｜`p10_reverse_injection_ocr.py` 代码里是裸数字），
 509 处引用里 **453 处是裸写**（38 处写了"注入"、18 处写了"ISSUES"）。本轮**只声明规则、不改写存量**（新写入一律
-`ISSUES I<n>` / `p9 注入 I<n>` / `p10 注入 #<n>`），规模与销账条件记在 **I35**。
+`ISSUES I<n>` / `p9 注入 I<n>` / `p10 注入 #<n>`），规模与销账条件记在 **ISSUES I35**。
 
 **4）交付文档的四份 + 五分栏是断言的字段名。** `gates/final.py` 的 `gate_docs()` 里写死了
 `USER_DOCS`（INSTALL / USAGE / BACKUP-RESTORE / TROUBLESHOOTING）与 `FIVE_COLUMNS`

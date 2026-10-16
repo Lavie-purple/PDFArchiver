@@ -185,7 +185,7 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
    **这一种坏法恰好是所有"免词口径"唯一看不见的那一种** —— 漏列的 `'delete'` 会把
    `content_fts_docsize` 里那行删掉，倒排里那条却还挂着，所以 `count(*)`、`NOT IN`、docsize 双向
    四个数全都很干净；能看见它的只有**带词的 `MATCH`**（`MATCH` 命中数 vs `MATCH` 再 JOIN 正文表）。
-   五种口径对四种坏法的可见性由 `tests/probes/p14_fts_instrument.py` 每次重测（台账 **I8**），
+   五种口径对四种坏法的可见性由 `tests/probes/p14_fts_instrument.py` 每次重测（台账 **ISSUES I8**），
    `'integrity-check'` 在那四种坏状态下全部"通过"、也不改动文件，**不许拿它当检查**。
 
 另外两条口径：
@@ -213,7 +213,7 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
   并且同时留在 `app.log`（含 sqlite 原文）与 `state.log`（`startup.migration_failed`）。
 - 守卫测试：`tests/guards/test_migrations.py` 用**带数据的旧版本库**跑一遍全量迁移，5 条断言已实测通过 ——
   逐表行数不变（新表除外）、旧内容读得回来、`PRAGMA integrity_check` = ok、`PRAGMA foreign_key_check` 空、
-   WAL 与外键设置在库里持久。反向注入 I7（把回滚改成 `COMMIT`）确实让它变红。
+   WAL 与外键设置在库里持久。反向注入 ISSUES I7（把回滚改成 `COMMIT`）确实让它变红。
 - **阶段 1 只有 `0001_initial`（它建 12 张表；空库首启实测 13 张，多出的那张是 `schema_version`，由 `db/migrate.py` 建）**。`text_pages` / `content_fts` / `duplicate_groups`
   是**有意没建**，不是遗漏：分词器（Q1）与索引体积策略（Q2）未答，duplicate 分组口径属阶段 4。
   有断言反向钉住它们不存在（`test_阶段1刻意不建的表确实不存在`）。
