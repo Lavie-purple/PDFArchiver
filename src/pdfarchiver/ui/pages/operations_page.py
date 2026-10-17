@@ -11,6 +11,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.ui.confirm import DangerSummary, confirm_dangerous
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 
 
@@ -112,32 +113,57 @@ class OperationsPage(QtWidgets.QWidget):
             err_item.setToolTip(it.error or "")
             self.item_table.setItem(r, 5, err_item)
 
-    def _undo_operation(self) -> None:
-        """整批撤销**还没实现**，这里只报"没动盘"，不演一遍成功。
-
-        按 **D-043** 定案，撤销落成一条**新批次**（`kind='undo'`、`undo_of=原批次`）：
-        只收 `reversible=1` 的项，被排除的条数与原因必须显示，完成后给出 **G18** 的
-        四件读数（源存在 / 字节数一致 / sha256 一致 / 目标已消失）。这套执行器与读数都
-        还没有，实现挂账见 **ISSUES I55**。
-
-        文案为什么不能留成原来那句「这将创建一个反向操作批次」：它承诺的是磁盘动作，
-        而点完「是」之后什么也没发生 —— 用户会以为已经搬回去了。这一类"文案说了、
-        代码没做"由 `test_撤销入口的文案不许承诺磁盘动作` 钉住。
-        """
+    def _selected_op_id(self) -> int | None:
         row = self.op_table.currentRow()
         if row < 0:
+            return None
+        item = self.op_table.item(row, 0)
+        return None if item is None else item.data(QtCore.Qt.ItemDataRole.UserRole)
+
+    def _undo_operation(self) -> None:
+        """整批撤销：另开一条 `kind='undo'`、`undo_of=本批` 的反向批次（**D-043** 甲）。
+
+        确认之前先把 `ArchiveService.plan_undo()` 的账摆出来 —— 能撤几条、排除几条、
+        每条为什么。§S4 那条硬约束是"排除的**条数与原因必须显示**，不许只显示撤销成功"，
+        所以原因原文进确认框，不汇总成一句。含"被标记为不可逆"的那几条时，
+        **D-042** 丙 的分级控件自动切到输入确认词那一档（与 S3 同一个控件、同一条形状）。
+
+        批次如何搬、journal 怎么写、撤销跑完之后原批次转 `undone` —— 全在后台执行器里，
+        本屏只负责"算账给人看"和"提交"。
+        """
+        op_id = self._selected_op_id()
+        if op_id is None:
             QtWidgets.QMessageBox.information(self, "撤销", "请先选择一个操作批次")
             return
-        item = self.op_table.item(row, 0)
-        if not item:
+        try:
+            plan = self.ctx.archive.plan_undo(op_id)
+        except ValueError as exc:          # 批次不存在 / 它本身就是撤销批次：原文回显
+            QtWidgets.QMessageBox.warning(self, "撤销", str(exc))
             return
-        op_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        op = self.ctx.operations.get_operation(op_id)
-        if not op:
+        if not plan.moves:
+            detail = "\n".join(f"· {reason}" for reason in plan.excluded)
+            QtWidgets.QMessageBox.information(
+                self, "撤销",
+                f"批次 #{op_id} 没有可撤销的项。\n{detail}" if detail else
+                f"批次 #{op_id} 没有可撤销的项：这一批一项都没搬成。")
             return
+
+        lines = tuple(plan.excluded)
+        if lines:
+            lines = (f"排除 {len(lines)} 项，原因逐条：",) + lines
+        if not confirm_dangerous(
+                self, title=f"确认撤销批次 #{op_id}", verb="撤销",
+                summary=DangerSummary(
+                    will_run=len(plan.moves),
+                    same_disk=sum(1 for m in plan.moves if m.kind == "move"),
+                    cross_disk=sum(1 for m in plan.moves if m.kind == "copy"),
+                    irreversible=plan.irreversible,
+                    lines=tuple(x for x in lines if x))):
+            return
+
+        op, excluded, _reasons = self.ctx.archive.submit_undo(op_id)
+        self.reload()
         QtWidgets.QMessageBox.information(
-            self, "撤销还没实现",
-            f"操作批次 #{op_id} 没有被改动，磁盘上的文件一个都没动。\n\n"
-            "整批撤销还没做好。做好之后它会另开一条反向批次：只撤销可逆的项，"
-            "不可逆的项会列出条数和原因，完成后逐项给出四项对账读数"
-            "（源文件存在、字节数一致、内容哈希一致、原目标已消失）。")
+            self, "已提交撤销",
+            f"已提交撤销批次 #{op.id}（撤销 #{op_id}）｜共 {op.items_total} 项｜排除 {excluded} 项\n"
+            "反向批次排在后台队列里跑；进度、journal 态与失败原因在本屏刷新后逐项可见。")

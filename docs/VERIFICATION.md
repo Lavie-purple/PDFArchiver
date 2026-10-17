@@ -830,7 +830,9 @@ OPEN 五条 = `I5` `I16` `I17` `I51` `I66`：前三条要真机配合，后两�
 **同轮文档改动**：`README.md`（能力表两行 + 「怎么开始用」第 3 步）、`docs/USAGE.md`（§一 扫描行与 OCR 行、
 §三 S7 行、§四 整节重写：界面按钮在前、命令行作为批量路子保留，那段逐字实测块与 Python 代码原样不动）、
 `docs/BACKUP-RESTORE.md`（§五 第 3 步、§七 搬家）、`docs/TROUBLESHOOTING.md`（§三 那行、
-§十四 问题表把 I66 换成 I67）。
+问题表把 I66 换成 I67）。⚠️ 这一句原本写的是「§十四 问题表」，而那份文档最大的节号是 §十一 ——
+**指针当时就是空的**（与 **ISSUES I34** 同一类毛病：文档里的证据指针从没被机器核对过）；
+2026-10-17 归档轮插入新的 §十「跑过归档之后」后问题表顺延为 **§十二**，此处按现号改正。
 
 **全量回归（本轮改动之后）**：`.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider`
 → **`482 passed, 4 skipped in 153.99s`**（上一块是 471 passed / 1 failed / 4 skipped，净增 10 条 =
@@ -849,6 +851,93 @@ OPEN 五条 = `I5` `I16` `I17` `I51` `I66`：前三条要真机配合，后两�
 **残留（不销账）**：① 没有真桌面人工点过一遍（offscreen 验的是库状态与监听名单，不是选择器在真人
 面前的手感）⇒ 挂 **ISSUES I17**；② 台账里原候选「丙：列表补『停用』控件」没做 —— 那是新控件，
 受线框确认门约束；③ G1 的空载读数仍未拿到（见上）。
+
+---
+
+### 4.19 勾选轮（五）· A2/A3/A4 归档链路真接上磁盘（2026-10-17，销账 **ISSUES I55 / I68**、新开 **I69 / I70**）
+
+**测的是什么**：S3「执行归档」与 S4「整批撤销」按下之后**真的改动磁盘**，
+以及这一轮顺手给"文档里的引用"装上的机器门禁。全部磁盘证据来自临时目录里的真文件
+（AGENTS.md 与 **ISSUES I64** 的禁令：真实语料 `documents` 的 ids 1–3 是用户数据，不许当夹具）。
+
+**全量回归（本轮所有改动之后）**：`.venv/Scripts/python.exe -m pytest tests -q -p no:randomly -p no:cacheprovider`
+→ **`568 passed, 4 skipped in 131.95s`**。上一块（§4.18）是 `482 passed, 4 skipped in 153.99s`，
+**净增 86 条**，逐条对得上（按 `def test_` 现数）：
+`test_archive_disk_safety.py` 4 → **41**（+37，G17/G18/G19 与批次↔任务联动都在这份里）、
+`test_archive_execute_ui.py` **15**（新）、`test_archive_template.py` **26**（新）、
+`test_confirm_control.py` **5**（新）、`test_doc_pointers.py` **4**（新）、
+`test_status_readout.py` 9 → **8**（−1，删掉的那条前提本轮翻转了 —— 「按钮还没接线」这件事不再成立，
+留痕记在 **ISSUES I70**）。守卫目录单独跑：`tests/guards` **26 passed in 24.48s**。
+文档改动之后**又复跑一次全量**：`568 passed, 4 skipped in 125.34s` —— 两次尾行一致，
+证明上面那 86 条的增量不是"文档改完才凑绿的"。
+
+**阶段 4 门禁当场复跑（`gates/stage4.py`，八条判定全 PASS，末行 `VERDICT: ALL GREEN`）**：
+`G21 依赖守卫 ALL GREEN`｜`架构守卫 ALL GREEN`（依赖方向 / SQL 位置 / 无静默吞异常 / 无本机路径字面量 / 导航分组）｜
+`G1 冷启动 0.856s ≤ 1.5s [约定]｜进程总耗时 1.447s｜关窗对账 1 条`｜
+`阶段 4 服务模块存在 OK`｜`bootstrap 注册 OK｜archive=True dedup=True backup=True｜archive_kind=True dedup_kind=True`｜
+`G2 检索功能正确性 27 passed / 0 failed / 0 error`｜`全量回归 568 passed / 0 failed / 0 error`｜
+`反向注入探针 46/46 条坏法被抓到`。
+⚠️ 这一场的 G1 是**绿**的，但**负载口径不变**：单次读数不等于空载达标（§4.17／§4.18 那条红灯的成因仍是
+**ISSUES I25**），所以这里只写"这次跑绿了"，不写"首屏达标了"。
+
+**坏法注入 · 界面与磁盘链路（`tests/probes/p15_archive_ui_injection.py`，一次性探针本轮转正进仓）**：
+**共 36 条坏法：抓住 36、漏网 0、点名存疑 0**。判据是「红 **且** `FAILED` 行点名到该杀的那条测试」，
+只红不点名不算数。覆盖 C1–C11（确认控件本体）、A1–A13（S3 四道闸与预览/执行同源）、
+O1–O8（S4 撤销）、S1（台账 `undone`）、P1–P3（状态页磁盘口径与未接线栏）。
+末五条现读：`O7 拒绝原因被界面重述成一句`、`O8 取消撤销之后照样提交`、`S1 部分撤销也标 undone`、
+`P1 磁盘口径写两遍`、`P2 空说明仍然占一行`、`P3 未接线句子改成手抄`。
+
+**这轮抓出一条自己的假绿（本轮最有价值的一条）**：
+`test_没看过计划就不许建批次` 原先的判据是"弹窗文本含『生成预览』"，
+而「请先点生成预览」与「计划已经变了」**两句都含这四个字** —— 把第一道闸整个删掉照样骗过去；
+并且该测试没建目标根，它当时的红其实来自一句不相干的 `ValueError`。
+补 `mkdir` + 断言点名"没看过计划"之后，A4 注入才确定性点名第一道闸。
+与 **ISSUES I66** 那条「行级邻接 ≠ 语义邻接」同族：**判据能被另一句话满足，它就还不是判据**。
+
+**新增守卫 · 文档里的引用也是断言（`tests/guards/test_doc_pointers.py`，4 条）**：
+四类指针机器核对 —— 决策编号、台账行号、`某文档 §n` 节号、**活文档**里引用的 `test_*` 函数名；
+只增不改的台账类文档（CHANGELOG / DECISIONS / ISSUES / VERIFICATION / REPO-JOURNAL / stage-reports）
+在第四类上**豁免**（不返工改历史），旧名逐条记在 **ISSUES I70**。
+现读（`python tests/guards/test_doc_pointers.py`）：
+
+```
+扫了 25 份 md、55 条决策编号、70 条台账编号、537 个测试函数
+台账类文档里今天已不存在的测试名（不判红，逐条记在 ISSUES I70）：6 处
+  docs/CHANGELOG.md:252 test_progress_state_vocabulary
+  docs/CHANGELOG.md:444 test_阶段1刻意不建的表确实不存在
+  docs/DECISIONS.md:202 test_阶段1刻意不建的表确实不存在
+  docs/DECISIONS.md:722 test_阶段1刻意不建的表确实不存在
+  docs/DECISIONS.md:975 test_没接上执行器的按钮不许伪装成功
+  docs/ISSUES.md:55   test_阶段1刻意不建的表确实不存在
+VERDICT: ALL GREEN
+```
+
+**上架当场改掉的活文档坏指针**（每条都可 grep 复验）：
+`docs/DATABASE.md` / `docs/TESTING.md` / `docs/UI-WIREFRAMES.md` 引的
+`test_阶段1刻意不建的表确实不存在`（迁移 0002 建了 `content_fts` 之后这条测试就不在场了）→
+改指 `test_documentation_matches_actual_schema` 并写明原因；
+`docs/ARCHITECTURE.md` / `docs/DECISIONS.md` / `docs/OCR.md` / `docs/stage-reports/` 里四个改过名的旧测试名换成现名；
+**ISSUES I51** 的虚拟化口径从 **D-017**（那是「阅读器渲染以 PyMuPDF 为主」）改到 **D-040**；
+**ISSUES I66 / I57** 里 `TROUBLESHOOTING.md` 的问题表节号按现号 **§十二** 改正。
+
+**这条守卫自己被证伪（`tests/probes/p16_doc_pointers_injection.py`）**：
+`基线 4 条全绿` + `共 5 条（4 条坏法 + 1 条反向对照）：抓住 4、漏网 0、点名存疑 0、对照破 0、锚点失配 0`
+—— P1–P4 各红且点名到各自那条断言，P5 是**反向对照**（台账里写旧名必须仍绿，证明豁免边界真的在事）。
+第一版按引用形状（`D-` 那类前缀）筛问题，注入一条**不存在的编号**就漏过去了，改成按**报错句子里的固定短语**分派。
+
+**台账现数**：`docs/ISSUES.md` **71 行**、I1–I71 连续不重号，
+**CLOSED 45｜MITIGATED 17｜OPEN 8｜WONTFIX 1**。OPEN 那 8 条 =
+**I5**（改名自愈压测）/ **I16**（组合内存压测）/ **I17**（真桌面首屏）/ **I51**（表格虚拟化）/
+**I67**（OCR 界面入口）/ **I69**（确认词那一档今天走不到 + `irreversible` 两个口径）/
+**I70**（活文档必须当场可验的规则本身）/ **I71**（三份台账距 1,200 行线的余量只够两轮，
+本轮实测 `DECISIONS 1,045｜VERIFICATION 1,019｜CHANGELOG 1,013`，切册是一次独立的文档动作）。
+
+**没测到的（不许混在上面那些绿里）**：
+① **真实语料（10,977 份）到今天一次归档都没跑过** —— G4／G17／G18／G19 的**性能与耗时**档位仍无真机读数；
+② `DB 事务回滚 ≠ 磁盘回滚` 那条**专门的断言还欠着**（现在只有两条各验一半的：
+journal 恢复矩阵 + 跨盘不先删源），`docs/ROADMAP.md` 阶段 4 那张表里这行仍是 ⚠️；
+③ 全量哈希 ≤1h 的 **G4** 未测；④ `I5`／`I16`／`I17` 三条要真机配合（§4.18 那个 G1 负载缺口同样还没补上）；
+⑤ **I69** 让"输入确认词"那一档在产品里**今天走不到**，两页的「不可逆」还是两个口径。
 
 ---
 

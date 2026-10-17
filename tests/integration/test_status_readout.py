@@ -144,87 +144,24 @@ def test_状态读数里的缺什么只许来自两个列表(window, ctx, qapp) 
             "缺什么只许从 nav 注册表或 status_page.UNWIRED_ACTIONS 里出来 —— "
             "散文没有来源，代码一改它就悄悄变成假话")
 
-    assert text.count("移动、改名或删除") == 1, (
-        "磁盘口径出现了不止一份。SPEC 阶段 4 之后这一句是真会变的（归档一接线就得改），"
-        "两处就有了第二个口径（AGENTS.md「禁止核心概念有多个口径」）")
+    assert text.count("会真的移动你磁盘上的文件") == 1, (
+        "磁盘口径出现了不止一份。这一句跟着执行器的接线**一定会变**（2026-10-17 随 A2/A4 "
+        "已经改过一遍：从「不会动盘」改成「会真的移动」），两处就有了第二个口径"
+        "（AGENTS.md「禁止核心概念有多个口径」）")
 
 
-# 这两个按钮的共同点：按下之后**本该动磁盘**。现在执行器没接上，所以它们必须只报
-# 「什么都没变」；报「已提交 / 撤销成功」就是把没做的事说成做完了
-# （AGENTS.md「禁止能力不足时伪装成功」）。
+# —— 未接线说明的形状（**ISSUES I55** 乙）————————————————————————————
+# 「屏在、动作没接到后端」那一档现在只剩 OCR 一条 ——「S3 执行归档」「S3 命名模板」
+# 「S4 整批撤销」随 A2/A3/A4 接线销账。所以这里钉的不再是那两句话的**内容**，
+# 而是**说明与唯一来源同生同灭**这个机制：来源清空 ⇒ 屏上那句必须跟着消失；
+# 来源加一条 ⇒ 屏上那句必须一字不差地长出来。手抄的句子在这个机制下活不过一次改动。
 FAKE_OUTCOME_CLAIMS = ("已提交", "提交到归档队列", "已开始", "已创建", "将创建",
                        "已撤销", "撤销成功", "已移动", "已搬")
 
 
-def test_没接上执行器的按钮不许伪装成功(window, ctx, qapp, monkeypatch, tmp_path) -> None:
-    from PySide6.QtWidgets import QMessageBox
-
-    from pdfarchiver.db.models import Document
-
-    shown: list[str] = []
-    monkeypatch.setattr(QMessageBox, "information",
-                        staticmethod(lambda parent, title, text, *a, **k: shown.append(text)))
-    monkeypatch.setattr(QMessageBox, "warning",
-                        staticmethod(lambda parent, title, text, *a, **k: shown.append(text)))
-
-    # 撤销要有批次可选，而这条批次必须在**取基线之前**建好 —— 它是对照的起点，
-    # 不是被测动作的产物；建晚了就只能拿"+1"当预期，测的就不是"没动盘"了。
-    ctx.operations.create_operation("archive")
-    ops_before = len(ctx.operations.list_operations(limit=200))
-    jobs_before = ctx.jobs.count()
-
-    # S3 执行归档：灌一份文档、勾上、给目标根，然后真的点按钮
-    path = str(tmp_path / "待归档.pdf")
-    ctx.documents.upsert(Document(
-        path=path, path_key=path.casefold(), name="待归档.pdf", size_bytes=1024,
-        mtime_ns=1_760_000_000_000_000_000, sha256=f"{1:064x}",
-        text_status="done", fts_status="done"))
-    window._select_by_page_id("archive")
-    _settle(qapp)
-    page = window._pages["archive"]
-    page._load_documents()
-    page.doc_table.item(0, 0).setCheckState(QtCore.Qt.CheckState.Checked)
-    page.target_root_input.setText(str(tmp_path / "归档库"))
-    page.execute_btn.click()
-
-    # S4 整批撤销：选中上面那条批次，点撤销
-    window._select_by_page_id("operations")
-    _settle(qapp)
-    ops_page = window._pages["operations"]
-    ops_page.reload()
-    assert ops_page.op_table.rowCount() >= 1, "撤销那屏列不出批次，测试前提坏了"
-    ops_page.op_table.setCurrentCell(0, 0)
-    ops_page.undo_btn.click()
-
-    assert len(shown) == 2, f"两个按钮各该报一次，实际报了 {len(shown)} 次：{shown}"
-    for text in shown:
-        assert not any(w in text for w in FAKE_OUTCOME_CLAIMS), f"文案谎报了后果：{text!r}"
-        assert "磁盘" in text, f"没接上执行器的按钮必须明说磁盘上没动过：{text!r}"
-    assert len(ctx.operations.list_operations(limit=200)) == ops_before, (
-        "点过「执行归档」和「撤销」之后台账里多出了批次 —— 界面在背地里建批次了")
-    assert ctx.jobs.count() == jobs_before, (
-        "点过之后队列里冒出了任务，可文案说的是「还没接上」 —— 读数与行为对不上")
-
-
-def test_S3_上未接线的那两条只许来自那一份列表(window, ctx, qapp, monkeypatch) -> None:
-    """**ISSUES I55** 乙（2026-10-17，用户「勾选的清单 均听你推荐」）要的形状：**可以挂账，
-    但事实必须显示在控件旁边**。
-
-    「命名模板」那一栏改了什么都不变，而屏幕上一点看不出来 —— 用户会以为自己已经分好了目录，
-    这比"按钮按下去没反应"更阴（I55 原文就是这么记的）。所以这条钉四件事：
-    ① S3 上有一条**在场且可见**的说明，同时点名「执行归档」与「命名模板」；
-    ② 那句话是**从 `status_page.UNWIRED_ACTIONS` 拼出来的**，不是界面手抄的一句道歉 ——
-       硬证明是把来源里那条撤掉再重开一屏，屏上那句必须跟着消失（手抄的会当场留在原地，
-       而留在原地的那句从此没有来源，代码一改就变成假话，与上面那条守卫盯的是同一条规则）；
-    ③ 说明里不许出现承诺后果的词（`FAKE_OUTCOME_CLAIMS`）；
-    ④ 不许把磁盘口径那句再抄一份到 S3（`DISK_EFFECT_LINE` 全站只许一处）。
-
-    **断言顺序是设计的一部分，别顺手重排**：坏法注入实测（2026-10-17，
-    `.probe_work/i55_guard_injection.py`，台账要求「红**且点名**」）里，① ② ③ ④ 各被一条独立
-    坏法打到自己的那句消息上；把同源比对挪到最前面之后，「抄了半句磁盘口径」与「承诺后果」两种坏法
-    都会先撞在②上、从而**验不到 ③ ④ 自己**。台账里还留着一课：第一轮有一条坏法写成
-    `setText(...) + "…"`，`NoneType + str` 当场抛错被 Qt 吞在 `_make_page` 里，测试红在
-    `KeyError: 'archive'` —— 红的是坏法自己坏了，不是守卫有效。
+def test_S3_的未接线说明只许与来源同生同灭(window, ctx, qapp, monkeypatch) -> None:
+    """**ISSUES I55** 乙（用户「勾选的清单 均听你推荐」）要的形状：可以挂账，但事实必须显示在控件旁边；
+    而**账销了，那句道歉也必须一起消失** —— 留在原地的那句从此没有来源。
     """
     from pdfarchiver.ui.pages import status_page
     from pdfarchiver.ui.pages.archive_page import ArchivePage
@@ -232,20 +169,20 @@ def test_S3_上未接线的那两条只许来自那一份列表(window, ctx, qap
     window._select_by_page_id("archive")
     _settle(qapp)
     page = window._pages["archive"]
-    text = page.unwired_label.text()
 
-    assert page.unwired_label.isVisibleTo(page), "说明挂在屏上但不可见 = 等于没有"
-    assert "命名模板" in text and "不会照着改名" in text, f"断链的那一栏必须自己说清楚：{text!r}"
-    assert "执行归档" in text, f"同一个屏上还有第二条断链，不能只说一半：{text!r}"
-    assert not any(w in text for w in FAKE_OUTCOME_CLAIMS), f"未接线说明里承诺了后果：{text!r}"
-    # 查的是那句话的**语义核心**而不是整条常量：整条比对会放过"抄半句"这种最常见的复写
-    assert "移动、改名或删除" not in text, "磁盘口径那句话只许在 DISK_EFFECT_LINE 一份"
-    assert text == "本轮未接线：" + "；".join(status_page.unwired_lines("S3")), (
-        "S3 那句不是从唯一来源拼出来的")
+    assert status_page.unwired_lines("S3") == [], (
+        "这条守卫测的是「来源已清空」那一侧；S3 又挂了新账就别套用它")
+    assert page.unwired_label.text() == "", "S3 的账已经销完，屏上那句道歉还留着"
+    assert not page.unwired_label.isVisibleTo(page), "空说明还占着一行，用户会以为还能展开"
 
+    # 另一侧：来源里挂上两条 S3 的账，重开一屏必须原样拼出来（顺序、分隔符、去掉屏名前缀）
     monkeypatch.setattr(status_page, "UNWIRED_ACTIONS", tuple(
-        a for a in status_page.UNWIRED_ACTIONS if not a.startswith("S3 命名模板")))
+        status_page.UNWIRED_ACTIONS
+        + ("S3 假账甲：这一栏改了什么都不变", "S3 假账乙：那个按钮没有后端")))
     fresh = ArchivePage(ctx)
-    assert "命名模板" not in fresh.unwired_label.text(), (
-        "撤掉来源里那条，屏上那句还留着 —— 它是手抄的，不是拼出来的")
-    assert "执行归档" in fresh.unwired_label.text(), "撤错条目了：撤的必须是模板那一条"
+    text = fresh.unwired_label.text()
+    assert fresh.unwired_label.isVisibleTo(fresh), "挂在屏上但不可见 = 等于没有"
+    assert text == "本轮未接线：假账甲：这一栏改了什么都不变；假账乙：那个按钮没有后端", (
+        f"屏上那句不是从唯一来源拼出来的：{text!r}")
+    assert not any(w in text for w in FAKE_OUTCOME_CLAIMS), f"未接线说明里承诺了后果：{text!r}"
+

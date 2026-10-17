@@ -92,7 +92,7 @@ AGENTS.md 的硬闸门在这里执行：**一屏一屏出方案 → 你逐屏确
   （`KINDS` 里有 `archive`，`claim()` 按已注册种类筛）—— `docs/ROADMAP.md` 阶段 4「开工前置」第 3 条**由可选变必修**。
 - 队列状态必须能**由批次反查**（`job_id ↔ file_operations`），否则"已提交 #128"这条回执后面就是黑洞 —— 新引出口径 **ISSUES I43**。
 - `docs/DATABASE.md` §2.2 把 `duplicate_groups` 当"首版表"列在其中，而 §2.3 与两条迁移注释
-  （`0001_initial.py:235`、`0002_text_and_fts.py:86`）明写**故意不建**，`test_阶段1刻意不建的表确实不存在` 反过来钉住了它不存在；
+  （`0001_initial.py:235`、`0002_text_and_fts.py:86`）明写**故意不建**，`test_documentation_matches_actual_schema（阶段 1 那条「不建的表」断言已随 0002 建出 `content_fts` 作废，现在表集合由它双向对账，缺表与多表都红）` 反过来钉住了它不存在；
   顺着这条查下去又抓到同一个文件里"首版几张表"**有 12 / 13 两个数说同一件事**。两处本轮都已改，
   并新增 `docs/DATABASE.md` §2.5 把表数口径定死（迁移文件的 `CREATE TABLE` 数 / 空库首启的 13 / 当前 `sqlite_master` 的 19）
   → **ISSUES I44**（与 **ISSUES I40** 同型：文档给了一张不存在的表、一个已经不成立的数）。

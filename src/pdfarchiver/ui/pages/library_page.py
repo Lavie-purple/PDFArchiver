@@ -31,6 +31,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_ts
+from pdfarchiver.ui.format import format_bytes as _format_size
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 from pdfarchiver.ui.tier import (LEFT_COLUMN_WIDTH, RIGHT_COLUMN_WIDTH,
                                  FloatablePanel, sync_tier)
@@ -49,17 +50,6 @@ def _tint(label: QtWidgets.QLabel, role: str) -> None:
 # 命中面板每一行挂的两样数据：跳转要用的 doc_id 与页码（`None` = 这一条没有页码）。
 _HIT_DOC_ROLE = QtCore.Qt.ItemDataRole.UserRole
 _HIT_PAGE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
-
-
-def _format_size(size_bytes: int) -> str:
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 def _mtime_text(doc) -> str:

@@ -19,9 +19,18 @@ def now_ts() -> int:
 # 所以它是**读数**不是判定；接线欠账挂在 **ISSUES I63**。
 VECTOR_STATUSES = ("na", "pending", "running", "done", "failed", "stale")
 
-# file_operations.status 与 operation_items.state 的合法取值（出处：operations.py 模块 docstring）。
-OP_STATUSES = ("planned", "running", "done", "failed")
-ITEM_STATES = ("pending", "copying", "done", "failed")
+# file_operations.status 的合法取值。口径唯一来源是 `docs/DATABASE.md` §二那张表
+# （7 态，早先这里只抄了 4 个，等于给同一件事留了两个口径）。
+# `previewed` 是「未确认绝不执行」那条硬规则的载体：只有它能被后台任务领走，
+# 领走的那一刻原子地改成 `running`（`repositories/operations.py` 的 `claim_previewed`）。
+OP_STATUSES = ("planned", "previewed", "running", "partially_done", "done", "failed", "undone")
+# operation_items.state 的合法取值 = 迁移 0005 里那条 CHECK，逐字一致。
+# journal 的七态（`pending→copying→…→done`）是 **JSONL 文件里**的状态机，不是这一列的取值，
+# 所以 `copying` 之流不许出现在这里 —— 出现了就会被 CHECK 拒掉（早先这里就写着它）。
+ITEM_STATES = ("pending", "done", "failed", "skipped")
+# operation_items.kind 的合法取值 = 0005 的另一条 CHECK。「改名」不是第三种 kind：
+# 模板换名后 src≠dst，它就是一次 `move`。
+ITEM_KINDS = ("move", "copy")
 
 
 @dataclass

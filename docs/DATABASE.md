@@ -106,7 +106,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `file_operations` | 操作批次 | `status` planned\|previewed\|running\|partially_done\|done\|failed\|undone；`journal_path` |
 | `operation_items` | 逐文件条目 | `src`/`dst`/`kind`(move\|rename\|copy)/`state` pending\|done\|failed\|skipped + `error` + `reversible` |
 | `processing_jobs` | 任务队列 | `kind` scan\|index\|ocr\|vector\|archive；`state` queued\|running\|paused\|done\|failed\|cancelled；`attempts`、`progress` |
-| `duplicate_groups` | 内容重复 —— **故意不建**（阶段 4 再定分组口径） | 设计意图是「按 `sha256` 分组；只报告不删除」，但**库里没有这张表**：`0001_initial.py:235` 与 `0002_text_and_fts.py:86` 两处注释明写不建，断言 `test_阶段1刻意不建的表确实不存在` 反向钉住。在此之前去重读取**只许** `GROUP BY sha256` 现算现查（走 `ix_documents_sha`，见 `docs/UI-WIREFRAMES.md` §S5）；要建它必须走**第 4 条迁移**（`VERSION = 4`），不许运行时 `ALTER` —— 出处 **ISSUES I44** |
+| `duplicate_groups` | 内容重复 —— **故意不建**（阶段 4 再定分组口径） | 设计意图是「按 `sha256` 分组；只报告不删除」，但**库里没有这张表**：`0001_initial.py:235` 与 `0002_text_and_fts.py:86` 两处注释明写不建，断言 `test_documentation_matches_actual_schema（阶段 1 那条「不建的表」断言已随 0002 建出 `content_fts` 作废，现在表集合由它双向对账，缺表与多表都红）` 反向钉住。在此之前去重读取**只许** `GROUP BY sha256` 现算现查（走 `ix_documents_sha`，见 `docs/UI-WIREFRAMES.md` §S5）；要建它必须走**第 4 条迁移**（`VERSION = 4`），不许运行时 `ALTER` —— 出处 **ISSUES I44** |
 | `app_settings` | **应用内部状态**（导航记忆、列宽、"默认模板已种过"标记） | key/value，value 存 JSON。**不存用户设置** —— 用户设置唯一口径是 `config/settings.json`（D-019）。坏 JSON 回落默认值但必须留 warning，不许静默 |
 | `vector_meta` | 语义向量的行映射（阶段 6，D-036） | `(doc_id,page_no)` **唯一**、`vector_idx` **唯一**、`ON DELETE CASCADE`；向量本体在 `data/vectors.npy`，库里只存**下标**。由迁移 **0007** 建（§2.6），`semantic/vector_store.py` **只验不建** |
 | `schema_version` | 迁移水位 | 单行；`version`、`applied_at` |
@@ -247,7 +247,7 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
    WAL 与外键设置在库里持久。反向注入 ISSUES I7（把回滚改成 `COMMIT`）确实让它变红。
 - **阶段 1 只有 `0001_initial`（它建 12 张表；空库首启实测 13 张，多出的那张是 `schema_version`，由 `db/migrate.py` 建）**。`text_pages` / `content_fts` / `duplicate_groups`
   是**有意没建**，不是遗漏：分词器（Q1）与索引体积策略（Q2）未答，duplicate 分组口径属阶段 4。
-  有断言反向钉住它们不存在（`test_阶段1刻意不建的表确实不存在`）。
+  有断言反向钉住它们不存在（`test_documentation_matches_actual_schema（阶段 1 那条「不建的表」断言已随 0002 建出 `content_fts` 作废，现在表集合由它双向对账，缺表与多表都红）`）。
   → 阶段 2 会以 **`0002`** 第一次真跑"带数据升级"，届时 `test_migrations.py` 里的合成 0002 要换成真实 0002 再验一次。
 
 ## 五 · 文件操作：预览 / 执行 / 日志 / 恢复 / 撤销

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_day
+from pdfarchiver.ui.format import format_bytes as _format_bytes
 from pdfarchiver.ui.table_layout import set_table_columns, CELL_PADDING_WIDTH
 
 log = logging.getLogger("pdfarchiver.ui.dedup")
@@ -232,14 +233,9 @@ class DedupPage(QWidget):
         excess_count = summary["excess_count"]
         reclaimable = summary["reclaimable_bytes"]
 
-        if reclaimable >= 1024 * 1024 * 1024:
-            reclaim_text = f"{reclaimable / 1024 / 1024 / 1024:.2f} GB"
-        else:
-            reclaim_text = f"{reclaimable / 1024 / 1024:.1f} MB"
-
         self.lbl_summary.setText(
             f"重复组：{group_count:,} 组｜多余副本：{excess_count:,} 份｜"
-            f"若清理可回收：{reclaim_text}")
+            f"若清理可回收：{_format_bytes(reclaimable)}")
 
         hardlink_groups = self.ctx.documents.count_hardlink_groups()
         if hardlink_groups > 0:
@@ -320,13 +316,3 @@ class DedupPage(QWidget):
             self, "判重已发起",
             f"判重任务已入队（ID {job.id}）。\n进度打在这一屏的进度块上。")
         self.reload_progress()  # 按钮改灰由 `_sync_start_button` 决定，不在这里另写一遍 enabled
-
-
-def _format_bytes(n: int) -> str:
-    if n >= 1024 * 1024 * 1024:
-        return f"{n / 1024 / 1024 / 1024:.2f} GB"
-    if n >= 1024 * 1024:
-        return f"{n / 1024 / 1024:.1f} MB"
-    if n >= 1024:
-        return f"{n / 1024:.1f} KB"
-    return f"{n} B"

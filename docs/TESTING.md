@@ -200,7 +200,7 @@ AGENTS.md 要求：每写完一条断言，先用"能骗过它的坏法"真注�
 | ISSUES I2 | 把 SQL 字符串写进 `services/` | 架构守卫 | `ArchitectureError` |
 | ISSUES I3 | `except Exception: pass` 咽掉故障 | 架构守卫 | `ArchitectureError` |
 | ISSUES I4 | 导航注册表塞重复 `page_id` | 架构守卫 | `ArchitectureError` |
-| ISSUES I5 | 阶段 1 就提前建 `content_fts` | `test_阶段1刻意不建的表确实不存在` | `assert not ({'content_fts',…} & …)` |
+| ISSUES I5 | 阶段 1 就提前建 `content_fts` | `test_documentation_matches_actual_schema（阶段 1 那条「不建的表」断言已随 0002 建出 `content_fts` 作废，现在表集合由它双向对账，缺表与多表都红）` | `assert not ({'content_fts',…} & …)` |
 | ISSUES I6 | 取消"没有快照目录就拒绝迁移"护栏 | `test_没有快照目录就拒绝迁移` | 没拿到预期的 `MigrationError` |
 | ISSUES I7 | 迁移失败时不回滚，直接 `COMMIT` | `test_迁移中途失败回到原样` | `半个迁移留下了表 —— 事务没兜住` |
 | ISSUES I8 | 重复扫描连 `parse_status` 一起覆盖 | `test_同一路径重复写只留一条且只刷新文件事实` | `重新扫描不能把索引状态冲掉` |

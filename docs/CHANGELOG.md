@@ -6,6 +6,78 @@
 
 ---
 
+## 勾选轮（五）—— 2026-10-17 · **不升版本号**，把 A2／A3／A4 三段"按下去真改磁盘"的链路接上，并给文档里的引用装上门禁
+
+用户指令仍是「还差哪些东西才能算完成整个项目做完 ABCD」。上一轮末尾明写的未做项里，
+**A2 执行归档 / A3 命名模板 / A4 整批撤销** 是同一条 `ArchiveService` 链路的三段，本轮一起落地，
+**ISSUES I55 从 MITIGATED 翻成 CLOSED**。这条链路一旦接上，界面上的「执行归档」「整批撤销」
+就**真的会改动用户磁盘** —— 所以 `README.md` 那句警告从"程序自己不会动"改成"会动，但必须先过预览与确认"，
+逐字读数见 `docs/VERIFICATION.md` §4.19。
+
+- **A2 · 真建批次**：`archive_page._execute_archive()` → `ArchiveService.submit()` 写
+  `file_operations(status='previewed')` + `operation_items` → 排一条 `kind='archive'` 的任务。
+  **四道闸**各有断言、各有坏法：没看过计划 / 预览后改了条件（重算 plan 比签名）/ 全部跳过 / 目标盘装不下 ——
+  前三道弹原文且**不建批次**，第四道让「执行」**直接禁用**（`docs/DATABASE.md` §五 末段：余量不足不是"再提醒一次"）。
+- **A3 · 模板预览与执行同源**：`validate_template()` + `render_relative()` 一处实现，
+  **预览与执行都经 `plan()` 走它**（同一函数、同一入参），S3 那栏改一个字就作废旧预览；
+  `preview_path_length()` 也不再自己拼路径。这是 **ISSUES I55** ③「三处断链」的收口 ——
+  模板从前被读进一个局部变量之后一次都没用，用户改了以为已经分好目录。
+- **A4 · 真撤销**：`ArchiveService.submit_undo(op_id)` 只对可逆项建 `kind='undo'` 并记 `undo_of=原批次`，
+  撤不回的项**排除并逐条给原因**（对面文件已不在 / 原位被新占 / 「撤销撤销批次」按原文拒绝），
+  整批撤完才把原批次标 `undone`（部分撤完不标，`test_部分撤销不许把原批次写成undone` 钉住）。
+  **G18 的四条同断**（源存在 / 字节一致 / sha256 一致 / 目标已消失）在 `test_撤销四项同时对上`，
+  `docs/BACKUP-RESTORE.md` §八 那句「G18 今天无法测」随之作废。
+- **分级确认控件**：新文件 `ui/confirm.py`，全站唯一危险操作控件形状（**D-042** 丙），S3 与 S4 共用。
+  `tests/integration/test_confirm_control.py` **5 条**把两档都真驱动过（复选框放行 / 逐字输入确认词 /
+  回车不替人做决定 / 首尾空白容忍 / 排除原因逐条不落一句）。⚠️ 但**产品里今天没有任何调用点能给出
+  `irreversible > 0`**，而 S3 的 irreversible 是界面自己 `os.path.exists(dst_path)` 现算、S4 的数仓储字段
+  —— **同一个概念两个口径**（AGENTS.md 禁止），新开 **ISSUES I69**（丙 口径归一 / 丁 让那一档真能到，等勾选）。
+- **同轮销掉一条从没跑过的死代码 · ISSUES I68**：`ArchiveService.handle` 的签名与队列契约不符
+  （`Handler = Callable[[Job, ProgressMonitor], None]`，`jobs/queue.py:140` 是全站唯一定义处，
+  scan / index / ocr / dedup 四条都合，**只有 archive 这条是错的**），任何被领到的 archive 任务**当场 TypeError**。
+  它活到今天的原因很干净：接线之前没有任何产品路径把 `kind='archive'` 排进队列（那正是 **ISSUES I55** ①），
+  所以这条 handler 从没被执行过、也没有测试走到过它。同类问题按**一次性规则**处理而不是逐个打补丁，
+  两个口径（甲 装配后反射核对每个 handler / 乙 测试里把 `KINDS` 每项空跑一次）等勾选；
+  本轮先交证据 —— `test_预览里的目标路径就是执行后磁盘上的路径` 是真 `claim_previewed` → handler → 搬文件 → 落库，
+  签名再错会当场红。
+- **文档里的引用从此是断言**：新增 `tests/guards/test_doc_pointers.py`（**4 条**），机器核对四类指针 ——
+  决策编号 `D-<n>`、台账行号 `ISSUES I<n>`、`某文档 §n` 节号、**活文档**里引用的 `test_*` 函数名。
+  起因是本轮自己写出来的两处坏指针：**ISSUES I51** 把虚拟化口径引到 **D-017**（那是「阅读器渲染以 PyMuPDF 为主」），
+  **ISSUES I66** 把问题表写成 `§十四` 而那份文档最大只到 §十一 —— 与 **ISSUES I34** 同一族：
+  文档里的证据指针从来没被机器核对过。上架当场查出并改账的活文档坏指针（**逐条可 grep**）：
+  ① `docs/DATABASE.md` / `docs/TESTING.md` / `docs/UI-WIREFRAMES.md` 里引用的
+  `test_阶段1刻意不建的表确实不存在`（0002 建了 `content_fts` 之后这条测试就没了）→ 改指
+  `test_documentation_matches_actual_schema` 并写明原因；② `docs/ARCHITECTURE.md` / `docs/DECISIONS.md` /
+  `docs/OCR.md` / `docs/stage-reports/` 里四个**改过名的旧测试名**换成现名。
+  **只增不改的台账**（CHANGELOG / DECISIONS / ISSUES / VERIFICATION / REPO-JOURNAL / stage-reports）**不返工改历史**，
+  旧名留在原地、规则与现数（6 处，逐条带 `文件:行号`）记进新账 **ISSUES I70**。
+  守卫自己先被坏法证伪过：`tests/probes/p16_doc_pointers_injection.py` 四类各注入一次（红且点名到各自那条断言）
+  + 一条**反向对照**（台账里写旧名必须仍绿）；第一版按引用形状（`D-` 那类前缀）筛问题，
+  于是注入一条**根本不存在的编号**就漏过去了，
+  改成按**报错句子里的固定短语**分派 —— 与 **ISSUES I66** 那条「行级邻接 ≠ 语义邻接」是同一课。
+- **一次性探针转正进仓**：`tests/probes/p15_archive_ui_injection.py`（258 行，任何人可复跑）跑 **36 条坏法**
+  覆盖 C1–C11 控件本体 / A1–A13 S3 四道闸与同源 / O1–O8 S4 撤销 / S1 台账 `undone` / P1–P3 状态页磁盘口径与未接线栏。
+  **这轮抓出一条自己的假绿**：`test_没看过计划就不许建批次` 原先断"弹窗文本含『生成预览』"，
+  而「请先点生成预览」与「计划已经变了」两句都含这四个字 —— 删掉第一道闸照样骗过去；且该测试没建目标根，
+  红其实来自一句不相干的 `ValueError`。补 `mkdir` + 断言点名"没看过计划"之后 A4 注入才确定性点名第一道闸。
+- **台账与路线图对账**：`docs/ISSUES.md` 现数 **71 行**（I1–I71 连续），
+  **CLOSED 45｜MITIGATED 17｜OPEN 8｜WONTFIX 1**；OPEN 里 **ISSUES I71** 是本轮新记的一条**余量账**：
+  台账三本实测 `DECISIONS 1,045｜VERIFICATION 1,019｜CHANGELOG 1,013`，而 `tests/guards/test_file_size.py`
+  给台账的线是 1,200 行、一轮的增量实测 +68～+130 ⇒ **两轮之内必然撞线**，切册按 R-010 的口径是一次独立的
+  全仓文档动作（会动成片节号指针），所以本轮**不切、不抬阈值**，只把余量记成可计数的账（甲/乙/丙等勾选，
+  丙=抬阈值属自降门禁、不推荐）。`docs/ROADMAP.md` 阶段 3 的 **G2 从「待真语料实测」改成 ✅ GREEN**（§4.16 的实测口径），阶段 4 的
+  G17／G18／G19 三行改成「✅ 行为已验 / ⚠️ 真语料未跑」两半 —— 不写成全绿；开工前置对账 #2/#4/#5 三条销账
+  （`archive_target_root` 已在 `DEFAULTS`、**I42** 用 `test_计划阶段跳过的项不进journal` 收口、
+  **I43** 用 `test_领批次那一刻写下job_id` 定死反查口径）。
+- **本轮还没做的（继续写清楚）**：**A5** OCR 界面入口只出线框、不写码（受线框确认门约束，**ISSUES I67**）；
+  **A6** 文档库表格虚拟化（**ISSUES I51**，8 万行档）；**B** 块真机与整链证据（**ISSUES I5 / I16 / I17**）；
+  **C** 块冻结产物与安装包/签名（本机无工具无证书，按三级降级如实标注未交付）；
+  **D** 块阶段 3/4/6 交付报告与「备份含 `settings.json`」。
+  **还有一句最大的老实话：真实语料（10,977 份）到今天一次归档都没跑过** —— 全部磁盘证据来自
+  临时目录里的真文件，第一次真跑要挑小目录（`docs/USAGE.md` §十）。
+
+---
+
 ## 勾选轮（四）—— 2026-10-17 · 把"界面上按下去不动"的那批死入口一个一个接上
 
 用户指令是「还差哪些东西才能算完成整个项目做完 ABCD」⇒ 按交付清单 A/B/C/D 逐块做。

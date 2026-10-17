@@ -91,8 +91,8 @@ class AppContext:
     """一次启动的全部运行时依赖。UI 只认这个对象，不自己拼路径、不自己开连接。
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
-    `patrol` 这几个字段（后四个是阶段 2 的服务入口）和 `background_state()`、`register_root()`、
-    `unregister_root()`；仓储对象是给服务层和测试用的，界面直取等于绕过依赖方向。
+    `patrol` / `archive` 这几个字段（`archive` 是阶段 4 的归档与撤销入口）和 `background_state()`、
+    `register_root()`、`unregister_root()`；仓储对象是给服务层和测试用的，界面直取等于绕过依赖方向。
     `queue` / `watch` / `events` 是**私有运行时**，
     界面要那三样的数字就走 `background_state()`，不许自己摸线程对象 —— 所以登记/移除监测根走上面
     那两个方法而不是 `ctx.roots` 加 `ctx.watch`：漏掉 `watch()` 的话新登记的根**从此只有周期校验
@@ -101,9 +101,6 @@ class AppContext:
     `ocr` 是阶段 5 的服务入口，**故意不在上面那份界面可用清单里**：OCR 的入口界面还没经线框确认
     （AGENTS.md），现在只有测试与门禁通过它排队。装配无条件进行、引擎惰性加载，
     没装可选层的应用照旧能扫描与全文检索。
-
-    `archive` 是阶段 4 的服务入口（归档执行），阶段 4 落地前调用即抛 `NotImplementedError`。
-    装配无条件进行，但阶段 4 前没有任何界面或后台会触发它。
 
     `watch` / `queue` 在 `start_background()` 之前是 None —— 阶段 1 的界面测试
     和"只看库"的调用方不该被起线程这件事拖住，也不该在没人要扫描时占着两个 worker。
@@ -281,7 +278,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
         log.info("OCR 层可用，版本指纹 %s（引擎与模型要到首次识别才加载）", ocr_engine.version_stamp)
     except OcrUnavailable as exc:  # 消息本身就是"缺哪个包、怎么装"，原样写进日志
         log.warning("OCR 层不可用，扫描与全文检索照旧：%s", exc)
-    archive = ArchiveService(operations, documents, paths)
+    archive = ArchiveService(operations, documents, paths, catalog, jobs)
     dedup = DedupService(documents, jobs)
     backup = BackupService(paths, engine)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
