@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pdfarchiver.db.engine import Engine, DatabaseError
 from pdfarchiver.db.models import Category, Tag, now_ts
+from pdfarchiver.db.repositories.documents import MAX_BULK_IDS
 
 
 class CatalogRepository:
@@ -251,6 +252,34 @@ class CatalogRepository:
             " FROM categories c JOIN document_categories d ON d.category_id=c.id"
             " WHERE d.doc_id=? ORDER BY c.name_path COLLATE NOCASE", (doc_id,)).fetchall()
         return [Category(**dict(r)) for r in rows]
+
+    def categories_by_doc_ids(self, doc_ids: list[int]) -> dict[int, list[Category]]:
+        """一批文档的分类，**一条**查询取回。
+
+        为什么要有这一条：文档表每一行都要显示「分类」，逐行调 `categories_of` 在 1,000
+        行档就是 1,000 条 SQL（**ISSUES I51** 修前实测 `per_row_categories_queries=1000`）。
+        排序与 `categories_of` 用同一个 `ORDER BY c.name_path COLLATE NOCASE`，只是多带一层
+        `doc_id`：同一份文档显示哪几个分类、按什么顺序显示，两处不可能各说各话。
+        没有分类的文档不出现在返回值里（调用方按"取不到就是空列表"读）。
+        """
+        unique = set(doc_ids)
+        if not unique:
+            return {}
+        if len(unique) > MAX_BULK_IDS:
+            raise ValueError(f"一次取 {len(unique)} 条超出 {MAX_BULK_IDS}；"
+                             "大批量请按条件分页取文档，不要把 ID 列表塞进参数")
+        marks = ",".join("?" * len(unique))
+        rows = self.engine.thread_connection().execute(
+            "SELECT d.doc_id AS doc_id,c.id,c.name,c.parent_id,c.name_path,c.note,"
+            "c.created_at,c.updated_at"
+            " FROM categories c JOIN document_categories d ON d.category_id=c.id"
+            f" WHERE d.doc_id IN ({marks}) ORDER BY d.doc_id, c.name_path COLLATE NOCASE",
+            sorted(unique)).fetchall()
+        grouped: dict[int, list[Category]] = {}
+        for r in rows:
+            item = dict(r)
+            grouped.setdefault(item.pop("doc_id"), []).append(Category(**item))
+        return grouped
 
     def docs_in_category(self, category_id: int, limit: int = 1000) -> list[int]:
         """返回某分类下的文档 ID 列表。"""

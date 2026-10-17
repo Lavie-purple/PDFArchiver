@@ -205,9 +205,26 @@ class SearchResult:
         通道口径、各通道取回的行数、截断 —— 且**没有任何界面自己算出来的数**。
         浅扫自报（**D-051**）也在这一行里：预算截停是真 happened，藏在报告里等于没说。
         """
+        if not self.criteria.text.strip():
+            return self._browse_line()
         return (f"{self.channel_label}｜符合筛选 {self.matching_documents} 份｜{self._counts_text}"
                 f"｜本页 {len(self.hits)} 行｜{self.took_ms}ms"
                 f"{self._truncation_text}{self._scan_text}")
+
+    def _browse_line(self) -> str:
+        """没输入查询词时那一行，**两个数都必须在场**（**ISSUES I51**）。
+
+        `共 N` 是 `count_matching` 数出来的符合筛选的全库数，`M 行` 是这一页为止表格里
+        已经取回的行数（`offset + 本页行数`，还是后端那两个字段，界面没算任何东西）。
+        修前这一行写的是 `f"共 {len(docs)} 份文档"`，而 `docs` 来自 `list(limit=1000)` ——
+        8,000 份的库里那行说「共 1000 份文档」，把"还有 7,000 份没在表格里"这件事报成了
+        "库只有 1000 份"（实测 `table_rows=1000 / db_total_documents=8000`）。
+        """
+        total = self.matching_documents
+        shown = self.criteria.offset + len(self.hits)
+        if shown >= total:
+            return f"共 {total} 份文档｜表格里 {shown} 行"
+        return f"共 {total} 份文档｜表格里已有 {shown} 行，滚动到底继续取下一批"
 
     def rows(self) -> list[str]:
         out: list[str] = []
@@ -229,12 +246,20 @@ class SearchService:
         self.metadata = metadata
         self.text = text
 
-    def search(self, criteria: Criteria) -> SearchResult:
+    def search(self, criteria: Criteria, *, known_total: int | None = None) -> SearchResult:
+        """把一条查询变成命中结果。
+
+        `known_total` 只给分页浏览的第二批及以后用：`matching_documents` 来自
+        `count_matching`，那是一句 `SELECT count(*) … WHERE missing_since IS NULL`，
+        而 `ix_documents_missing` 是**部分索引**（只收非 NULL 的行），数 NULL 用不上它 ⇒
+        每批都重数就是每批扫一遍全表，滚完整库 = O(库行数²)（AGENTS.md「禁止 O(n²)」）。
+        传进来的必须是同一次浏览会话第一批从 `count_matching` 拿到的那个数，不是界面算的数。
+        """
         criteria.validate()
         t0 = time.perf_counter()
         filters = criteria.doc_filter()
         needle = criteria.text.strip()
-        matching = self.documents.count_matching(filters)
+        matching = self.documents.count_matching(filters) if known_total is None else known_total
 
         if not needle:
             hits = self._browse(filters, criteria)
@@ -310,6 +335,22 @@ class SearchService:
     def search_text(self, query: str, limit: int = 100) -> SearchResult:
         """便捷入口：UI 不需要自己构造 Criteria。"""
         return self.search(Criteria(text=query, limit=limit))
+
+    def browse_documents(self, *, category_id: int | None = None, offset: int = 0,
+                         total: int | None = None) -> SearchResult:
+        """浏览库里那一列（没有查询词）—— 与 `search_text` 并列的便捷入口，同样不让 UI 自己造 Criteria。
+
+        分页单位是一批 `DEFAULT_PAGE_SIZE` 行（§S1 甲 线框那句「滚到底再取下一批 50 条」），
+        排序走 `SORTS["name"]` 这**一个**口径（`d.name COLLATE NOCASE, d.id`）：批与批之间
+        不重不漏要靠它，界面原来那句 Python 里的 `sort(key=name.casefold)` 是第二个口径。
+        `include_missing=True` 与修前的 `documents.list()` 同口径 —— 磁盘上已经不存在的文件
+        也是库里的一条记录，缺没缺是这一列要如实说的事实，不是"虚假的有效结果"（那一条管的是检索）。
+        `total` 是**第一批**返回的那个 `matching_documents`，第二批起带上它就不必每批重数全表
+        （见 `search()` 的 `known_total`）；库里在这期间增删了文档，下一次 `reload()` 会重新数。
+        """
+        return self.search(Criteria(
+            text="", category_ids=() if category_id is None else (category_id,),
+            sort="name", offset=offset, include_missing=True), known_total=total)
 
     def _browse(self, filters: DocFilter, criteria: Criteria) -> list[Hit]:
         sort = "name" if criteria.sort == "relevance" else criteria.sort

@@ -23,6 +23,10 @@
 行高必须统一（D-040 表里第一行的形状）：虚拟化要按 O(1) 做行号↔坐标换算，
 一旦变成"命中展开把行撑高"就得整表测高 —— 8 万行档就是 O(n²)，AGENTS.md 明令禁止。
 
+中栏那一列是**一批一批取**的（**ISSUES I51**）：每批 `DEFAULT_PAGE_SIZE` 行，滚到底补下一批，
+线框 §S1 甲 那一句「只渲染视口内 ~25 行；滚到底再取下一批 50 条」就是这一段的规格。
+批次大小不在本文件里定数 —— 它是检索层 `Criteria.limit` 的默认值，写两处就有第二个口径。
+
 数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`。
 """
 from __future__ import annotations
@@ -158,6 +162,9 @@ class LibraryPage(QtWidgets.QWidget):
         # 在全项目**零调用**，阅读器是一屏进不去的界面 —— 与 **ISSUES I55** 同一类"控件在场、
         # 链路不在场"，随本条一起接上）。
         self.doc_table.itemDoubleClicked.connect(self._on_doc_activated)
+        # 「滚到底再取下一批」（§S1 甲 线框里那一句）。挂滚动条的值上而不是别的：
+        # Qt 没有"滚到底"信号，而 `maximum - value ≤ 视口高` 是一次 O(1) 比较。
+        self.doc_table.verticalScrollBar().valueChanged.connect(self._on_scrolled)
         center_lay.addWidget(self.doc_table, 1)
 
         # 状态栏
@@ -232,6 +239,14 @@ class LibraryPage(QtWidgets.QWidget):
         self._selected_category_id: int | None = None
         self._current_docs: list = []
         self._selected_doc_id: int | None = None
+        # —— 浏览分页（**ISSUES I51**）——
+        # `_browse_active`：表里这一列是不是"浏览库"来的。是 → 滚动到底补一批；
+        #   否 → 表里是查询命中（有上限），滚动到底什么都不该再加。
+        # `_browse_exhausted`：已经取到库尾。没有它就得靠"已取行数 ≥ 总数"判尾，
+        #   而第一批还没取时总数是 0，那条判据会把第一批直接拦掉。
+        self._browse_active = False
+        self._browse_exhausted = False
+        self._browse_total = 0
         self._reload_categories()
         self._load_all_documents()
 
@@ -278,25 +293,79 @@ class LibraryPage(QtWidgets.QWidget):
 
     def _filter_by_category(self, category_id: int) -> None:
         """宽档点树、窄档点浮层里的树，都收敛到这一个入口 —— 两档共用同一筛选口径。"""
-        self._selected_category_id = category_id
         self._load_documents_by_category(category_id)
 
     def _load_all_documents(self) -> None:
         self._selected_category_id = None
-        docs = self.ctx.documents.list(limit=1000)
-        self._current_docs = docs
-        self._populate_table(docs)
         # 浏览模式没有"当前查询"，右栏就不该留着上一次查询的命中（挂着是过期读数）。
+        self._start_browse()
         self._clear_hits()
 
     def _load_documents_by_category(self, category_id: int) -> None:
-        doc_ids = self.ctx.catalog.docs_in_category(category_id)
-        by_id = self.ctx.documents.by_ids(doc_ids)
-        docs = [by_id[did] for did in doc_ids if did in by_id]
-        docs.sort(key=lambda d: d.name.casefold())
-        self._current_docs = docs
-        self._populate_table(docs)
+        self._selected_category_id = category_id
+        self._start_browse()
         self._clear_hits()   # 列表换成这一类的文档了，右栏留着上一次查询的命中就是过期读数
+
+    # ---- 浏览：一批一批取（**ISSUES I51**）------------------------------------
+
+    def _start_browse(self) -> None:
+        """把中栏切成"浏览库里这一列"：只先取第一批，剩下的等滚动。
+
+        修前这里是 `documents.list(limit=1000)` 一次灌满再逐行取分类：8,000 份的库实测
+        `table_rows=1000 / 看不见 7,000 份 / 逐行 SQL 1,000 条`，而状态栏那句
+        「共 1000 份文档」把"没显示"说成了"不存在"（×10 档 8 万份时看不见 79,000 份）。
+        """
+        self._browse_active = True
+        self._browse_exhausted = False
+        self._browse_total = 0
+        self._current_docs = []
+        self.doc_table.setRowCount(0)
+        self._load_more()
+        self._fill_viewport()
+
+    def _load_more(self) -> None:
+        """取下一批追加到表尾。取完了就是空操作 —— 不许到库尾再绕回头。"""
+        if not self._browse_active or self._browse_exhausted:
+            return
+        # `or None`：第一批还没数过（`_browse_total` 是 0），把 0 当"已知的数"递下去就等于
+        # 叫后端跳过 `count_matching`、然后状态栏说「共 0 份文档」。第二批起才带上第一批
+        # 那个读数 —— 每批重数一遍全表是 O(行数²)，见 `SearchService.search` 的 `known_total`。
+        result = self.ctx.search.browse_documents(
+            category_id=self._selected_category_id, offset=len(self._current_docs),
+            total=self._browse_total or None)
+        self._browse_total = result.matching_documents
+        docs = [hit.doc for hit in result.hits]
+        if not docs:
+            self._browse_exhausted = True
+        elif len(self._current_docs) + len(docs) >= self._browse_total:
+            self._browse_exhausted = True
+        self._append_rows(docs)
+        self.status_label.setText(result.status_line())
+
+    def _append_rows(self, docs: list) -> None:
+        if not docs:
+            return
+        start = len(self._current_docs)
+        self.doc_table.setRowCount(start + len(docs))
+        self._write_rows(start, docs)
+        self._current_docs += docs
+
+    def _fill_viewport(self) -> None:
+        """第一批顶不出滚动条时（视口比一批还高）永远不会有人滚 ⇒ 也就永远不会补，
+        所以这里主动补到"能滚"为止。行高统一（**D-040**）⇒ 一次乘法就够，不测每行。"""
+        while self._browse_active and not self._browse_exhausted \
+                and self._loaded_height() <= self.doc_table.viewport().height():
+            self._load_more()
+
+    def _loaded_height(self) -> int:
+        if not self._current_docs:
+            return 0
+        return self.doc_table.rowHeight(0) * len(self._current_docs)
+
+    def _on_scrolled(self, value: int) -> None:
+        bar = self.doc_table.verticalScrollBar()
+        if bar.maximum() - value <= self.doc_table.viewport().height():
+            self._load_more()
 
     def _do_search(self) -> None:
         query = self.search_input.text().strip()
@@ -459,8 +528,26 @@ class LibraryPage(QtWidgets.QWidget):
             self._load_all_documents()
 
     def _populate_table(self, docs: list[Document]) -> None:
+        """一次性灌一张**有上限**的命中表（关键词 ≤100 行 / 语义 ≤50 行，上限都在调用方那里）。
+
+        浏览库里那一列不走这里 —— 那条要一批一批取，见 `_start_browse`（**ISSUES I51**）。
+        命中表必须把浏览态关掉：不然用户在几十条命中上滚到底，表尾就会开始长出"与这次查询无关
+        的库里的行"，看着像命中，其实一条都没验过。
+        """
+        self._browse_active = False
+        self._browse_exhausted = True
+        self._current_docs = list(docs)
         self.doc_table.setRowCount(len(docs))
-        for row, doc in enumerate(docs):
+        self._write_rows(0, docs)
+
+    def _write_rows(self, start: int, docs: list[Document]) -> None:
+        """把一批文档写进表格的连续几行。
+
+        分类那一列是**一条查询取回整批**（`categories_by_doc_ids`），不是逐行取 ——
+        修前每行调一次 `categories_of`，1,000 行就是 1,000 条 SQL（**ISSUES I51** 实测）。
+        """
+        cats_by_doc = self.ctx.catalog.categories_by_doc_ids([doc.id for doc in docs])
+        for row, doc in enumerate(docs, start=start):
             # 文件名
             name_item = QtWidgets.QTableWidgetItem(doc.name)
             name_item.setData(QtCore.Qt.ItemDataRole.UserRole, doc.id)
@@ -481,14 +568,10 @@ class LibraryPage(QtWidgets.QWidget):
             # 分类（查询关联）：至多三个用户自定义名，长度没有上限（DDL 只对
             # (parent_id, name) 建唯一索引，不约束长度），所以按可截断列处理，
             # 与「路径」同一口径 —— 截断了必须能悬停读回全文。
-            cats = self._get_categories_for_doc(doc.id)
-            cat_str = ", ".join(c.name for c in cats[:3])
+            cat_str = ", ".join(c.name for c in cats_by_doc.get(doc.id, [])[:3])
             cat_item = QtWidgets.QTableWidgetItem(cat_str)
             cat_item.setToolTip(cat_str)
             self.doc_table.setItem(row, 4, cat_item)
-
-        if not self.search_input.text().strip():
-            self.status_label.setText(f"共 {len(docs)} 份文档")
 
     def _get_categories_for_doc(self, doc_id: int) -> list:
         return self.ctx.catalog.categories_of(doc_id)
