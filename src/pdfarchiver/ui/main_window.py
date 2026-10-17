@@ -37,7 +37,7 @@ MIN_WINDOW_HEIGHT = 720
 DEFAULT_WINDOW_WIDTH = 1280
 DEFAULT_WINDOW_HEIGHT = 800
 
-# 导航栏宽度。布局守卫（`tests/integration/test_app_shell.py`）拿它算"一屏还能用多宽"，
+# 导航栏宽度。布局守卫（`tests/integration/test_ui_layout.py`）拿它算"一屏还能用多宽"，
 # 所以它是外壳的口径，不是测试里写死的第二个数。侧栏不参与 D-040 的降级授权 ——
 # 宽度不足时牺牲的是 S1 的右栏，不是这里。
 NAV_WIDTH = 200
@@ -91,7 +91,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_theme()
         self.statusBar().showMessage(self._status_text())
 
+        # Ctrl+F = S1 搜索框的键盘入口（**ISSUES I53** ③甲，2026-10-17 定案，见 **D-052**）。
+        # 挂在外壳而不是页面里：焦点停在导航列表时按 Ctrl+F 也该有用，而
+        # `WidgetWithChildrenShortcut` 那种情况下根本不触发。判据只有一条「当前屏是 S1」——
+        # 不做跨屏跳转，那等于新增一条线框里没有、屏幕上也看不见的导航。
+        self.search_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.activated.connect(self._focus_library_search)
+
         self._select_by_page_id(ctx.session.last_nav_page() or NAV_ITEMS[0].page_id)
+
+    # ---- 跨页动作 ----
+
+    def _focus_library_search(self) -> None:
+        if isinstance(self.stack.currentWidget(), LibraryPage):
+            self.stack.currentWidget().focus_search()
+
+    def _open_in_reader(self, payload: tuple[int, int | None]) -> None:
+        """S1 的「跳到该页 → S2」与双击文档行都走这里（`page_no` 为 None = 从当前页开）。"""
+        doc_id, page_no = payload
+        self._select_by_page_id("reader")
+        self._pages["reader"].open_document(doc_id, page_no=page_no)
 
     # ---- 构建 ----
 
@@ -138,7 +157,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if item.page_id == "categories":
             return CategoriesPage(self.ctx)
         if item.page_id == "library":
-            return LibraryPage(self.ctx)
+            page = LibraryPage(self.ctx)
+            # 命中面板的「跳到该页」与表格双击都发这个信号；接收方在这里，页面不必知道外壳的存在。
+            page.open_in_reader.connect(self._open_in_reader)
+            return page
         if item.page_id == "reader":
             return ReaderPage(self.ctx)
         if item.page_id == "archive":

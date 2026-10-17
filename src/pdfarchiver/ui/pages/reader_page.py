@@ -77,8 +77,13 @@ class ReaderPage(QtWidgets.QWidget):
 
         self._zoom_level = 1.0
 
-    def open_document(self, doc_id: int) -> None:
-        """打开指定文档。"""
+    def open_document(self, doc_id: int, page_no: int | None = None) -> None:
+        """打开指定文档。`page_no` 是 S1 命中面板给的那一页（1 基，与 `text_pages.page_no` 同源）。
+
+        **越界不许"就近取整"**（§S2 的断言点写死了：「`page_no` 越界必须拒绝并显示原因」）：
+        库里记的页码与文件真实页数可以不一致（解析后被换过、OCR 只跑了一半），
+        静悄悄落到第 1 页就是让用户对着错的那一页确认自己找的东西。
+        """
         if not FITZ_AVAILABLE:
             return
 
@@ -95,8 +100,16 @@ class ReaderPage(QtWidgets.QWidget):
             if doc.last_read_page and 1 <= doc.last_read_page <= len(self._doc):
                 self._current_page = doc.last_read_page - 1
 
+            refused = ""
+            if page_no is not None:
+                if 1 <= page_no <= len(self._doc):
+                    self._current_page = page_no - 1
+                else:
+                    refused = (f"｜第 {page_no} 页不存在（这份共 {len(self._doc)} 页），"
+                               f"已停在第 {self._current_page + 1} 页")
             self._render_page()
-            self.status_label.setText(f"{doc.name} | {doc.page_count or len(self._doc)} 页")
+            self.status_label.setText(
+                f"{doc.name} | {doc.page_count or len(self._doc)} 页{refused}")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "打开 PDF 失败", str(exc))
 

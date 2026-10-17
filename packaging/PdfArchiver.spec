@@ -52,7 +52,7 @@ MIGRATION_FILES = sorted(
 )
 datas += [(os.path.join(_MIGRATIONS_SRC, _f), _MIGRATIONS_DEST) for _f in MIGRATION_FILES]
 
-# OCR 可选层：装了才收。没装就冻一个不含 OCR 的包，应用侧由 tests/integration/test_ocr_service.py
+# OCR 可选层：装了才收。没装就冻一个不含 OCR 的包，应用侧由 tests/integration/test_ocr_progress_and_budget.py
 # 那条子进程断言保证"起得来、并明确报不可用"。
 #
 # 元数据（.dist-info）与代码是两件事：`copy_metadata` 收的是**发行包名**，与 import 名可以不同

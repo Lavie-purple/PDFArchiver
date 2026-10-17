@@ -120,6 +120,9 @@ class DedupPage(QWidget):
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["浪费量", "SHA256（前8位）", "份数", "路径（悬停看全长）", "状态"])
         header = self.table.horizontalHeader()
+        # 这张表是全站唯一不经 `ui/table_layout.set_table_columns()` 的（表头按内容自适应），
+        # 所以行号列也得在这里单独关掉 —— 它没人要过，Qt 却会自己长出来吃掉 38~51px（ISSUES I54）。
+        self.table.verticalHeader().hide()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)

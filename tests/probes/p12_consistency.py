@@ -22,16 +22,16 @@
 十二条对账：
 
     C0  水位停在迁移目录里的最新版          C6  状态列取值都在口径内
-    C1  库自身健康（integrity / fk_check）   C7  向量状态仍全为 na（阶段 6 未落地的哨兵）
-    C2  路径唯一性与 path_key 口径           C8  文件操作两表仍为空（阶段 4 未落地的哨兵）
+    C1  库自身健康（integrity / fk_check）   C7  向量状态取值都在口径内（产品里没人推进它）
+    C2  路径唯一性与 path_key 口径           C8  文件操作状态取值都在口径内
     C3  盘上文件 ↔ 库里主记录 双向对账       C9  无进程时队列里不许有 running 残留
     C4  正文表 ↔ 索引花名册 双向对账       C10 分类树父链可达、无环、name_path 一致
                                           （倒排幽灵免词测不到，见 c4_fts 说明）
     C5  正文页自洽（字数/来源/OCR 版本）     C11 每份备份快照都真能打开并读出版本
     C12 正文页页码不超过库里记的页数
 
-C7/C8 是反伪装用的：阶段 4、6 还没落地，库里出现 `vector_status<>'na'` 或 `file_operations`
-有行，只可能是有代码绕过验收偷偷写了表。这两条在对应阶段真交付时要同步改成该阶段的口径。
+C7/C8 是反伪装用的：阶段 6 已交付（C7 换成真口径，见 `c7_vector_domain` 注释），阶段 4 已交付
+（C8 换成真口径，见 `c8_op_domain` 注释）。这两条在对应阶段真交付时同步改成了该阶段的口径。
 
 耗时提示：C3 要真走一遍目录树（真实语料 7,768 份/202 万页那次是分钟级），C11 对每份快照跑
 `integrity_check`（与库大小同量级）。想快就先 `--no-file-walk`，但那时它不算验过。
@@ -52,6 +52,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from pdfarchiver.config.paths import AppPaths  # noqa: E402
 from pdfarchiver.db.migrations import discover  # noqa: E402
+from pdfarchiver.db.models import VECTOR_STATUSES, OP_STATUSES, ITEM_STATES  # noqa: E402
 from pdfarchiver.db.repositories.documents import SEARCHABLE_STATUSES  # noqa: E402
 from pdfarchiver.db.repositories.jobs import KINDS, STATES  # noqa: E402
 from pdfarchiver.db.sqltext import like_prefix  # noqa: E402
@@ -70,7 +71,7 @@ REAL_MIGRATIONS = REPO / "src" / "pdfarchiver" / "db" / "migrations"
 TEXT_LEGAL = frozenset(TEXT_STATUSES) | {"pending"}
 PARSE_LEGAL = frozenset({"pending", "ok", "degraded", "failed"})
 OCR_LEGAL = frozenset(OCR_STATUSES)
-VECTOR_LEGAL = frozenset({"na"})   # 阶段 6 未落地：见 C7
+VECTOR_LEGAL = frozenset(VECTOR_STATUSES)   # 阶段 6 已交付，口径取 `db/models.VECTOR_STATUSES`
 DOCS_UNDER_ROOT_SQL = (
     "SELECT path_key, missing_since FROM documents WHERE path_key LIKE ? ESCAPE '\\'"
 )
@@ -283,19 +284,38 @@ def c6_status_domains(conn: sqlite3.Connection) -> Row:
                f"主记录 {total} 条｜" + ("；".join(bad) if bad else "主记录四个状态列 + 队列两列全部合法"))
 
 
-def c7_vector_na(conn: sqlite3.Connection) -> Row:
+def c7_vector_domain(conn: sqlite3.Connection) -> Row:
+    """阶段 6 的真口径：`vector_status` 取值必须在 `VECTOR_STATUSES` 内。
+
+    **谁推进它**：全仓 grep 确认没有任何产品代码推进 `vector_status`（只有 `Document` 默认值
+    `na` 落库），所以它是**读数**不是判定；非 `na` 只可能来自测试夹具或手工写入（**ISSUES I63**）。
+    """
     bad = _domain_problems(conn, "documents", "vector_status", VECTOR_LEGAL)
-    n = int(_scalar(conn, "SELECT count(*) FROM documents WHERE vector_status <> 'na'"))
-    return Row("C7", "向量状态仍全为 na（阶段 6 未落地，非 na 只可能是偷写）", not bad,
-               f"非 na 的行 {n} 条｜{bad[0] if bad else '没有一行越过 na —— 阶段 6 交付时这条要同步换成它的口径'}")
+    dist = {r[0]: r[1] for r in conn.execute(
+        "SELECT vector_status, count(*) FROM documents GROUP BY vector_status").fetchall()}
+    non_na = sum(n for v, n in dist.items() if v != "na")
+    return Row("C7", "向量状态取值都在口径内（产品里没有任何代码推进它，见 ISSUES I63）",
+               not bad,
+               f"非 na 的行 {non_na} 条｜分布 {dist or '空'}｜"
+               + (bad[0] if bad else "全部合法（产品里没人写它，所以恒为 na 或测试夹具值）"))
 
 
-def c8_no_file_ops(conn: sqlite3.Connection) -> Row:
-    ops = int(_scalar(conn, "SELECT count(*) FROM file_operations"))
-    items = int(_scalar(conn, "SELECT count(*) FROM operation_items"))
-    return Row("C8", "文件操作两张表仍为空（阶段 4 未落地，非空只可能是偷写）",
-               ops == 0 and items == 0,
-               f"file_operations {ops} 行｜operation_items {items} 行")
+def c8_op_domain(conn: sqlite3.Connection) -> Row:
+    bad: list[str] = []
+    op_dist = {r[0]: r[1] for r in conn.execute(
+        "SELECT status, count(*) FROM file_operations GROUP BY status")}
+    for v in op_dist:
+        if v not in OP_STATUSES:
+            bad.append(f"file_operations.status='{v}' 不在口径 {OP_STATUSES}")
+    item_dist = {r[0]: r[1] for r in conn.execute(
+        "SELECT state, count(*) FROM operation_items GROUP BY state")}
+    for v in item_dist:
+        if v not in ITEM_STATES:
+            bad.append(f"operation_items.state='{v}' 不在口径 {ITEM_STATES}")
+    return Row("C8", "文件操作状态取值都在口径内（阶段 4 已交付，口径出处：operations.py 模块 docstring）",
+               not bad,
+               f"file_operations 分布 {op_dist or '空'}｜operation_items 分布 {item_dist or '空'}｜"
+               + (bad[0] if bad else "全部合法"))
 
 
 def c9_queue(conn: sqlite3.Connection, alive: tuple[bool, str]) -> Row:
@@ -412,8 +432,8 @@ def run_checks(db: Path, data_root: Path, *, walk: bool,
     try:
         rows = [c0_version(conn), c1_health(conn), c2_path_keys(conn)]
         rows += c3_files_vs_db(conn, walk=walk)
-        rows += [c4_fts(conn), c5_pages(conn), c6_status_domains(conn), c7_vector_na(conn),
-                 c8_no_file_ops(conn), c9_queue(conn, alive), c10_tree(conn),
+        rows += [c4_fts(conn), c5_pages(conn), c6_status_domains(conn), c7_vector_domain(conn),
+                 c8_op_domain(conn), c9_queue(conn, alive), c10_tree(conn),
                  c11_backups(data_root), c12_page_range(conn)]
     finally:
         conn.close()
@@ -472,10 +492,10 @@ INJECTIONS: list[tuple[str, str, str]] = [
      "UPDATE documents SET text_status='no_text' WHERE id=1;"),
     ("C6", "队列 state 写成口径外的值",
      "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'in-flight', 1);"),
-    ("C7", "阶段 6 没落地却出现向量状态",
-     "UPDATE documents SET vector_status='done' WHERE id=1;"),
-    ("C8", "阶段 4 没落地却写了操作表",
-     "INSERT INTO file_operations(kind, status, created_at) VALUES('move', 'done', 1);"),
+    ("C7", "向量状态写成口径外的值（产品里没人推进它，非 na 只可能是测试夹具或手工写入）",
+     "UPDATE documents SET vector_status='vectorized' WHERE id=1;"),
+    ("C8", "file_operations.status 写成口径外的值",
+     "INSERT INTO file_operations(kind, status, created_at) VALUES('move', 'cancelled', 1);"),
     ("C9", "没有进程却留着一条 running",
      "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'running', 1);"),
     ("C10", "分类 name_path 与父链不一致",

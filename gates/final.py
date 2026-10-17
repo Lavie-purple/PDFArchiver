@@ -232,6 +232,15 @@ def segment_package() -> list[Row]:
                   [sys.executable, SMOKE])]
 
 
+G2_BENCH = "scripts/g2_search_benchmark.py"
+
+
+def segment_g2() -> list[Row]:
+    """G2 搜索 P95 真库实测（默认不进全链，需 --only g2 显式跑）。"""
+    return [_gate("G2 搜索 P95 真库实测（20 查询 × 5 reps，P95 ≤ 500ms）",
+                  [sys.executable, G2_BENCH])]
+
+
 SEGMENTS: dict[str, tuple[str, list[str]]] = {
     "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["~15s"]),
     "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["~50s"]),
@@ -242,6 +251,7 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     "consistency": ("p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场", ["~15s"]),
     "soak": ("p13 注入自检 + 真长跑采样", ["~330s @4 分钟"]),
     "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["~262s"]),
+    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["~30s"]),
 }
 DEFAULT_ORDER = ["guards", "regression", "coldstart", "e2e", "consistency"]
 
@@ -265,6 +275,8 @@ def build(name: str, args: argparse.Namespace) -> list[Row]:
         return segment_soak(args.soak_minutes)
     if name == "package":
         return segment_package()
+    if name == "g2":
+        return segment_g2()
     if name == "docs-inject":
         return [gate_docs_injection()]
     raise SystemExit(f"未知段 {name}")

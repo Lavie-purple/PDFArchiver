@@ -53,9 +53,11 @@ CREATE TABLE documents(
   id                INTEGER PRIMARY KEY,
   path              TEXT NOT NULL,              -- 规范化展示路径（realpath 结果，保留原大小写）
   path_key          TEXT NOT NULL COLLATE NOCASE,  -- 身份键 = path.casefold()
-  volume_id         TEXT,                       -- ⚠️ **死列**：0001 建了它，但全项目代码零读写，恒 NULL。
-                                              --   判"同盘/跨盘"用 0002 加的 `device_id`（`os.stat().st_dev`，盘符级）；
-                                              --   卷序列号这条路**没实现**，要用就先实现再改口径（ISSUES I40）
+  -- ⚠️ 本节画的是**首版设计**，不是当前形状。当前 `documents` 有 33 列（2026-10-17 现测），
+  --   与这里的差异全部列在下面两行注掉的名字 + §2.3/§2.4/§2.6 三节里：
+  --   `volume_id` 已由迁移 **0006** 删除（恒 NULL 的死列，判同盘用 0002 的 `device_id`，ISSUES I40）；
+  --   `pdf_version` 已由迁移 **0007** 删除（同样是死列：`parsing/pdf.py` 读出过值但从没写进库，ISSUES I62）。
+  --   列级的双向对账由 `tests/guards/test_schema_columns.py` 规则 A 钉：这里画一个库里没有的列就红。
   file_id           INTEGER,                    -- NTFS 文件 ID（os.stat().st_ino，实测可用）
   name              TEXT NOT NULL,
   ext               TEXT NOT NULL,
@@ -64,7 +66,6 @@ CREATE TABLE documents(
   ctime_ns          INTEGER,
   sha256            TEXT,                       -- 惰性计算：只有去重/校验/归档时才算
   page_count        INTEGER,
-  pdf_version       TEXT,
   is_pdf            INTEGER NOT NULL DEFAULT 1,
   is_encrypted      INTEGER NOT NULL DEFAULT 0,
   needs_pass        INTEGER NOT NULL DEFAULT 0,
@@ -107,6 +108,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `processing_jobs` | 任务队列 | `kind` scan\|index\|ocr\|vector\|archive；`state` queued\|running\|paused\|done\|failed\|cancelled；`attempts`、`progress` |
 | `duplicate_groups` | 内容重复 —— **故意不建**（阶段 4 再定分组口径） | 设计意图是「按 `sha256` 分组；只报告不删除」，但**库里没有这张表**：`0001_initial.py:235` 与 `0002_text_and_fts.py:86` 两处注释明写不建，断言 `test_阶段1刻意不建的表确实不存在` 反向钉住。在此之前去重读取**只许** `GROUP BY sha256` 现算现查（走 `ix_documents_sha`，见 `docs/UI-WIREFRAMES.md` §S5）；要建它必须走**第 4 条迁移**（`VERSION = 4`），不许运行时 `ALTER` —— 出处 **ISSUES I44** |
 | `app_settings` | **应用内部状态**（导航记忆、列宽、"默认模板已种过"标记） | key/value，value 存 JSON。**不存用户设置** —— 用户设置唯一口径是 `config/settings.json`（D-019）。坏 JSON 回落默认值但必须留 warning，不许静默 |
+| `vector_meta` | 语义向量的行映射（阶段 6，D-036） | `(doc_id,page_no)` **唯一**、`vector_idx` **唯一**、`ON DELETE CASCADE`；向量本体在 `data/vectors.npy`，库里只存**下标**。由迁移 **0007** 建（§2.6），`semantic/vector_store.py` **只验不建** |
 | `schema_version` | 迁移水位 | 单行；`version`、`applied_at` |
 
 ### 2.3 迁移 0002 实际落地的差异（以实现为准，不是设计稿）
@@ -155,19 +157,40 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 每日页预算的**已用页数**不进 `documents`，进 `app_settings`（内部状态，D-019/D-032）——
 它是"今天跑了多少"，不是"这份文档的财产"。
 
-### 2.5 表数只有一个口径（2026-10-15 补，ISSUES I44）
+### 2.5 表数只有一个口径（2026-10-15 补，ISSUES I44；2026-10-17 按 0007 重数，ISSUES I62）
 
 "现在有几张表"在文档里出现过 **12 / 13** 两个数说同一件事（`docs/ARCHITECTURE.md` 一 与 `docs/DATABASE.md` 四 曾写
 "`0001_initial` 13 张表"，而本节一 的存储布局写"0001 的 12 张表"），AGENTS.md 禁止核心概念多口径，所以定死：
 
 | 口径 | 数 | 怎么来的（可现跑复算，不许抄旧数） |
 | --- | --- | --- |
-| 迁移文件里的 `CREATE TABLE` | 0001 = **12**、0002 = **1**（`text_pages`）+ 1 张 FTS5 虚表 `content_fts`、0003 = **0** | `grep -c CREATE TABLE src/pdfarchiver/db/migrations/*.py` |
+| 迁移文件里的 `CREATE TABLE` | 0001 = **12**、0002 = **1**（`text_pages`）+ 1 张 FTS5 虚表 `content_fts`、0003 = **0**、0004–0006 = **0**、0007 = **1**（`vector_meta`） | `grep -c CREATE TABLE src/pdfarchiver/db/migrations/*.py` |
 | 空库首启后的"表" | 阶段 1 当时报的 **13** = 上面 12 张 + `schema_version` | `schema_version` 由 `db/migrate.py:20` 的 `SCHEMA_TABLE` 建，**不在任何迁移文件里** |
-| 当前 `sqlite_master` 里 `type='table'` 且非 `sqlite_%` | **19** | = 内容表 14（含 `content_fts`）+ `schema_version` + FTS5 自动建的 4 张影子表 `content_fts_config / _data / _docsize / _idx` |
+| 当前 `sqlite_master` 里 `type='table'` 且非 `sqlite_%` | **20** | = 内容表 15（含 `content_fts` 与 `vector_meta`）+ `schema_version` + FTS5 自动建的 4 张影子表 `content_fts_config / _data / _docsize / _idx` |
+
+**这一节自己就踩过一次口径分裂**（ISSUES I62）：迁移 0007 之前那张 `vector_meta` 是
+`semantic/vector_store.py` **运行时**建的，所以"跑迁移能长出的表"是 19，而"真跑过语义索引的机器"
+是 20 —— 同一个 `schema_version=6` 对应两种库形状，`tests/test_guard_schema_consistency.py`
+按前者报 19 全绿、对后者一条都看不见。0007 把它收进链之后两个数才合成一个。
 
 **写法规矩**：说"首版几张表"一律带上面哪一行；说"现有几张表"必须现跑现数并写明 `sqlite_master` 那个口径；
 历史阶段报告里的 13 是**它自己时点的读数**，不改写，但今后新文档不许再把它当成当前数。
+
+### 2.6 迁移 0004–0007 实际落地的差异（2026-10-17 补齐，ISSUES I62）
+
+§2.3 写了 0002、§2.4 写了 0003，**0004 往后一直没有小节**，结果是 `0004` 加的两个列在整份文档里
+零提及 —— 库里有、文档查不到，照文档写代码的人读不到它们。本节补上这段空白：
+
+| 迁移 | 动了什么 | 谁写 / 谁读 | 口径 |
+| --- | --- | --- | --- |
+| `0004_reading_history` | `documents` 加 **`last_read_page`**（INTEGER，从 1 开始）、**`last_read_at`**（INTEGER） | S2 阅读器写、库视图与阅读器恢复位置读 | **只存"当前读到哪"，不存阅读流水**。刻意不建 `reading_history` 表、刻意不加"阅读总时长"列（没有可靠办法在后台判断用户是否真的在看，存一个猜出来的数就是假指标）。NULL = 从没读过 |
+| `0005_stage4_vocab` | `file_operations` 加 `job_id`（可空外键 → `processing_jobs`）；`operation_items` **重建**加 `kind` / `state` 的 CHECK | 阶段 4 归档批次与逐文件条目 | D-048 / D-049：一个批次一条总控任务（`doc_id` 留 NULL）；`state ∈ pending\|done\|failed\|skipped`，跳过的项不进 journal。重建靠的是"当时该表零行"，**将来再有 CHECK 变更不许照抄这条路**，得走表重建 + 数据搬运 |
+| `0006_drop_volume_id` | 删 `documents.volume_id` | — | 恒 NULL 的死列（ISSUES I40）。判同盘/跨盘的唯一口径是 0002 的 `device_id` |
+| `0007_vector_meta_and_drop_pdf_version` | 建 **`vector_meta`** + `ix_vector_meta_doc`；删 `documents.pdf_version` | `semantic/vector_store.py` 读写 `vector_meta`；`pdf_version` 无人读写 | **`IF NOT EXISTS` 是给现存库留的路**：0007 之前那张表由 `vector_store.py` 运行时建，已经跑过语义索引的库（含开发机这份真实库）碰 0007 必须是无操作，既不报错也不清空已有元数据行。DDL 与老代码逐字一致，两条路收敛到同一个形状。`pdf_version` 是 I40 那一族的复发：`parsing/pdf.py` 读出过值但从没写进库，现测真实库 0/10,980 行非 NULL。**同笔把 `PdfInfo.pdf_version` 那个零引用字段一起删了** —— 留着就是下一个死列 |
+
+**这一节的存在本身就是一条断言的落点**：`tests/guards/test_schema_columns.py` 规则 A 的反方向
+"库里有、整份文档查不到"允许列名出现在 §2.1 **或**这一类"实际落地的差异"小节里。新增迁移加了列，
+必须在这一节里长出一行，否则守卫就红。
 
 ## 三 · FTS5 的正确接法（三条踩过坑的硬规则）
 
@@ -201,6 +224,14 @@ P1 探针实测出来的，写库前必须照做，否则索引悄悄错：
 - `db/migrations/` 下按 `0001_initial.py`、`0002_...` 顺序编号，每个导出 `VERSION` 和 `apply(conn)`。
   发现方式是 `importlib` **按路径加载**（模块名以数字开头不能 `import`），文件名不合 `NNNN_slug.py`、
   `VERSION` 与文件名序号不一致、序号重复 —— 三种情况都直接抛 `ValueError`，不"尽量解释一下"。
+- **结构变更只能是一条迁移，不能是运行时 DDL**。`src/` 里除 `db/migrations/` 之外出现
+  `CREATE TABLE / CREATE INDEX / ALTER TABLE / DROP …` 即红，由 `tests/guards/test_schema_columns.py`
+  规则 B 钉（唯一例外按**语句**放行：`db/migrate.py` 那条建水位表的 `SCHEMA_TABLE`，见 §2.5）。
+  这条不是风格洁癖：运行时 `CREATE TABLE IF NOT EXISTS` 建出来的表**不在迁移链里**，于是同一个
+  `schema_version` 在不同机器上对应两种库形状，而 `documents` 那份逐列 `INSERT` 一旦与库对不上
+  就是启动即崩。**本项目真踩过一次**（`vector_meta`，阶段 6 落地时运行时建表 → 迁移 0007 收编，
+  出处 **ISSUES I62**）；删列的方向反过来也成立 —— 改一条**已经应用过**的迁移对现存库**静默无效**
+  （没有校验和比对，见 D-023），所以删列/加列一律新增一条 `NNNN`，不许回去编辑 `0001`。
 - 启动时读 `schema_version`（单行水位：`version` + `applied_at`），只跑未应用的迁移；
   **迁移前强制**做一次 SQLite Backup API 快照到 `backups/pre-migration-<NNNN>-<ts>.db`。
   **没有 `backup_dir` 就拒绝迁移**（抛 `MigrationError`，一个字段的 DDL 都不执行）——

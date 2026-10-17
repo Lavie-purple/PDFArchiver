@@ -6,6 +6,57 @@
 
 ---
 
+## 勾选轮（二）—— 2026-10-17 · **不升版本号，落的是"没有断言的约束"补断言 + 库结构卫生**
+
+上一节末尾那句"要用户勾选才能动"的四条（**ISSUES I53 / I54 / I55 / I58**）与随后新开的两条
+（**I59 / I60**）在这一轮被一次性勾掉（用户「跟着你的推荐来执行」）。**本条目随进度追加**，
+只记真落了并有读数的部分。
+
+### I58 丙 · 长度线从"提醒"变成"可红的东西"（定案 **D-054**，口径入 **R-010**）
+
+**这一条为什么单独立一账**：AGENTS.md 早就写着"单文件超 800 行就拆"，但它**一次都没被断言过**，
+所以本轮自己成了肇事者 —— 写 §4.15 把 `VERIFICATION.md` 从 771 顶到 813、写整改轮把 `CHANGELOG.md`
+顶到 811，都是**过了线才发现**。没有断言的约束实际等于没有约束。
+
+- **口径**：`.py` ≤ **800**（`src/` `tests/` `gates/` `packaging/` `scripts/` 全收，测试不例外）；
+  `.md` ≤ **1,200**（`docs/**` + 根 `README.md`）。1,200 的出处是反算：`DECISIONS.md` 同一天 848 → 978
+  （+130 = 三条决策 + 一条整改记录），取"现数 + 一轮整改余量"，算式写进守卫 docstring，**改线连算式一起改**。
+- **拆的实测**：`test_app_shell.py` 拆前 **913**（开账时 864 / HEAD 866，差额是本轮 I53／I54／I55／I60 的守卫
+  都写进了同一份文件 —— 正是这条账说的问题）→ **194 / 251 / 158 / 354** 四份按主题命名；
+  `test_ocr_service.py` **811** → **342 / 411 / 117**。`--collect-only` 对数：**55 条，与拆前同一批名字**。
+- **守卫** `tests/guards/test_file_size.py`（107 行）+ **15 例坏法台账**（`.probe_work/i58_guard_injection.py`／`.log`）：
+  越线点名到文件与那句阈值、正好 800／1,200 放行、**两档各自隔离**（单独抬一条线时另一档必须照红）、
+  `SKIP_DIRS` 承重（去掉 `.venv` 红 629 条）。一条夹具事故留档：`write_text` 在 CRLF 工作树下把 `\r\n` 翻成
+  `\r\r\n`，801 行的夹具被 `splitlines()` 读成 **1,602 行**，9 例坏法整批作废 —— 红的是夹具不是守卫；
+  改 `write_bytes` 并让夹具写完立刻自量行数（与 **I55** 那条"注入必须是跑得起来的坏法"同族）。
+
+### I62 甲+丁 · 库结构卫生：列级双向对账 + 迁移 0007 收编 vector_meta（定案 **D-055**）
+
+**这一条为什么单独立一账**：`docs/DATABASE.md` §2.1 那张 `CREATE TABLE documents(...)` 与库里
+`PRAGMA table_info(documents)` 的列名集合**双向对账**发现三处缺陷 —— §2.1 还画着 `volume_id`（迁移 0006
+早删了）、0004 加的 `last_read_page` / `last_read_at` 在整份文档零提及、`vector_store.py` 在运行时
+`CREATE TABLE IF NOT EXISTS vector_meta` 绕开迁移链。运行时建表的后果是**库形状取决于"这段代码有没有
+跑到过"** —— 同一版本号的两台机器可以差一张表。
+
+- **丁落地**：`tests/guards/test_schema_columns.py`（A 列级双向对账 + B 迁移目录外不许 DDL，唯一例外
+  按**语句**放行 `migrate.py` 那条 `SCHEMA_TABLE`）从 RED(5) 修到全绿；坏法注入台账
+  `.probe_work/i62_guard_injection.py` **13/13 达标 VERDICT: ALL GREEN**（A1–A6、B1–B6 每条红且点名到
+  具体断言；B2 对照组绿）。
+- **甲落地**：新增迁移 `0007_vector_meta_and_drop_pdf_version`（把 `vector_meta` 与 `ix_vector_meta_doc`
+  收进链、删 `documents.pdf_version` 死列 —— 现测真实库 0/10,980 行非 NULL、`db/models.py` 无此字段、
+  全仓库除 §2.1 与 `parsing/pdf.py:95`/`:143` 外零消费者），`VectorStore._ensure_table` 改成响亮的
+  前置断言 `VectorSchemaMissing`（指名"缺 0007"而不是静默建表）。
+- **vector 口径单一化**：`VECTOR_STATUSES` 落 `db/models.py`（产品里没人推进 `vector_status`，只有
+  `Document` 默认值 `'na'` 落库 —— 它是**读数**不是判定，**ISSUES I63** 记了这条欠账）；p12 C7 换成
+  真口径 + 一句"谁推进它"的声明；两个测试夹具的越界 `parse_status` / `text_status` / `vector_status`
+  值修成合法值；p12 注入表 C7 坏法从 `'done'`（现已合法）改成 `'vectorized'`。
+- **现数**：§2.1 声明 **27** 列（删了 `volume_id` 与 `pdf_version`），库里 `documents` 实际 **33** 列；
+  表数 **20**（19 + `vector_meta`）。全量回归 **461 passed, 4 skipped**。
+- **本条不覆盖的**（另立 **ISSUES I63**）：阶段 6 只有读路径、`vector` 任务类型是空头支票、
+  `AIClassifyService` 零测试。
+
+---
+
 ## 界面审核三条发现修完 —— 2026-10-16 · **不升版本号（仍是 0.5.0），落的是呈现层修复 + 14 条新守卫**
 
 **为什么记这一条**：用户指令「都进行修复」，把界面审核轮逐条证伪出来的三条发现一次修完。
@@ -29,7 +80,7 @@
   三处会往标签里填路径的地方（当前库 / 已选备份 / 恢复结果）全部走它。
 - **修后读数**：9 屏全部 `窗宽=1000 侧栏=200px splitter=[200, 799]`；备份页最低宽 1271 → **400**；
   窗口最低宽 1081 → **683**。切进备份页再切回文档库，splitter 一路保持 `[200, 799]`。
-- **守卫 + 坏法（5 次注入全红且精确点名）**：`tests/integration/test_app_shell.py` 三条 ——
+- **守卫 + 坏法（5 次注入全红且精确点名）**：`tests/integration/test_app_shell.py` 三条（同日按 **ISSUES I58** 丙 拆开后在 `tests/integration/test_ui_layout.py`）——
   ① 每屏在设计宽度下装得下且不吃侧栏（9 个参数，逐标签页量）；② 真的选一个深路径备份之后恢复标签页也不许顶宽；
   ③ 截掉的路径必须能在悬停里回读。注入读数：去掉 `_elided` → `assert 2935 <= 799`；`lbl_selected` 填裸路径 →
   `assert 3101 <= 799`；`lbl_restore_result` 填裸路径 → `assert 3101 <= 799`；改成对**整条路径**做 ElideMiddle
@@ -217,7 +268,7 @@
   库健康核查唯一入口回归离线探针 `tests/probes/p12_consistency.py`（不在产品路径）。修复后 6.1GB 真库 `bootstrap` **1.521s**，
   队列随即正常流转、`start_background()` 内部 `queue.recover()` 回收了 **16 条 `running` 残尸**。
   `engine.integrity_check()` **保留**（离线核查 + 小库测试仍用），docstring 写死「禁止进启动路径和 UI 刷新」。
-  **守卫有牙**：`tests/integration/test_app_shell.py:57` 断言状态页文本不含 `integrity_check`/`quick_check` —— 坏法真注入（往 `status_service.lines()`
+  **守卫有牙**：`tests/integration/test_status_readout.py::test_首屏显示的是库里的真数字不是写死的文案` 断言状态页文本不含 `integrity_check`/`quick_check` —— 坏法真注入（往 `status_service.lines()`
   塞回一行「完整性检查」）实测 `1 failed`，撤掉恢复 `1 passed`。
 - **文档同步到"现状"**：`docs/ISSUES.md` 新增台账 **ISSUES I45** 行；`docs/USAGE.md`（示例读数 + §三 说明）、
   `docs/BACKUP-RESTORE.md`、`docs/TROUBLESHOOTING.md` §七 那几处"状态页跑 quick_check"的表述全部改成"启动/UI 零同步检查，p12 为唯一核查入口"。

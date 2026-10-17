@@ -3,9 +3,11 @@
 
 验收：
 1. EmbeddingService 能实例化
-2. VectorStore 能实例化，能增删查
-3. SemanticSearchService 能实例化，空查询返回空
-4. 回归：阶段 3（搜索）和阶段 4（归档）的门禁仍然全绿
+2. VectorStore 实例化后**不许**在缺表时静默建表 —— 必须报 `VectorSchemaMissing` 并指名迁移 0007
+   （`vector_meta` 的结构由迁移定义，ISSUES I62）
+3. VectorStore 能对真迁移链建出来的库增删查
+4. SemanticSearchService 能实例化，空查询返回空
+5. 回归：阶段 3（搜索）和阶段 4（归档）的门禁仍然全绿
 
 用法：
     python gates/stage6.py
@@ -46,11 +48,25 @@ def main() -> int:
     except Exception as exc:
         all_pass &= check("EmbeddingService 实例化", False, str(exc))
 
-    # 2. VectorStore 能实例化
+    # 2. VectorStore 实例化 + 缺表时响亮报错
     try:
-        from pdfarchiver.semantic.vector_store import VectorStore
-        vs = VectorStore()
-        all_pass &= check("VectorStore 实例化", True)
+        import tempfile
+        from pdfarchiver.config.paths import AppPaths
+        from pdfarchiver.semantic.vector_store import VectorStore, VectorSchemaMissing
+
+        with tempfile.TemporaryDirectory() as bare:
+            # 空目录 = 一个字段都没迁移过的库。以前这一步会**静默建表**（ISSUES I62），
+            # 现在必须响亮拒绝 —— 静默建表让同一个 schema_version 对应两种库形状。
+            AppPaths.resolve(Path(bare)).mkdirs()
+            try:
+                VectorStore(Path(bare)).count()
+                all_pass &= check("VectorStore 实例化", False,
+                                  "库里没有 vector_meta 却成功了 —— 运行时建表又回来了")
+            except VectorSchemaMissing as exc:
+                ok = "0007" in str(exc)
+                all_pass &= check("VectorStore 实例化", ok, "" if ok else f"报错没指名迁移 0007：{exc}")
+            except Exception as exc:  # noqa: BLE001 - 报错原文要进门禁输出，不许转述
+                all_pass &= check("VectorStore 实例化", False, f"异常类型不对：{type(exc).__name__}: {exc}")
     except Exception as exc:
         all_pass &= check("VectorStore 实例化", False, str(exc))
 
@@ -77,45 +93,40 @@ def main() -> int:
         import tempfile
         import sqlite3
         import numpy as np
+        from pdfarchiver.config.paths import AppPaths
+        from pdfarchiver.db.engine import Engine
+        from pdfarchiver.db.migrate import migrate
         from pdfarchiver.semantic.vector_store import VectorStore
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            # 手动创建数据库，不用 bootstrap
-            db_path = tmpdir / "data" / "catalog.db"
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(db_path)
-            conn.execute("""
-                CREATE TABLE documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    path TEXT, path_key TEXT UNIQUE, name TEXT, ext TEXT,
-                    size_bytes INTEGER, mtime_ns INTEGER, ctime_ns INTEGER,
-                    file_id INTEGER, device_id INTEGER, sha256 TEXT,
-                    page_count INTEGER, text_bearing_rate REAL, is_pdf INTEGER,
-                    needs_pass INTEGER, is_repaired INTEGER, parse_status TEXT,
-                    text_status TEXT, ocr_status TEXT, ocr_pages_done INTEGER,
-                    last_ocr_at INTEGER, fts_status TEXT, vector_status TEXT,
-                    category_confirmed INTEGER, last_scanned_at INTEGER,
-                    last_indexed_at INTEGER, last_read_page INTEGER,
-                    last_read_at INTEGER, last_error TEXT, missing_since INTEGER,
-                    created_at INTEGER, updated_at INTEGER
-                )
-            """)
-            conn.commit()
-            conn.close()
+            # 走**真实迁移链**建库，不手抄 DDL —— 手抄那份已经悄悄少了 `is_encrypted` 列，
+            # 而结构只能由迁移定义（docs/DATABASE 四、ISSUES I62）
+            paths = AppPaths.resolve(tmpdir)
+            paths.mkdirs()
+            engine = Engine(paths.catalog_db)
+            migrate(engine, backup_dir=paths.backups_dir)
+            engine.close_thread_connection()
+            db_path = paths.catalog_db
 
             vs = VectorStore(tmpdir)
 
-            # 手动插入一个测试文档
+            # 真库的 `documents` 有一串 NOT NULL 无默认值的列，插入必须给全（手抄那份宽松 DDL
+            # 掩盖了这一点，所以这条 INSERT 从没被真库验过 —— 换成迁移链之后第一次跑就红了）
             conn = sqlite3.connect(db_path)
-            conn.execute(
-                "INSERT INTO documents (path, path_key, name, ext, size_bytes, mtime_ns) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                ("C:/test/doc.pdf", "test/doc.pdf", "doc.pdf", "pdf", 1000, 1000000000)
-            )
-            doc_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "INSERT INTO documents (path, path_key, name, ext, size_bytes, mtime_ns,"
+                    " created_at, updated_at, parse_status, text_status, ocr_status,"
+                    " fts_status, vector_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("C:/test/doc.pdf", "test/doc.pdf", "doc.pdf", "pdf", 1000, 1000000000,
+                     1, 1, "pending", "pending", "na", "pending", "na"))
+                doc_id = conn.execute("SELECT id FROM documents WHERE path_key='test/doc.pdf'").fetchone()[0]
+                conn.commit()
+            finally:
+                # 必须在这里就关掉：留着句柄，临时目录清理时 rmtree  unlink 失败，
+                # 报出来的是 `[WinError 267] 目录名称无效`（实测会把真正的 IntegrityError 盖掉）
+                conn.close()
 
             # 添加向量
             vector = np.random.randn(512).astype(np.float32)

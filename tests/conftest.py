@@ -35,11 +35,30 @@ def settle(qapp, rounds: int = 6) -> None:
     一次 `processEvents()` 之后 `sectionSize()` 会留着**改尺寸之前**的读数：注入坏法时
     窗口已经从 1000px 压到 356px，列宽却仍报 375px，守卫就这么假绿的（实测）。
 
-    放在 conftest 而不是某个测试文件里：界面几何的断言现在有两个模块要量
-    （`test_app_shell.py` 与 `test_ui_tier.py`），"要跑几轮才算稳"这条抄两份就会漂。
+    放在 conftest 而不是某个测试文件里：界面几何的断言分布在四个模块
+    （`test_app_shell.py` / `test_status_readout.py` / `test_patrol_tick.py` /
+    `test_ui_layout.py`，加上 `test_ui_tier.py`），"要跑几轮才算稳"这条抄两份就会漂。
     """
     for _ in range(rounds):
         qapp.processEvents()
+
+
+@pytest.fixture
+def window(qapp, ctx):  # qapp 必须先于 ctx 之外存在：没有 QApplication 就构造 QWidget 是直接 abort 进程
+    """起真外壳、关窗、并把上下文收干净。
+
+    同样搬进 conftest（**ISSUES I58** 丙，2026-10-17）：`test_app_shell.py` 拆成四份之后
+    四组都要这一份夹具，留在其中任何一个文件里就等于让另外三个去 import 别的服务模块。
+    `test_placeholder_palette.py` 自己那一份**不是**同一个夹具（它要逐屏切一遍才能遍历到
+    惰性建的页面），所以它保留本地定义、按 pytest 的规则覆盖这一个。
+    """
+    from pdfarchiver.ui.main_window import MainWindow
+
+    w = MainWindow(ctx, cold_start_seconds=0.42)
+    w.show()
+    yield w
+    w.close()
+    ctx.shutdown()
 
 
 @pytest.fixture

@@ -3,15 +3,19 @@
 三栏布局（**宽档**，页面可用宽度 ≥ 1076）：
 - 左栏：分类树（用于筛选）
 - 中栏：文档表格（支持四通道检索）
-- 右栏：文档详情面板
+- 右栏：**命中面板（当前查询）** —— 按通道分组、每条带页码与片段（**ISSUES I53** ②甲，2026-10-17）；
+  同一栏的下半部是选中那一行的文档详情 + AI 推荐分类。
 
 **窄档的形状是 D-040 定下来的，不是这里的偏好**：线框 §S1 的算术
 `236 + 480 + 360 = 1076 > 1024` ⇒ 三栏放不下，**必须且只牺牲右栏** ——
 搜索是"要结果时才看结果"，分类树是"随时知道我在库的哪个位置"。于是：
 
 - 右栏变成 **420px 浮层**（可关；默认关，不记忆成"每次都开"）；
-- 左栏收成 **48px 的条**，整棵树改由那一条唤出（树没有被删，只是不常驻）；
+- 左栏收成 **48px 的条**（条上一颗「分类」按钮，点开是真树浮层），整棵树改由那一条唤出；
 - 中栏吃掉剩余宽度。
+
+键盘入口 = **Ctrl+F**（聚焦搜索框并唤出右栏；定案见 **D-052**，短路挂在外壳上，
+判据是"当前屏是不是 S1"，不做跨屏跳转）。
 
 两档的切换机械不在本文件里，在 `ui/tier.py` —— **D-039** 要求 S8 的树侧栏在 1024 档
 收起同一把尺子，AGENTS.md「禁止同类问题逐个打补丁」，所以一条规则两处用。
@@ -42,6 +46,11 @@ def _tint(label: QtWidgets.QLabel, role: str) -> None:
     label.style().polish(label)
 
 
+# 命中面板每一行挂的两样数据：跳转要用的 doc_id 与页码（`None` = 这一条没有页码）。
+_HIT_DOC_ROLE = QtCore.Qt.ItemDataRole.UserRole
+_HIT_PAGE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+
+
 def _format_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -61,7 +70,11 @@ def _mtime_text(doc) -> str:
 
 
 class LibraryPage(QtWidgets.QWidget):
-    """S1：宽档三栏常驻（分类树 | 文档表格 | 详情面板），窄档走 `ui/tier.py` 的降级。"""
+    """S1：宽档三栏常驻（分类树 | 文档表格 | 命中面板），窄档走 `ui/tier.py` 的降级。"""
+
+    # (doc_id, page_no)；page_no 为 None 表示这一条命中没有页码（文件名/路径/元数据三通道）。
+    # 用 tuple 而不是给 page_no 编一个 0 当"没有"，是为了让越界判定只存在于阅读器一处。
+    open_in_reader = QtCore.Signal(object)
 
     def __init__(self, ctx: AppContext, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -71,7 +84,8 @@ class LibraryPage(QtWidgets.QWidget):
 
         # 左栏：分类树。宽档占 splitter 一槽，窄档整块变成浮层、原位留下 48px 的条（D-040）。
         # 条上给的是"2 字按钮 + 真树浮层"而不是每类一枚图标：`Category` 里没有图标字段
-        # （`db/models.py:54`），线框那句"图标条"要的产品数据还不存在，记在 **ISSUES I53** ①。
+        # （`db/models.py:54`）—— 线框那句"图标条"要的产品数据不存在，2026-10-17 按
+        # **ISSUES I53** ①甲 定案**把线框改成现在这个形状**（见 `docs/UI-WIREFRAMES.md` §S1 定案记录）。
         self.tree_panel = FloatablePanel(self, "分类筛选",
                                          column_width=LEFT_COLUMN_WIDTH, strip_label="分类")
         self.category_tree = QtWidgets.QTreeWidget()
@@ -97,7 +111,10 @@ class LibraryPage(QtWidgets.QWidget):
         self.search_input.setPlaceholderText("输入检索内容...")
         self.search_input.returnPressed.connect(self._do_search)
         # D-040 的浮层触发点："点搜索框 …覆盖在列表右侧 420px，可关"。
-        # 快捷键那半句线框没给具体键位，不替用户猜，记在 **ISSUES I53** ③。
+        # 键位那半句 2026-10-17 定为 **Ctrl+F**（**ISSUES I53** ③甲 / **D-052**）：短路挂在
+        # `ui/main_window.py`（窗口级 accelerator 的归属就该是窗口），落点是下面的
+        # `focus_search()` —— 它**显式**唤浮层，不只靠 `FocusIn` 副作用：窗口未激活时
+        # `FocusIn` 不保证派发，键盘入口不能"有时候按了没反应"。
         self.search_input.installEventFilter(self)
         search_lay.addWidget(self.search_input, 1)
 
@@ -127,10 +144,13 @@ class LibraryPage(QtWidgets.QWidget):
         # 分类名一段按 5 字算。
         # 上一轮这三列反算的是**文本宽**、给的是 +8，于是显示成 `2026-1…` / `1…` ——
         # 少算了 Qt 单元格实测的 23px 内边距（见 table_layout.CELL_PADDING_WIDTH）。
-        # 五列合计 780px，而**中栏视口不是一个数**：宽档（页面 1079px）空库实测 463px、灌进行
-        # 之后 425px，窄档（窗口 1024px / 页面 823px）同一组是 756px / 718px —— 随数据少掉的那
-        # 38px 是 Qt 自己长出来的行号列（见 **ISSUES I54**）。装不装得下随分档与行数两个因素变，
-        # 所以"超出就必须滚得过去"由 `test_表格定宽列放不下时必须还能滚到` 在宽档钉住。
+        # 五列合计 780px（220+200+86+163+111），而视口比它小得多：宽档（页面 1079px）实测
+        # 空库 463px、2 行 463px、40 行 455px；地板档（窗口 1024px / 页面 823px）40 行 748px。
+        # **行号列已经不在了**（**ISSUES I54**，`set_table_columns` 里 hide），所以读数不随
+        # 行号的位数漂；40 行比空库少的那 8px 是**纵向滚动条**（现测 `verticalScrollBar().width()`=8），
+        # 那是真占地方。装不装得下还随分档变，所以"超出就必须滚得过去"由
+        # `test_ui_layout.test_表格定宽列放不下时必须还能滚到` 在宽档钉住，
+        # "视口不随行数漂"由 `test_ui_tier.test_视口宽度只随滚动条变不随行的位数变` 钉住。
         # 不给任何列设 Stretch：定宽列已经把视口吃满时，Stretch 那一列会被压到接近
         # minimumSectionSize（实测「分类」掉到 38px），而且**永远是这一条缝** ——
         # 滚动条能滚（范围按档不按像素），滚过去的还是那个窄条。
@@ -144,37 +164,72 @@ class LibraryPage(QtWidgets.QWidget):
         self.doc_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.doc_table.setAlternatingRowColors(True)
         self.doc_table.itemSelectionChanged.connect(self._on_doc_selected)
+        # §S1「必须承接的六件事」第 6 条：双击行 → 打开这份文件（此前 `ReaderPage.open_document`
+        # 在全项目**零调用**，阅读器是一屏进不去的界面 —— 与 **ISSUES I55** 同一类"控件在场、
+        # 链路不在场"，随本条一起接上）。
+        self.doc_table.itemDoubleClicked.connect(self._on_doc_activated)
         center_lay.addWidget(self.doc_table, 1)
 
         # 状态栏
         self.status_label = QtWidgets.QLabel("共 0 份文档")
         self.status_label.setObjectName("muted")
+        # 折行是**必须**的，不是美化：不折行的 QLabel 其 `minimumSizeHint()` 就等于整句宽，
+        # 而 §S1 定案要这一栏把检索口径与各通道行数都上屏（**ISSUES I60**）。实测把
+        # `SearchResult.lines()` 整句（1056px）直接 setText 进去，页面最小宽被顶到 1121px、
+        # 窗口最小宽 1178px —— 越过 D-039 的 1024 地板，`test_ui_layout` 那两条断言当场红。
+        # 这里按 `ui/pages/backup_page.py` 的同一口径处理（中文可断行，路径不可，见其 `_elided`）。
+        self.status_label.setWordWrap(True)
         center_lay.addWidget(self.status_label)
 
         self.splitter.addWidget(center)
 
-        # 右栏：详情面板。宽档时它是 splitter 的第三槽；窄档时被 `FloatablePanel`
-        # 摘出来挂到本页面自己身上当浮层 —— **同一个控件，不复制内容**。
-        self.detail_panel = FloatablePanel(self, "文档详情", column_width=RIGHT_COLUMN_WIDTH)
+        # 右栏：**命中面板（当前查询）**（**ISSUES I53** ②甲，2026-10-17）。宽档时它是 splitter
+        # 的第三槽；窄档时被 `FloatablePanel` 摘出来挂到本页面自己身上当浮层 —— **同一个控件，
+        # 不复制内容**。原先独占这一栏的文档详情留在**同一栏的下半部**：它是全站唯一显示
+        # 单文档四种状态（解析/正文/OCR/索引）的地方，而 §S2 甲的顶栏与底栏没有元数据区，
+        # 没有一个"已确认的位置"可搬 —— 这条差量与理由记在 **D-052**。
+        self.right_panel = FloatablePanel(self, "命中面板（当前查询）",
+                                          column_width=RIGHT_COLUMN_WIDTH)
+        self.hit_list = QtWidgets.QListWidget()
+        # 命中行是"整句片段"，必须折行；折行就意味着行高不齐 —— 这**不打犯** D-040 的
+        # 行高统一：那条管的是中栏那张要虚拟化的文档表（行号↔坐标必须 O(1)），而这一栏
+        # 的行数有上限：`_do_keyword_search` 传的 `limit=100`（后端页上限 `MAX_PAGE_SIZE=200`）
+        # 加至多 4 条组头 ⇒ ≤104 行，所以这一栏不虚拟化。实测（2026-10-17，宽档 344px 列内）
+        # 组头 25px、单行命中 38px、被折成三行的路径命中 77px。
+        self.hit_list.setWordWrap(True)
+        self.hit_list.currentItemChanged.connect(self._on_hit_current)
+        self.right_panel.body.addWidget(self.hit_list, 3)
+
+        self.jump_btn = QtWidgets.QPushButton("跳到该页 → S2")
+        self.jump_btn.setObjectName("searchBtn")
+        self.jump_btn.setToolTip("在阅读器里打开这一条命中所在的页")
+        self.jump_btn.setEnabled(False)
+        self.jump_btn.clicked.connect(self._on_jump_clicked)
+        self.right_panel.body.addWidget(self.jump_btn)
+
+        detail_title = QtWidgets.QLabel("文档详情")
+        detail_title.setObjectName("sectionTitle")
+        self.right_panel.body.addWidget(detail_title)
+
         self.detail_view = QtWidgets.QPlainTextEdit()
         self.detail_view.setReadOnly(True)
-        self.detail_panel.body.addWidget(self.detail_view, 1)
+        self.right_panel.body.addWidget(self.detail_view, 2)
 
         self.ai_classify_btn = QtWidgets.QPushButton("🤖 AI 推荐分类")
         self.ai_classify_btn.setObjectName("searchBtn")
         self.ai_classify_btn.setEnabled(False)
         self.ai_classify_btn.setToolTip("基于文档内容与分类语义中心的相似度推荐分类")
         self.ai_classify_btn.clicked.connect(self._on_ai_classify_clicked)
-        self.detail_panel.body.addWidget(self.ai_classify_btn)
+        self.right_panel.body.addWidget(self.ai_classify_btn)
 
         self.ai_result_label = QtWidgets.QLabel("")
         self.ai_result_label.setWordWrap(True)
         self.ai_result_label.setObjectName("muted")
-        self.detail_panel.body.addWidget(self.ai_result_label)
+        self.right_panel.body.addWidget(self.ai_result_label)
 
-        self.detail_panel.attach(self.splitter)
+        self.right_panel.attach(self.splitter)
 
-        self._panels = [self.tree_panel, self.detail_panel]
+        self._panels = [self.tree_panel, self.right_panel]
         # 拖宽时只有中列表该吃掉增量（条是 fixedWidth，两块浮栏按 D-040 定宽，其余项
         # 默认 stretch 就是 0）。索引会随切档变（条一直在 splitter 里、面板会被摘走），
         # 所以这里按控件取索引，不写死数字。
@@ -199,8 +254,17 @@ class LibraryPage(QtWidgets.QWidget):
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         """「点搜索框 → 浮层出现」（D-040 §S1 降级那一段的触发点）。"""
         if obj is self.search_input and event.type() == QtCore.QEvent.Type.FocusIn:
-            self.detail_panel.open_overlay()
+            self.right_panel.open_overlay()
         return super().eventFilter(obj, event)
+
+    def focus_search(self) -> None:
+        """Ctrl+F 的落点（**ISSUES I53** ③甲 / **D-052**）：唤出右栏并把光标交给搜索框。
+        显式调 `open_overlay()` 而不是只靠上面的 `FocusIn` —— 窗口未激活时 Qt 不保证派发
+        `FocusIn`，那样的话"按了没反应"只在用户身上发生、测试里量不到。
+        """
+        self.right_panel.open_overlay()
+        self.search_input.setFocus()
+        self.search_input.selectAll()
 
     def _reload_categories(self) -> None:
         self.category_tree.clear()
@@ -232,6 +296,8 @@ class LibraryPage(QtWidgets.QWidget):
         docs = self.ctx.documents.list(limit=1000)
         self._current_docs = docs
         self._populate_table(docs)
+        # 浏览模式没有"当前查询"，右栏就不该留着上一次查询的命中（挂着是过期读数）。
+        self._clear_hits()
 
     def _load_documents_by_category(self, category_id: int) -> None:
         doc_ids = self.ctx.catalog.docs_in_category(category_id)
@@ -240,6 +306,7 @@ class LibraryPage(QtWidgets.QWidget):
         docs.sort(key=lambda d: d.name.casefold())
         self._current_docs = docs
         self._populate_table(docs)
+        self._clear_hits()   # 列表换成这一类的文档了，右栏留着上一次查询的命中就是过期读数
 
     def _do_search(self) -> None:
         query = self.search_input.text().strip()
@@ -267,7 +334,13 @@ class LibraryPage(QtWidgets.QWidget):
 
         self._current_docs = docs
         self._populate_table(docs)
-        self.status_label.setText(f"关键词搜索命中 {len(docs)} 份文档（耗时 {result.took_ms:.0f}ms）")
+        self._show_hits(result)
+        # **ISSUES I60**（§S1 的两条已定案契约）：显示的数只许来自 `matching_documents` /
+        # `counts_by_field` / `truncated_fields`，口径（trigram / 慢速 LIKE）与截断必须上屏。
+        # 这里**不在界面里拼句子** —— 格式化只有后端一个出口（`SearchResult.status_line()`，
+        # 原先那句 `f"关键词搜索命中 {len(docs)} 份…"` 正是线框点名的自算数）。
+        # 中栏表里那些行仍是按 `hit.doc.id` 去重的结果，但那是**列表本身**，不是"显示的数"。
+        self.status_label.setText(result.status_line())
 
     def _do_semantic_search(self, query: str) -> None:
         """语义搜索：基于向量相似度。"""
@@ -276,6 +349,7 @@ class LibraryPage(QtWidgets.QWidget):
         if not results:
             self._current_docs = []
             self._populate_table([])
+            self._clear_hits()
             self.status_label.setText("语义搜索无结果（向量库为空或模型不可用）")
             return
 
@@ -291,7 +365,101 @@ class LibraryPage(QtWidgets.QWidget):
 
         self._current_docs = docs
         self._populate_table(docs)
+        self._show_semantic_hits(results)
         self.status_label.setText(f"语义搜索命中 {len(docs)} 份文档（最高相似度 {results[0][2]:.3f}）")
+
+    # ---- 右栏：命中面板（**ISSUES I53** ②甲 / **D-052**）-----------------------
+
+    def _clear_hits(self) -> None:
+        self.hit_list.clear()
+        self.jump_btn.setEnabled(False)
+        self.jump_btn.setText("跳到该页 → S2")
+
+    def _show_hits(self, result) -> None:
+        """§S1 甲 那一栏：把**当前查询**的命中按通道分组列出来，每条带页码与片段。
+
+        每行的文案取后端出口 `SearchResult.rows()`，界面不重拼一遍 —— **ISSUES I60**
+        那条"格式化只有后端一个 owner"在这里同样成立（`rows()` 里已经写好了
+        「第 N 页」/ 无页码时改显通道名 / 正文命中带出处，正是线框点名的三样）。
+        分组顺序按 `criteria.in_fields`（用户勾的那几条），空组不占一行 ——
+        未装模型时语义那一组因此整组不在场，符合线框「不是灰掉、不是空表」。
+        组头不写数字：计数是状态栏那一行的口径（`counts_by_field`），这里再写一份
+        就是同一个数的第二个出处。
+        """
+        lines = result.rows()
+        self._clear_hits()
+        for name in result.criteria.in_fields:
+            group = [(hit, line) for hit, line in zip(result.hits, lines) if hit.field == name]
+            if not group:
+                continue
+            self._add_group(group[0][0].field_label, name in result.truncated_fields)
+            for hit, line in group:
+                self._add_hit_row(line, int(hit.doc.id or 0), hit.page_no, hit.doc.path)
+
+    def _show_semantic_hits(self, results: list[tuple[int, int, float]]) -> None:
+        """语义命中进同一栏、同一套跳转。
+
+        **这一组的文本是界面拼的**，因为语义命中没有后端 formatter —— 线框 §S1 的
+        「语义命中的标注」那一行自己写着「阶段 6 的 `SearchResult` 扩展（**尚未存在**）」，
+        后端把语义并进 `SearchResult` 的那天，这段就该删掉、改走 `rows()`。
+        措辞照线框那一格：「语义命中（相近，非原文）」+ 相似度，不许看起来像原文。
+        """
+        self._clear_hits()
+        self._add_group("语义", False)
+        for doc_id, page_no, score in results:
+            doc = self.ctx.documents.get(doc_id)
+            if not doc:
+                continue
+            where = f"第 {page_no} 页" if page_no else "整份文档"
+            self._add_hit_row(f"[{where}]｜语义命中（相近，非原文）｜相似度 {score:.3f}｜{doc.name}",
+                              int(doc_id), page_no or None, doc.path)
+
+    def _add_group(self, label: str, truncated: bool) -> None:
+        header = QtWidgets.QListWidgetItem(label + ("（已截断）" if truncated else ""))
+        # 只留 Enabled、去掉 Selectable：分组标题不是命中，点它不该让跳转按钮亮起来。
+        header.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+        self.hit_list.addItem(header)
+
+    def _add_hit_row(self, text: str, doc_id: int, page_no: int | None, path: str) -> None:
+        item = QtWidgets.QListWidgetItem(text)
+        item.setData(_HIT_DOC_ROLE, doc_id)
+        item.setData(_HIT_PAGE_ROLE, page_no)
+        item.setToolTip(path)   # 片段里放不下整条路径，悬停回读（与中栏「路径」列同一口径）
+        self.hit_list.addItem(item)
+
+    def _on_hit_current(self, current, previous) -> None:
+        """选中一条命中 → 中栏跳到那份文档（详情跟着走）+ 决定跳转按钮的形状。"""
+        doc_id = current.data(_HIT_DOC_ROLE) if current is not None else None
+        page_no = current.data(_HIT_PAGE_ROLE) if current is not None else None
+        self.jump_btn.setEnabled(doc_id is not None)
+        # 一条按钮两个措辞而不是两条按钮：动作只有一个（在阅读器里打开），差别只在**落到哪一页**。
+        # 文件名/路径/元数据三通道没有页码（`Hit.page_no is None`），编一个"第 1 页"就是假装有。
+        self.jump_btn.setText("跳到该页 → S2" if page_no else "打开文档 → S2")
+        if doc_id is not None:
+            self._select_doc_row(int(doc_id))
+
+    def _select_doc_row(self, doc_id: int) -> None:
+        for row in range(self.doc_table.rowCount()):
+            item = self.doc_table.item(row, 0)
+            if item is not None and item.data(QtCore.Qt.ItemDataRole.UserRole) == doc_id:
+                self.doc_table.selectRow(row)
+                return
+
+    def _on_jump_clicked(self) -> None:
+        item = self.hit_list.currentItem()
+        if item is None:
+            return
+        doc_id = item.data(_HIT_DOC_ROLE)
+        if doc_id is None:
+            return
+        # 载荷是一个 tuple 而不是两个参数：`Signal(object)` 只接一arg，emit 两个当场 TypeError，
+        # 而它发生在 Qt 槽里 —— 按钮点下去什么都不做（本轮探针 .probe_work/_sig_probe.py 实测）。
+        self.open_in_reader.emit((int(doc_id), item.data(_HIT_PAGE_ROLE)))
+
+    def _on_doc_activated(self, item: QtWidgets.QTableWidgetItem) -> None:
+        doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if doc_id is not None:
+            self.open_in_reader.emit((int(doc_id), None))
 
     def _clear_search(self) -> None:
         self.search_input.clear()
@@ -380,10 +548,8 @@ class LibraryPage(QtWidgets.QWidget):
             lines.append(f"最后错误：{doc.last_error}")
 
         self.detail_view.setPlainText("\n".join(lines))
-        # 详情是"选中这一行之后才有的内容"，窄档它藏在浮层里，所以选中即唤出。
-        # 线框只写了"点搜索框或按快捷键"—— 这一档的右栏装的是详情而不是命中列表
-        # （差量记在 **ISSUES I53** ②），触发点跟着内容走比照着线框少一个入口更诚实。
-        self.detail_panel.open_overlay()
+        # 详情是"选中这一行之后才有的内容"，窄档它藏在浮层里（这一栏的下半部），所以选中即唤出。
+        self.right_panel.open_overlay()
 
     def _get_tags_for_doc(self, doc_id: int) -> list:
         return self.ctx.catalog.tags_of(doc_id)

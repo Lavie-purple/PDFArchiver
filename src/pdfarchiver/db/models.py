@@ -14,6 +14,16 @@ def now_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
+# `vector_status` 的唯一口径（`docs/DATABASE.md` §2.1 那一行注释是它的出处）。
+# **注意：产品里没有任何代码推进它** —— 现在只有 `Document` 的默认值 `na` 会落库，
+# 所以它是**读数**不是判定；接线欠账挂在 **ISSUES I63**。
+VECTOR_STATUSES = ("na", "pending", "running", "done", "failed", "stale")
+
+# file_operations.status 与 operation_items.state 的合法取值（出处：operations.py 模块 docstring）。
+OP_STATUSES = ("planned", "running", "done", "failed")
+ITEM_STATES = ("pending", "copying", "done", "failed")
+
+
 @dataclass
 class Document:
     id: int | None = None

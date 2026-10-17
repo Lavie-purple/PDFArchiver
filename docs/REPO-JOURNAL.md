@@ -27,6 +27,10 @@ AGENTS.md 元规则要求的入职手册件之一：记录**仓库结构、命�
 `git grep -nI -e "<用户名>" -e "<私人目录名>" -- .`，命中即改。
 已出过一次：`docs/00` 的扫描根列表和 p0 的 docstring 里写了本机用户名，见提交 `0e808d0`。
 
+**窄例外（2026-10-17 补）**：**逐字报错原文不遮罩**。日志与测试输出里的错误路径若含用户名，
+保留原样 —— 遮罩后排障时无法 `grep` 定位到具体文件，等于把诊断信息销毁。其余命中（docstring、
+文档示例、注释里的路径）一律改。判断标准：这段文字是**给人读的报错现场**还是**给人抄的示例**。
+
 ## R-004 · 2026-10-14 · 目录骨架先建后填（阶段 1 已按约定销账）
 
 `src/pdfarchiver/` 的 11 层目录用 `.gitkeep` 占位，`gates/`、`tests/{unit,integration}` 同理。
@@ -137,6 +141,54 @@ AGENTS.md 元规则要求的入职手册件之一：记录**仓库结构、命�
 规则一次性声明：**没跑的东西用普通打印或 `SKIP` 表达（不进 `checks`），或者干脆算 RED**；
 "措辞诚实"不能替代"计数诚实"。同类的另两处已按这条做对了：`--only` 跳过的段只打印不计数、
 `gates/stage5.py` 没有占位行。
+
+## R-010 · 2026-10-17 · 文件长度线的两条口径（`.py` ≤800 / 台账 ≤1,200）
+
+AGENTS.md 那句"单文件超 800 行就拆"在项目里**从来没有断言**，也没写明管不管 `tests/` 与 `docs/`
+（**ISSUES I58** 记的就是这条线没有牙）。断言落在 `tests/guards/test_file_size.py`，两条口径一次定死：
+
+| 档 | 范围 | 线 | 越线时的拆法 |
+| --- | --- | --- | --- |
+| `.py` | `src/` `tests/` `gates/` `packaging/` `scripts/` 全收 | **800** | 按**主题**拆，不按行数切豆腐：`test_app_shell.py` 913 行 → 外壳 194 / 状态读数 251 / 巡查刻度 158 / 界面几何 354，每份的文件名就是它的内容 |
+| `.md` | `docs/**` + 根 `README.md` | **1,200** | 台账按**阶段/小节**切册（`DECISIONS.md` 到线时分 `docs/decisions/阶段N.md`），不是把一条决策劈成两半 |
+
+**1,200 是反算的，不是拍的**：`docs/DECISIONS.md` 同一天从 848 涨到 978（+130 = 三条决策 + 一条整改轮记录），
+按"一次整改轮 ≈ 两三条决策"取现数 + 一轮余量 ≈ 1,200。守卫的 docstring 里带着这段算式 ——
+**改线必须连算式一起改**，否则阈值又变成无出处的那个字面数。
+
+三条附带规则，都是本轮实测换来的：
+1. **行数口径 = `splitlines()`**（末尾裸换行不多算一行），与 **ISSUES I58** 现测同源。口径不写明的话，
+   同一个文件能报出 800 与 801 两个数，红线就成了看谁手快。
+2. **根目录的 `00`–`06`、`AGENTS.md`、`PROJECT_SPEC.md` 不在范围内** —— 它们是 gitignored 的本机工作文件，
+   不是仓库产物。范围本身有断言钉（`.venv` 零命中 / `docs/**.md` 全在范围 / 根 `README.md` 在范围），
+   跳过目录靠 `SKIP_DIRS`，**把它删掉一项守卫立刻红**（已注入验证：去掉 `.venv` → 629 条）。
+3. **拆文件不许改变测试条数**：拆完 `--collect-only` 对数（那份 913 行拆成四件 = 10+9+7+29 = 55 条，与拆前同）。
+
+## R-011 · 2026-10-17 · 库结构卫生：列级对账守卫 + 迁移 0007 收编运行时建表（**ISSUES I62** 甲+丁，定案 **D-055**）
+
+**背景**：`docs/DATABASE.md` §2.1 与 `PRAGMA table_info(documents)` 双向对账发现三处缺陷（**ISSUES I62**）：
+① §2.1 还画着 `volume_id`（迁移 0006 早删了，**ISSUES I40** 复发族）；② 0004 加的 `last_read_page` /
+`last_read_at` 在整份文档零提及；③ `semantic/vector_store.py:37-49` 在运行时 `CREATE TABLE IF NOT EXISTS
+vector_meta`，绕开迁移链 —— 库形状取决于"这段代码有没有跑到过"，同一版本号的两台机器可以差一张表。
+
+**决定（用户「跟着你的推荐来执行」= 甲 + 丁）**：
+- **丁**：新增 `tests/guards/test_schema_columns.py` —— A 列级双向对账（文档声明的列 ⇄ `table_info` 实际列）+
+  B 迁移目录外不许 DDL（唯一例外按**语句**放行 `migrate.py` 那条 `SCHEMA_TABLE` 水位表）。坏法注入
+  `.probe_work/i62_guard_injection.py` **13/13 达标 VERDICT: ALL GREEN**。
+- **甲**：新增迁移 `0007_vector_meta_and_drop_pdf_version`（把 `vector_meta` 与 `ix_vector_meta_doc` 收进
+  迁移链、删 `documents.pdf_version` 死列 —— 现测真实库 0/10,980 行非 NULL、`db/models.py` 无此字段、
+  全仓库除 §2.1 与 `parsing/pdf.py:95`/`:143` 外零消费者）。`VectorStore._ensure_table` 改成响亮的前置
+  断言 `VectorSchemaMissing`（指名"缺 0007"而不是静默建表）。
+- **vector 口径单一化**：`VECTOR_STATUSES` 常量落 `db/models.py`（产品里没人推进 `vector_status`，只有
+  `Document` 默认值 `'na'` 落库 —— 它是读数不是判定，欠账另立 **ISSUES I63**）；p12 C7 换成真口径 +
+  "谁推进它"声明；两个测试夹具的越界状态值修成合法值。
+
+**现数**：§2.1 声明 **27** 列（删了 `volume_id` 与 `pdf_version`），库里 `documents` 实际 **33** 列；
+表数 **20**（19 + `vector_meta`）。全量回归 **461 passed, 4 skipped**。
+
+**本条不覆盖的（另立欠账，不许顺手放宽规则）**：把 A 推广到全部 19 张表需要先给它们逐列编目 ——
+现测有 **47** 个列名在 `DATABASE.md` 里查不到（含 FTS5 影子表那 7 个本来就无从编目），那是一次单独的
+文档工作；`duplicate_groups` 之类"故意不建"的表仍由原有断言钉。
 
 ## R-005 · 命名与放置规则（供后续新增文件时对照）
 

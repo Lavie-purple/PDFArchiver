@@ -1,6 +1,6 @@
 """真引擎跑真扫描件（阶段 5 第 2、6 条）—— 这一文件里没有任何替身。
 
-`test_ocr_service.py` 把决策与推理分开了，这里把它们合起来跑一遍：
+`test_ocr_service.py` 与 `test_ocr_progress_and_budget.py` 把决策与推理分开了，这里把它们合起来跑一遍：
 真 RapidOCR + 真 onnxruntime + 真 sqlite FTS5 + 真 PDF。可选层没装的机器整文件 skip
 （`requirements/ocr.txt` 是可选层，只装 base 的机器上扫描与全文检索照常跑）。
 

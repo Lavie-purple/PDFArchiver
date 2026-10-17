@@ -25,7 +25,7 @@
 | `python gates/stage5.py --quick` | 产品路径端到端 + 每日页预算真停机 + 真引擎套件不退化 | 末行 `VERDICT: ALL GREEN`，并现场打印耗时/内存/显卡/逐字命中率 |
 
 没装可选层时应用**照常起**，OCR 层报"不可用"，扫描与索引不受影响。这条不是口头保证，是被断言钉着的：
-`tests/integration/test_ocr_service.py::test_没装可选层时应用侧模块照样import得进来` 在**子进程**里把
+`tests/integration/test_ocr_progress_and_budget.py::test_没装可选层时应用侧模块照样import得进来` 在**子进程**里把
 `rapidocr_onnxruntime` 塞成 `None`，再 import `pdfarchiver.app` / `services.bootstrap` / `services.ocr_service`
 （三个都必须成功），然后要求 `OcrEngine().ensure()` 抛出的 `OcrUnavailable` 原文里带着 `requirements/ocr.txt`。
 用子进程是因为主进程已经 import 过真引擎，在这里断言等于自证。

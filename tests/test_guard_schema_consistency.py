@@ -1,13 +1,18 @@
 """文档↔库结构一致性守卫 —— 销账 ISSUES I44 的"仍欠"部分。
 
-§2.5 声明当前 `sqlite_master` 里应有 19 张表（内容表 14 + schema_version + FTS5 影子表 4）。
+§2.5 声明当前 `sqlite_master` 里应有 20 张表（内容表 15 + schema_version + FTS5 影子表 4）。
 §2.2 列出的表名（除 `duplicate_groups` 明写不建）必须真存在。
 
 本断言按 AGENTS.md 用坏法真注入一次：
-- 把期望数从 19 改成 18，必须变红
+- 把期望数从 20 改成 19，必须变红
 - 把 `documents` 从期望列表里删掉，必须变红
 
 不会红就删掉这条断言。
+
+**这个文件自己的历史欠账（ISSUES I62）**：它过去写的是 19，而真实库里 `sqlite_master` 数出来是
+20 —— 因为 `vector_meta` 当时由 `semantic/vector_store.py` 在**运行时**建，只跑迁移链的本守卫
+看不见它。迁移 `0007` 把它收进链之后，20 这个数才第一次"跑迁移就能长出来"。
+表级守卫看得见表名、看不见列，列级的双向对账在 `tests/guards/test_schema_columns.py`。
 """
 from __future__ import annotations
 
@@ -38,10 +43,11 @@ EXPECTED_TABLES = [
     "processing_jobs",
     "app_settings",
     "schema_version",
+    "vector_meta",
 ]
 
-# §2.5 声明的总数（内容表 14 + schema_version + FTS5 影子表 4）
-EXPECTED_COUNT = 19
+# §2.5 声明的总数（内容表 15 + schema_version + FTS5 影子表 4）
+EXPECTED_COUNT = 20
 
 
 def test_documentation_matches_actual_schema():

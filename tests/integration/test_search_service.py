@@ -15,10 +15,13 @@ from pathlib import Path
 
 import pytest
 
+from pdfarchiver.db.models import Document, TextPage
+from pdfarchiver.db.repositories.documents import DocFilter
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.indexing.fts import VIA_FTS, VIA_LIKE, match_expression
 from pdfarchiver.search.service import (CHANNEL_LIMIT, FIELD_BODY, FIELD_BROWSE, FIELD_FILENAME,
-                                        FIELD_METADATA, FIELD_PATH, Criteria, SearchService)
+                                        FIELD_LABELS, FIELD_METADATA, FIELD_PATH, Criteria,
+                                        SearchService)
 
 TITLE_A = "人工智能产业年度报告"
 TITLE_B = "合同审阅要点汇编"
@@ -133,6 +136,160 @@ def test_两字查询退回LIKE并写明慢速匹配(corpus) -> None:
     assert "慢速" in result.channel_label, result.channel_label
     assert [h.doc.name for h in result.hits] == ["人工智能产业年度报告.pdf"]
     assert result.hits[0].score == 0.0, "LIKE 没有相关性得分，不许伪造一个"
+
+
+def test_状态栏摘要两向钉住口径且只用后端口径的数(corpus) -> None:
+    """§S1 那两条已定案契约的机器版本（**ISSUES I60**）。
+
+    两种坏法各红一边，所以是"两向"：
+    ① 从 `status_line()` 里去掉 `channel_label` ⇒ 两字查询那条不再说「慢速」；
+    ② 把口径写死成"永远提示慢速" ⇒ 走 trigram 那条跟着红。
+    显示的数一律来自 `matching_documents` / `counts_by_field` / `len(hits)`（本页行数），
+    界面原来那句 `f"关键词搜索命中 {len(docs)} 份"` 是**去重后的文档数**，与"符合筛选的文档数"
+    根本不是一个口径，所以这里额外钉一句"不许出现『命中』『份文档』字样"。
+    """
+    search = corpus["search"]
+
+    slow = search.search(Criteria(text="产业", in_fields=(FIELD_BODY,)))
+    fast = search.search(Criteria(text="审阅要点", in_fields=(FIELD_BODY,)))
+
+    assert slow.channel == VIA_LIKE and fast.channel == VIA_FTS, "前提：两条真的走了不同通道"
+    assert "慢速" in slow.status_line(), slow.status_line()
+    assert "慢速" not in fast.status_line(), fast.status_line()
+
+    for result in (slow, fast):
+        line = result.status_line()
+        assert f"符合筛选 {result.matching_documents} 份" in line, line
+        for name, count in result.counts_by_field.items():
+            assert f"{FIELD_LABELS[name]} {count} 行" in line, line
+        assert f"本页 {len(result.hits)} 行" in line, line
+        assert "命中" not in line and "份文档" not in line, \
+            f"状态栏里出现了自算口径：{line}"
+
+
+# —— 正文浅扫预算（**ISSUES I59 乙 / D-051**）————————————————
+
+def _seed_doc(ctx, n: int, bodies: list[str]) -> int:  # noqa: ANN001 - ctx 是 AppContext，测试里不绕圈 import
+    """按插入顺序建一份文档并写正文页，返回 doc_id。
+
+    自增主键 ⇒ 先建的 id 小 ⇒ "按 (doc_id, page_no) 的前 N 行"在这里算得出来。
+    预算窗口的对错只有在这个前提下才可判，所以才不直接用 `corpus`（那份是目录扫出来的，序不定）。
+    """
+    path = f"D:\\浅扫样本\\样本{n}.pdf"
+    doc = ctx.documents.upsert(Document(
+        path=path, path_key=identity_key(path), name=f"样本{n}.pdf",
+        size_bytes=2048, mtime_ns=1_760_000_000_000_000_000, sha256=f"{n:064x}",
+        text_status="done", fts_status="done"))
+    doc_id = int(doc.id)
+    ctx.texts.replace_pages(doc_id, [TextPage(doc_id=doc_id, page_no=i + 1, body=b,
+                                              char_count=len(b)) for i, b in enumerate(bodies)])
+    return doc_id
+
+
+def _seed_pages(ctx, *bodies: str) -> list[int]:  # noqa: ANN001
+    """每份各一页，正文与入参同序 —— 三份三行，预算 1 就是"只看第一份"。"""
+    return [_seed_doc(ctx, n, [body]) for n, body in enumerate(bodies)]
+
+
+@pytest.fixture
+def shallow(ctx):
+    """三份各一页，正文里各写一个只属于自己的两字词（两字才落在 LIKE 通道上）。"""
+    _seed_pages(ctx, "第一页写着甲词", "第二页写着乙词", "第三页写着丙词")
+    return SearchService(ctx.documents, ctx.metadata, ctx.texts)
+
+
+def test_预算到点就停且结果自报未扫完(shallow, monkeypatch) -> None:
+    """浅扫的**代价必须写在结果里**（**D-051**）：预算截停之后拿到的是"库里靠前那一段"的结果，
+    把它说成全部就是伪装完成。自报还要点名**偏向哪一段** —— 只写"结果可能不全"，
+    用户以为缺的是随机几条，实际缺的是靠后的整批文档。
+
+    两条坏法各红一边：① 把 `_scan_text` 从 `lines()` / `status_line()` 里摘掉 ⇒ 本条红在「未扫完」；
+    ② 把标记写死成恒 True ⇒ 红在 `test_预算覆盖全库时不许跟着自报未扫完`。
+    """
+    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 1)
+
+    result = shallow.search(Criteria(text="甲词", in_fields=(FIELD_BODY,)))
+
+    assert [h.doc.name for h in result.hits] == ["样本0.pdf"], "窗口内那页要照常返回，预算不是停用"
+    assert result.body_scan_incomplete
+    for line in (result.lines()[0], result.status_line()):
+        assert "未扫完" in line and "靠后" in line, line
+
+
+def test_浅扫零命中要说不完整扫而不是库里没有(shallow, monkeypatch) -> None:
+    """这条是 D-051 存在的全部理由：0 行时"没扫完"与"确实没有"在屏幕上长得一样，
+    而用户会按后者决定去别处找文件。预算=1 ⇒ 窗口只有第一行，「丙词」必然在窗口外。
+
+    坏法：把 `search()` 里那句 `shallow_scan = shallow_scan or incomplete` 挪进
+    `if rows:` 里面（"有命中才认账"）⇒ 本条红在 `body_scan_incomplete`。
+    """
+    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 1)
+
+    result = shallow.search(Criteria(text="丙词", in_fields=(FIELD_BODY,)))
+
+    assert result.hits == [], "前提：窗口里没有这一页"
+    assert result.body_scan_incomplete
+    assert "未扫完" in result.status_line(), result.status_line()
+
+
+def test_预算覆盖全库时不许跟着自报未扫完(shallow, monkeypatch) -> None:
+    """反向的牙：三行全在预算内 ⇒ 扫描真的扫完了，这时再说"未扫完"就是另一个方向的谎。"""
+    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 99)
+
+    result = shallow.search(Criteria(text="丙词", in_fields=(FIELD_BODY,)))
+
+    assert [h.doc.name for h in result.hits] == ["样本2.pdf"]
+    assert not result.body_scan_incomplete
+    assert "未扫完" not in result.status_line() and "未扫完" not in result.lines()[0]
+
+
+def test_预算只管正文通道另外三条不跟着认账(shallow, monkeypatch) -> None:
+    """文件名 / 路径 / 元数据扫的是 `documents`（万行级）和 `document_metadata`，不在预算范围内
+    （**ISSUES I59** 量到的慢只有正文 LIKE 那一条）。坏法：让 `_channel` 对文件名也回 True ⇒ 本条红。"""
+    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 1)
+
+    result = shallow.search(Criteria(text="样本", in_fields=(FIELD_FILENAME,)))
+
+    assert result.hits, "前提：文件名通道要有命中"
+    assert result.channel == "", "没勾正文时不该有正文口径"
+    assert not result.body_scan_incomplete
+    assert "未扫完" not in result.status_line(), result.status_line()
+
+
+def test_仓储层预算把窗口收在边界内且带回越界标记(ctx) -> None:
+    """仓储这一层管"看不看得见窗口外的行"，服务这一层管"说不说"，两层各钉一次。
+    `scan_budget=None` 必须与旧行为逐字一致（扫到底、第二个值恒 False）—— 兼容要求在这儿。
+
+    坏法三条：把边界探查的 `LIMIT 2` 写成 `LIMIT 1` ⇒ 第一条红在 `beyond`（永远报 False）；
+    删掉 `tp.doc_id <= ?` ⇒ 第一条红在命中数（窗口失效，第三份也回来）；
+    把 `scan_budget=0` 直接当"不限"用 ⇒ 第四条红在 `ValueError`。
+    """
+    _seed_pages(ctx, "第一页写着甲词", "第二页写着乙词", "第三页写着丙词")
+
+    hits, beyond = ctx.texts.search_like("丙词", DocFilter(), scan_budget=1)
+    assert (hits, beyond) == ([], True), "窗口只有第一行，第三页取不到，但窗口外确实还有行"
+
+    hits, beyond = ctx.texts.search_like("丙词", DocFilter(), scan_budget=99)
+    assert [h.page_no for h in hits] == [1] and beyond is False, "预算盖得住全库时得报「扫完了」"
+
+    hits, beyond = ctx.texts.search_like("丙词", DocFilter())
+    assert len(hits) == 1 and beyond is False, "不传预算必须等于旧行为"
+
+    with pytest.raises(ValueError):
+        ctx.texts.search_like("丙词", DocFilter(), scan_budget=0)
+
+
+def test_预算按文档取整边界那份的其余页一并算进(ctx) -> None:
+    """`search_like` 的窗口是"第 N 行所在**那份文档**之前的所有行"（为的是让索引能两头早停，
+    见仓储 docstring），代价就是最多越出预算一份。docstring 写着这句，这条就是它的牙：
+    第一份三页、第二份一页，预算 1 行 ⇒ 第一份的三页全在结果里。"""
+    _seed_doc(ctx, 0, ["第一份甲页", "第一份乙页", "第三页藏着丁词"])
+    _seed_doc(ctx, 1, ["第二页也藏着丁词"])
+
+    hits, beyond = ctx.texts.search_like("丁词", DocFilter(), scan_budget=1, limit=10)
+
+    assert [h.page_no for h in hits] == [3], "窗口按份取整：第一份的第 3 页算进来了"
+    assert beyond, "第二份在窗口之外，必须报「没扫完」"
 
 
 def test_查询词里的FTS运算符被当成普通字符(corpus) -> None:
@@ -251,6 +408,7 @@ def test_超过通道上限时只截断不假装取完(ctx, corpus) -> None:
     assert len(wide.hits) == CHANNEL_LIMIT
     assert page.truncated_fields == (FIELD_FILENAME,), page.truncated_fields
     assert "截断" in page.lines()[0], page.lines()[0]
+    assert "截断" in page.status_line(), page.status_line()
 
 
 def test_筛选条件对四条通道同时生效(corpus, root) -> None:

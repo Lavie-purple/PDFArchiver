@@ -67,14 +67,15 @@ def test_空库首启建出全部表(data_root: Path) -> None:
     try:
         tables = _tables(ctx.paths.catalog_db)
         assert STAGE1_TABLES | STAGE2_TABLES <= tables
-        assert ctx.schema_version == 6
+        assert ctx.schema_version == 7
         # 启动路径不再跑同步库检查（2026-10-16 判死：6.1GB 真库上 integrity_check 19h+、
         # quick_check 452s+）。这里在 MB 级测试库上直接查 PRAGMA，验的是"迁移建出来的库健康"。
         conn = ctx.engine.thread_connection()
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert ctx.migration.did_anything and ctx.migration.applied == [
             "0001_initial", "0002_text_and_fts", "0003_ocr_tracking",
-            "0004_reading_history", "0005_stage4_vocab", "0006_drop_volume_id"]
+            "0004_reading_history", "0005_stage4_vocab", "0006_drop_volume_id",
+            "0007_vector_meta_and_drop_pdf_version"]
     finally:
         ctx.shutdown()
 
@@ -121,7 +122,7 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
     second = bootstrap(data_root)
     try:
         assert second.migration.did_anything is False
-        assert second.migration.from_version == second.migration.to_version == 6
+        assert second.migration.from_version == second.migration.to_version == 7
         assert sorted(p.name for p in second.paths.backups_dir.glob("*.db")) == snaps_before, \
             "没有待应用迁移时不许产生新快照"
         assert second.catalog.count_tags() == 1
@@ -143,8 +144,8 @@ def test_每一步迁移前都有可用快照且快照停在迁移之前(data_ro
     ctx = bootstrap(data_root)
     ctx.shutdown()
     snaps = sorted(p.name for p in ctx.paths.backups_dir.glob("pre-migration-*.db"))
-    assert len(snaps) == 6 and snaps == sorted(snaps), \
-        "应用了 0001/0002/0003/0004/0005/0006 六个迁移，就该有六次迁移前快照"
+    assert len(snaps) == 7 and snaps == sorted(snaps), \
+        "应用了 0001/0002/0003/0004/0005/0006/0007 七个迁移，就该有七次迁移前快照"
     assert all(n.startswith("pre-migration-000") for n in snaps)
 
     s1 = ctx.paths.backups_dir / snaps[0]
@@ -236,10 +237,61 @@ def test_坏迁移修好后能继续往前(data_root: Path) -> None:
     report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
     assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking",
                               "0004_reading_history", "0005_stage4_vocab",
-                              "0006_drop_volume_id"], \
+                              "0006_drop_volume_id", "0007_vector_meta_and_drop_pdf_version"], \
         "真实迁移必须能接着坏迁移留下的 v1 库一路往上走"
-    assert current_version(engine.connect()) == 6
+    assert current_version(engine.connect()) == 7
     assert STAGE2_TABLES <= _tables(db)
+    assert engine.integrity_check() == "ok"
+    engine.close_thread_connection()
+
+
+def test_运行时建过vector_meta的现存库升0007是无操作而不是撞表(data_root: Path) -> None:
+    """模拟**开发机真实库**那条路径：老代码在运行时 `CREATE TABLE IF NOT EXISTS vector_meta`，
+    所以 0007 面对的是一个**已经有这张表、而且可能带着行**的库。
+
+    这条断言钉两件事，两件都是"双击打不开"的形状：
+    - 0007 必须过得去（靠 `IF NOT EXISTS`），不能报 `table vector_meta already exists`；
+    - 已有的元数据行必须一条不少（靠"不 DROP 再建"，而是真的什么都不做）。
+    """
+    engine = _db_at_v1(data_root)
+    v6 = data_root / "m_v6"
+    shutil.copytree(REAL_MIGRATIONS, v6)
+    (v6 / "0007_vector_meta_and_drop_pdf_version.py").unlink()
+    report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=v6)
+    assert current_version(engine.connect()) == 6 and report.to_version == 6
+
+    conn = engine.connect()
+    conn.execute("INSERT INTO documents(path, path_key, name, ext, size_bytes, mtime_ns,"
+                 " created_at, updated_at) VALUES('H:/docs/旧.pdf','h:/docs/旧.pdf','旧.pdf','pdf',1,1,1,1)")
+    doc_id = conn.execute("SELECT id FROM documents WHERE path_key='h:/docs/旧.pdf'").fetchone()[0]
+    # 逐字照老 `vector_store.py:39-48` 的形状建，这才是现存库的真样子
+    conn.execute("""
+        CREATE TABLE vector_meta (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            page_no INTEGER NOT NULL,
+            vector_idx INTEGER NOT NULL UNIQUE,
+            UNIQUE(doc_id, page_no)
+        )
+    """)
+    conn.execute("INSERT INTO vector_meta(doc_id, page_no, vector_idx) VALUES(?, 3, 7)", (doc_id,))
+    conn.commit()
+    conn.close()
+
+    applied = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
+    assert applied.applied == ["0007_vector_meta_and_drop_pdf_version"], \
+        "现存库升 0007 必须只应用这一条，且不能因为表已存在而失败"
+    conn = engine.connect()
+    try:
+        assert [tuple(r) for r in conn.execute(
+            "SELECT doc_id, page_no, vector_idx FROM vector_meta").fetchall()] \
+            == [(doc_id, 3, 7)], "0007 把现存库已有的向量元数据弄丢或弄改了"
+        assert "pdf_version" not in _columns(engine.path, "documents"), "死列没删掉"
+        assert "ix_vector_meta_doc" in {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='vector_meta'")}, \
+            "现存库那条路径上老代码建的索引名与迁移建的同名，IF NOT EXISTS 后必须仍在"
+    finally:
+        conn.close()
     assert engine.integrity_check() == "ok"
     engine.close_thread_connection()
 

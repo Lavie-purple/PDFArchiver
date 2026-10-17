@@ -14,6 +14,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.ui.pages.status_page import unwired_lines
 from pdfarchiver.ui.table_layout import set_table_columns
 
 
@@ -38,6 +39,17 @@ class ArchivePage(QtWidgets.QWidget):
         self.template_input.setText(self.ctx.settings.values.get("archive_default_template", "{category}/{year}/{name}.pdf"))
         top_lay.addRow("命名模板:", self.template_input)
 
+        # **ISSUES I55** ③ 的如实呈现（勾乙，2026-10-17）。这一栏现在是**断的三处**：值不落回
+        # `settings`、`_generate_preview()` 读进局部变量后一次都没用、执行器也忽略入参 ——
+        # 三种形状里最阴的不是"按钮按下去没反应"，是"控件看着能用、预览看着对，改了却什么都不变"，
+        # 用户会以为自己已经分好了目录。所以把"没生效"写在它正下方，而不是等人去状态页翻。
+        # 文案取 `status_page.unwired_lines("S3")` —— **界面不另编一句**（全站只有那一份口径）。
+        self.unwired_label = QtWidgets.QLabel()
+        self.unwired_label.setObjectName("muted")
+        self.unwired_label.setWordWrap(True)
+        self.unwired_label.setText("本轮未接线：" + "；".join(unwired_lines("S3")))
+        top_lay.addRow(self.unwired_label)
+
         layout.addLayout(top_lay)
 
         # 中部：待归档文档列表
@@ -52,6 +64,9 @@ class ArchivePage(QtWidgets.QWidget):
         # 保住定宽，被吃掉的是信息量最低、且左栏分类树里本来就有的那一列。地板档已经压不出更窄的
         # 视口了（**D-039** 的 1024px 地板，见 **ISSUES I52**），所以"吸收列落错地方"这一类
         # 由 `test_压到地板宽度时归档表仍保住文件名与路径` 钉住，而不是靠窗口还能更小来暴露。
+        # 805px 现在是个**与行数无关**的读数（**ISSUES I54** 已销：行号列不再长出来，行多了只
+        # 多一条 8px 的纵向滚动条）。同一档改这行之前读到的是 805 / 767 / 746（空库 / 2 行 / 40 行），
+        # 「分类」那条吸收列跟着从 229 漂到 191 再漂到 170 —— 反算的分母根本不稳定。
         set_table_columns(self.doc_table, {0: 56, 1: 280, 2: 240}, stretch_col=3)
         self.doc_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.doc_table.setAlternatingRowColors(True)
@@ -134,7 +149,8 @@ class ArchivePage(QtWidgets.QWidget):
             src_item = QtWidgets.QTableWidgetItem(doc.path)
             src_item.setToolTip(doc.path)
             self.preview_table.setItem(row, 0, src_item)
-            # 简化的目标路径计算（实际应该用 template 渲染）
+            # 目标路径**不看 `template`**（上面那行 `unwired_label` 就是这件事的屏上说明）：
+            # 渲染接线与「执行归档」「整批撤销」在同一张账上（**ISSUES I55** 甲/乙/丙 勾乙）。
             dst = target_root_path / doc.name
             dst_item = QtWidgets.QTableWidgetItem(str(dst))
             dst_item.setToolTip(str(dst))

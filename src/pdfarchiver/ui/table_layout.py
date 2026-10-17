@@ -31,7 +31,7 @@ from PySide6 import QtWidgets
 # 这条常量的存在理由是**它之前没人算**：I48 那轮"按 13px 字体实测反算"反的是**文本宽**
 # （修改时间 110px、大小 41px），然后给了 118/62 = 文本 + 8，于是每一列都恰好短掉那 23px，
 # 用户读到的是 `2026-1…` 和 `1…`。**定宽 = 内容宽 + CELL_PADDING_WIDTH**，只按内容宽定
-# 列必截断。守卫见 `tests/integration/test_app_shell.py`。
+# 列必截断。守卫见 `tests/integration/test_ui_layout.py`。
 CELL_PADDING_WIDTH = 23
 
 # 允许截断的列：内容天生没有上限（绝对路径 / 用户自定义分类名 / 第三方报错原文），
@@ -51,6 +51,12 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
     """
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
+    # 行号列没人要过，但 Qt 会自动长出来，而且**宽度随行号位数变**（2026-10-17 现测：
+    # 空表 0 / 2 行 38 / 40 行 51）—— 于是同一张表"可用视口"不是一个数，I48 那套列宽
+    # 反算的分母里根本没有它。全站 8 张表里 7 张经这里，所以一处 `hide()` 修掉 7 张，
+    # 判重页那张自己配表头、单独 hide（`pages/dedup_page.py`）；
+    # 守卫 `tests/integration/test_ui_tier.py` 逐屏扫全部 8 张，第 9 张漏掉会红（ISSUES I54）。
+    table.verticalHeader().hide()
     for col, width in widths.items():
         header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Interactive)
         table.setColumnWidth(col, width)

@@ -151,6 +151,13 @@ class FloatablePanel(QtWidgets.QWidget):
         self.place()
 
     def close_overlay(self) -> None:
+        """宽档这一栏是常驻列，"可关"是 D-040 给**浮层**写的形状，不适用于常驻列。
+        和 `open_overlay()` 对称地早退，而不是无条件 `setVisible(False)`：后者误调用一次
+        就把常驻列收起且**再也回不来** —— `set_narrow()` 只在真的换档时才 `setVisible(True)`
+        （本轮探针实测到了这个形状：宽档 `close_overlay()` 之后面板读数变成 0 宽）。
+        """
+        if not self.narrow:
+            return
         self.setVisible(False)
 
 

@@ -177,17 +177,57 @@ class TextRepository:
             (*w.params, match, limit)).fetchall()
         return [PageHit(**dict(r)) for r in rows]
 
-    def search_like(self, needle: str, filters: DocFilter, *, limit: int = 200) -> list[PageHit]:
+    def search_like(self, needle: str, filters: DocFilter, *, limit: int = 200,
+                    scan_budget: int | None = None) -> tuple[list[PageHit], bool]:
         """1–2 字查询的 LIKE 通道：`score` 恒为 0（LIKE 没有相关性得分），
-        排序退回"文档序 + 页序"。界面必须显示"慢速匹配"，因为这条是全文扫描（p1：30 万行 499ms）。"""
+        排序退回"文档序 + 页序"。界面必须显示"慢速匹配"，因为这条是全文扫描。
+
+        慢的**机制**不是行数，是"为凑满候选要往表里走多深"（2026-10-17 真库实测，
+        **ISSUES I59**：`发票` 第 200 条命中落在 `doc_id=3065` = 走过 334,924 行 = 全表 17.0%
+        → 2,676ms；同样两字的 `北京` 只走 0.6%（11,903 行）→ 104ms。同一条 SQL、
+        同一张 1,972,578 行的表）。
+
+        `scan_budget` 就是那条深度预算：**只允许看按 (doc_id, page_no) 排序的前 N 行**。
+        落地方式是先做一次索引内探查（`LIMIT 2 OFFSET N-1`，真库实测 2.9ms）拿到第 N 行所在
+        的 `doc_id`，再给扫描加一句 `tp.doc_id <= 边界`。为什么不用"窗口子查询 JOIN 回主表"：
+        那种写法每次都要**整段物化 N 行**，浅查询（本来走 1 万行就凑满了）被拖到 358ms，
+        比不预算还慢 3 倍（同一探针 `.probe_work/i59_budget_shape_probe.py` 的 A/B 两列对照）。
+        加边界这一句则两头都保住：`发票` 2,637→277ms，`北京` 118→108ms、`教育` 58→55ms 不动。
+        代价是窗口按 `doc_id` 取整到**份**：边界那份文档的其余页一并算进来，
+        最多越出预算一份（库里最大的那份 946 页 ⇒ N+945 行，1.6%）。
+
+        返回的第二个值是**"边界之外还有行"** —— 调用方必须把它呈现出来（**D-051**）：
+        浅扫之后的结果是**库里靠前那一段**的结果，不是"没有更多命中"。
+        表比预算还短时窗口覆盖全表，第二个值恒为 False（"扫完了"不许跟着认账）。
+        `scan_budget=None` 时行为与旧版一致（扫到底），第二个值恒为 False。
+        """
+        conn = self.engine.thread_connection()
         w = where_for_filter(filters)
-        rows = self.engine.thread_connection().execute(
+        if scan_budget is None:
+            rows = conn.execute(
+                "SELECT tp.doc_id, tp.page_no, tp.body, tp.source_kind, 0.0 AS score"
+                " FROM text_pages tp JOIN documents d ON d.id = tp.doc_id"
+                + w.sql_with(r"tp.body LIKE ? ESCAPE '\'")
+                + " ORDER BY tp.doc_id, tp.page_no LIMIT ?",
+                (*w.params, like_contains(needle), limit)).fetchall()
+            return [PageHit(**dict(r)) for r in rows], False
+        if scan_budget < 1:
+            raise ValueError(f"扫描预算至少 1 行，收到 {scan_budget}")
+
+        # 一次探查两个答案：第 N 行（边界）与第 N+1 行（窗口之外还有没有行）。
+        # 表比预算还短时探查落空 ⇒ 不加边界、整表扫，`beyond` 为 False —— "扫完了"不许跟着认账。
+        edge = conn.execute(
+            "SELECT doc_id FROM text_pages ORDER BY doc_id, page_no LIMIT 2 OFFSET ?",
+            (scan_budget - 1,)).fetchall()
+        beyond = len(edge) > 1
+        clauses = ["tp.doc_id <= ?", r"tp.body LIKE ? ESCAPE '\'"] if beyond \
+            else [r"tp.body LIKE ? ESCAPE '\'"]
+        params = (*w.params, *([edge[0][0]] if beyond else []), like_contains(needle), limit)
+        rows = conn.execute(
             "SELECT tp.doc_id, tp.page_no, tp.body, tp.source_kind, 0.0 AS score"
             " FROM text_pages tp JOIN documents d ON d.id = tp.doc_id"
-            + w.sql_with(r"tp.body LIKE ? ESCAPE '\'")
-            + " ORDER BY tp.doc_id, tp.page_no LIMIT ?",
-            (*w.params, like_contains(needle), limit)).fetchall()
-        return [PageHit(**dict(r)) for r in rows]
+            + w.sql_with(*clauses) + " ORDER BY tp.doc_id, tp.page_no LIMIT ?", params).fetchall()
+        return [PageHit(**dict(r)) for r in rows], beyond
 
     def check_fts_consistency(self) -> FtsConsistency:
         """G10：全文索引与正文表对不对得齐。只报**测得到**的两件事，并说清测不到什么。

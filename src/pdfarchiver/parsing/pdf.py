@@ -92,7 +92,6 @@ class PdfInfo:
     is_encrypted: bool = False
     needs_pass: bool = False
     is_repaired: bool = False
-    pdf_version: str | None = None
     metadata: dict[str, str | None] = field(default_factory=dict)
 
     def as_metadata_row(self) -> dict[str, str | None]:
@@ -140,7 +139,6 @@ class PdfReader:
             is_encrypted=bool(doc.is_encrypted),
             needs_pass=bool(doc.needs_pass),
             is_repaired=bool(getattr(doc, "is_repaired", False)),
-            pdf_version=str(meta.get("format") or "") or None,
             metadata={k: meta.get(k) for k in META_FIELDS},
         )
 

@@ -7,7 +7,8 @@
 
 存储结构：
 - vectors.npy：内存映射的 int8 数组（N, 512）
-- vector_meta 表：doc_id, page_no, vector_idx 映射
+- vector_meta 表：doc_id, page_no, vector_idx 映射。**由迁移 `0007` 建**，本模块只读不建
+  （运行时建表会让同一个 `schema_version` 对应两种库形状 —— **ISSUES I62**）
 """
 from __future__ import annotations
 
@@ -17,6 +18,10 @@ from pathlib import Path
 import numpy as np
 
 from pdfarchiver.config.paths import AppPaths
+
+
+class VectorSchemaMissing(RuntimeError):
+    """库里没有 `vector_meta`。结构只能由迁移建，这里只验不建（见 `_require_table`）。"""
 
 
 class VectorStore:
@@ -34,18 +39,20 @@ class VectorStore:
         self._vectors: np.ndarray | None = None
         self._next_idx = 0
 
-    def _ensure_table(self, conn: sqlite3.Connection) -> None:
-        """确保 vector_meta 表存在。"""
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS vector_meta (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                page_no INTEGER NOT NULL,
-                vector_idx INTEGER NOT NULL UNIQUE,
-                UNIQUE(doc_id, page_no)
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS ix_vector_meta_doc ON vector_meta(doc_id)")
+    def _require_table(self, conn: sqlite3.Connection) -> None:
+        """前置断言：`vector_meta` 必须已由迁移 `0007` 建好，这里只验不建。
+
+        以前这一段是 `CREATE TABLE IF NOT EXISTS`，后果是库里有没有这张表取决于"这段代码
+        有没有跑到过"：空库首迁后是 19 张表，跑过一次语义搜索是 20 张，而两者报的都是
+        `schema_version=6`。结构变更只能是一条迁移（`docs/DATABASE.md` 四），
+        由 `tests/guards/test_schema_columns.py` 规则 B 钉住。
+        """
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vector_meta'"
+                        " LIMIT 1").fetchone() is None:
+            raise VectorSchemaMissing(
+                f"库 {self._db_path} 里没有表 vector_meta —— 它由迁移 0007 建，"
+                f"说明这个库没走到最新水位（正常启动会自动迁移；手工指库或老产物留下的库要"
+                f"先用本版本启动一次）")
 
     def _load_vectors(self) -> np.ndarray:
         """加载或创建向量文件。"""
@@ -58,7 +65,7 @@ class VectorStore:
             # 读取下一个可用索引
             conn = sqlite3.connect(self._db_path)
             try:
-                self._ensure_table(conn)
+                self._require_table(conn)
                 row = conn.execute("SELECT MAX(vector_idx) FROM vector_meta").fetchone()
                 self._next_idx = (row[0] + 1) if row and row[0] is not None else 0
             finally:
@@ -79,7 +86,7 @@ class VectorStore:
 
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
 
             # 检查是否已存在
             existing = conn.execute(
@@ -125,7 +132,7 @@ class VectorStore:
 
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
             vectors = self._load_vectors()
 
             indices = []
@@ -181,7 +188,7 @@ class VectorStore:
         """删除某个文档的所有向量，返回删除数量。"""
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
             rows = conn.execute(
                 "SELECT vector_idx FROM vector_meta WHERE doc_id = ?",
                 (doc_id,)
@@ -210,7 +217,7 @@ class VectorStore:
 
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
 
             # 转成 float32 计算余弦
             vectors_f32 = vectors.astype(np.float32) / 127.0
@@ -239,7 +246,7 @@ class VectorStore:
         """返回向量总数。"""
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
             row = conn.execute("SELECT COUNT(*) FROM vector_meta").fetchone()
             return row[0] if row else 0
         finally:
@@ -253,10 +260,10 @@ class VectorStore:
         """某文档在 vector_meta 里的所有 vector_idx。"""
         conn = sqlite3.connect(self._db_path)
         try:
-            self._ensure_table(conn)
+            self._require_table(conn)
             rows = conn.execute(
                 "SELECT vector_idx FROM vector_meta WHERE doc_id = ?", (doc_id,)).fetchall()
-            return [r["vector_idx"] for r in rows]
+            return [r[0] for r in rows]   # 默认 row_factory 是元组，按名字取会 TypeError
         finally:
             conn.close()
 
