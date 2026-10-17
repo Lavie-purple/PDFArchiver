@@ -43,7 +43,6 @@ for _p in (REPO / "src", REPO / "tests"):
 BUNDLE_SRC = REPO / "dist" / "PdfArchiver"
 BUILD_REPORT = REPO / ".probe_work" / "packaging_build_report.json"
 RESULT = REPO / ".probe_work" / "frozen_smoke_result.json"
-SCHEMA_VERSION = 3                      # 与 db/migrations/ 里最大的 VERSION 同源，见下方断言
 PHRASE = "冷链物流温度记录仪校准规程"      # 只有真抽取或真识别才得到的一串字
 BULK_DOCS = 150                         # 杀进程那一阶段要让队列里真有活：几份 PDF 一秒就排空了
 
@@ -132,10 +131,25 @@ def launch(exe: Path, data_dir: Path, cwd: Path, *, offscreen: bool,
                             text=True, encoding="utf-8", errors="replace")
 
 
+def console_encoding() -> str:
+    """控制台工具（taskkill）说的是 OEM 代码页，跟解释器的偏好编码是两件事。
+
+    实测（2026-10-18）：`PYTHONUTF8=1` 下 `locale.getpreferredencoding()` 变成 UTF-8，
+    拿它解 taskkill 的 `0xB3 0xC9`（「成」的 GBK 字节）会在读线程里抛
+    `UnicodeDecodeError`，整段 `--only package` 判 RED；改成 `errors="replace"` 能不炸，
+    但回显变成乱码 —— 门禁原文不可读等于没证据。所以这里按机器真实的 OEM 代码页解。
+    """
+    if sys.platform != "win32":
+        return "utf-8"
+    import ctypes
+    return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+
+
 def close_gracefully(proc: subprocess.Popen[str]) -> tuple[bool, float]:
     """先走 WM_CLOSE（等价于用户点 ×），拿不到优雅退出才强杀。"""
     t0 = time.perf_counter()
-    subprocess.run(["taskkill", "/PID", str(proc.pid)], capture_output=True, text=True)
+    subprocess.run(["taskkill", "/PID", str(proc.pid)], capture_output=True, text=True,
+                   encoding=console_encoding(), errors="replace")
     try:
         return proc.wait(timeout=30) == 0, round(time.perf_counter() - t0, 2)
     except subprocess.TimeoutExpired:
@@ -147,7 +161,8 @@ def close_gracefully(proc: subprocess.Popen[str]) -> tuple[bool, float]:
 def force_kill_tree(proc: subprocess.Popen[str]) -> tuple[bool, str]:
     """真强杀，模拟断电 / 被拔。"""
     out = subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True,
+                         encoding=console_encoding(), errors="replace")
     return out.returncode == 0, (out.stdout or "").strip()[:160]
 
 
@@ -282,7 +297,12 @@ def add_bulk(corpus: Path, count: int, tag: str) -> None:
 
 def phase_first_launch(exe: Path, data_dir: Path, run_dir: Path) -> list[Row]:
     from pdfarchiver.db.migrate import SCHEMA_TABLE
+    from pdfarchiver.db.migrations import discover
     from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE
+
+    # 期望的结构版本从产品自己的迁移目录取，不写死字面量：这一条曾经写死成 3，
+    # 迁移加到第 7 段之后它把一场本来全绿的冒烟判成 RED —— 硬编码的计数一定会过期。
+    migrations = discover(REPO / "src" / "pdfarchiver" / "db" / "migrations")
 
     expected_cats = len(DEFAULT_CATEGORY_TEMPLATE) + sum(
         len(v) for v in DEFAULT_CATEGORY_TEMPLATE.values())
@@ -313,8 +333,13 @@ def phase_first_launch(exe: Path, data_dir: Path, run_dir: Path) -> list[Row]:
                     f"缺={missing or '无'}｜迁移前快照 {len(snapshots)} 份"))
 
     version = scalar(data_dir, f"SELECT max(version) FROM {SCHEMA_TABLE}")
-    rows.append(Row(f"结构版本落到 {SCHEMA_VERSION}（三段迁移在冻结态全部跑完）",
-                    version == SCHEMA_VERSION, f"{SCHEMA_TABLE} max(version) = {version}"))
+    # `schema_version` 表按产品口径只留最新一条（`_run_one` 是 DELETE + INSERT），所以「七段都跑完」
+    # 的证据不是七行版本号，而是**每段迁移前各存了一份快照**。两个条件一起判。
+    rows.append(Row(f"结构版本落到 {migrations[-1].order}"
+                    f"（{len(migrations)} 段迁移在冻结态全部跑完）",
+                    version == migrations[-1].order and len(snapshots) == len(migrations),
+                    f"{SCHEMA_TABLE} max(version) = {version}｜期望 {migrations[-1].order}"
+                    f"｜迁移前快照 {len(snapshots)} 份（每段一份，共 {len(migrations)} 段）"))
 
     cats = scalar(data_dir, "SELECT count(*) FROM categories")
     rows.append(Row(f"SPEC 3.3 默认分类种进库（期望 {expected_cats}，数字取自代码里的模板本身）",

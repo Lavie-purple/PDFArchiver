@@ -298,9 +298,6 @@ def main(argv: list[str] | None = None) -> int:
                   gate_background_lifecycle(), gate_e2e_acceptance()] + stage5 + [gate_regression()]
         if not args.no_injection:
             checks += [gate_injection(), gate_ocr_injection()]
-        else:
-            checks.append(Row("反向注入探针（p9 + p10）", True, "本次 --no-injection 跳过",
-                              "注意：跳过注入时，「断言有约束力」这条没有被验证"))
 
     print(f"门禁运行于 {REPO}｜python {sys.version.split()[0]}")
     print(f"        {_machine_load()}")
@@ -310,6 +307,13 @@ def main(argv: list[str] | None = None) -> int:
         if row.note:
             print(f"        现场：{row.note[:600]}")
     bad = [r for r in checks if not r.ok]
+    if args.quick:
+        # 跳过不许算成一条 PASS —— 「N 条全绿」里混一件没跑的事（ISSUES I36 同一形状）
+        print("  SKIP  --quick 只判阶段 5 那三条：依赖钉版 / 架构守卫 / 冷启动 / 后台生命周期 / "
+              "e2e / 全量回归 / 反向注入本场都没跑，这一场的「全绿」不覆盖它们")
+    elif args.no_injection:
+        print("  SKIP  反向注入探针（--no-injection）—— 这一场的「全绿」不含「断言有约束力」这条")
+    print(f"  合计判定 {len(checks)} 条")
     print("VERDICT: " + ("ALL GREEN" if not bad else f"RED（{len(bad)} 条未过）"))
     return 0 if not bad else 1
 

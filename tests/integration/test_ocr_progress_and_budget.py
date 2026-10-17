@@ -178,7 +178,8 @@ def test_没装可选层时应用侧模块照样import得进来() -> None:
     env = dict(os.environ, PYTHONPATH=str(REPO / "src"), QT_QPA_PLATFORM="offscreen")
 
     out = subprocess.run([sys.executable, "-c", script], cwd=str(REPO), env=env,
-                         capture_output=True, text=True, timeout=180)
+                         capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=180)
 
     assert out.returncode == 0, f"应用侧 import 被可选层拖死了：{out.stderr[-500:]}"
     assert "IMPORT-OK" in out.stdout

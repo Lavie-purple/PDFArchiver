@@ -35,7 +35,8 @@ def gpu_free_mb() -> int:
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.free,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15,
         )
         if out.returncode != 0:
             return -1

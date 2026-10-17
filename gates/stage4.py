@@ -15,10 +15,11 @@
 - 新：DB 事务回滚不等于磁盘回滚
 
 当前状态：
-- ArchiveService / DedupService / BackupService 已实现并注册
-- 队列种类 KINDS 已加 "dedup" 和 "archive"
-- 门禁 G4/G17/G18/G19 待真语料实测（需要真实归档操作）
-- 本门禁只验证服务存在性与注册正确性
+- ArchiveService / DedupService / BackupService 已实现并注册，队列 KINDS 已加 "dedup" 和 "archive"
+- 本门禁只产出四条判定：服务存在性、bootstrap 注册、搜索功能、全量回归（可选再加反向注入）
+- 上面 G4/G17/G18/G19 **不由本门禁产出**，逐条状态唯一来源是 `docs/ROADMAP.md` 阶段 4 表
+  （这里不抄第二份 —— 曾经抄过一份"四条都待真语料实测"，G17/G18/G19 行为验完之后它没跟着改，
+  于是同一件事在同一个文件里有两种说法）
 """
 from __future__ import annotations
 
@@ -126,15 +127,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_injection:
         checks.append(gate_injection())
-    else:
-        checks.append(Row("反向注入探针", True, "本次 --no-injection 跳过",
-                          "注意：跳过注入时，「断言有约束力」这条没有被验证"))
 
     print(f"门禁运行于 {REPO}｜python {sys.version.split()[0]}")
     print()
     print("阶段 4 门禁说明：")
-    print("  - G4/G17/G18/G19（全量哈希/杀进程恢复/归档撤销/跨盘安全）待真语料实测")
-    print("  - 本门禁验证服务存在性、注册正确性、回归通过")
+    print("  - 本门禁不产出 G4/G17/G18/G19 四条红线，只验服务存在性、注册、搜索功能与全量回归")
+    print("  - 四条红线的逐条状态只有一个来源：docs/ROADMAP.md 阶段 4 表（改状态改那里，别在这里抄一份）")
     print("  - 阶段 4 是最高风险阶段（唯一改用户磁盘），门禁验收需真实归档操作")
     print()
 
@@ -144,7 +142,11 @@ def main(argv: list[str] | None = None) -> int:
         if row.note:
             print(f"        现场：{row.note[:600]}")
     bad = [r for r in checks if not r.ok]
+    if args.no_injection:
+        # 跳过不许算成一条 PASS —— 「N 条全绿」里混一件没跑的事（ISSUES I36 同一形状）
+        print("  SKIP  反向注入探针（--no-injection）—— 这一场的「全绿」不含「断言有约束力」这条")
     print()
+    print(f"  合计判定 {len(checks)} 条")
     print("VERDICT: " + ("ALL GREEN" if not bad else f"RED（{len(bad)} 条未过）"))
     return 0 if not bad else 1
 

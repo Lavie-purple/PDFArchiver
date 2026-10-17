@@ -74,7 +74,8 @@ def _ocr_expected() -> dict[str, bool]:
         probe = subprocess.run(
             [sys.executable, "-c", f"import importlib.util,sys;"
                                    f"sys.exit(0 if importlib.util.find_spec({name!r}) else 1)"],
-            capture_output=True, text=True)
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace")
         return probe.returncode == 0
     return {"rapidocr": installed("rapidocr_onnxruntime"), "onnxruntime": installed("onnxruntime")}
 
@@ -187,7 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     report = {
         "build_seconds": build_seconds,
         "pyinstaller": subprocess.run([sys.executable, "-m", "PyInstaller", "--version"],
-                                      capture_output=True, text=True).stdout.strip(),
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace").stdout.strip(),
         "exe": str(EXE),
         "total_mb": round(total_bytes / MB, 1),
         "top_level": {name: round(size / MB, 1) for name, size in parts},

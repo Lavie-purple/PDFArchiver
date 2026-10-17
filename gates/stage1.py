@@ -131,9 +131,6 @@ def main(argv: list[str] | None = None) -> int:
     checks = [gate_dependency(), gate_architecture(), gate_regression(), gate_cold_start()]
     if not args.no_injection:
         checks.append(gate_injection())
-    else:
-        checks.append(Row("反向注入探针", True, "本次 --no-injection 跳过",
-                          "注意：跳过注入时，「断言有约束力」这条没有被验证"))
 
     print(f"门禁运行于 {REPO}｜python {sys.version.split()[0]}")
     for row in checks:
@@ -141,7 +138,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"        实测：{row.measured}")
         if row.note:
             print(f"        现场：{row.note[:600]}")
+    if args.no_injection:
+        # 跳过不许算成一条 PASS —— 那样「N 条全绿」里就混了一件没跑的事（ISSUES I36 同一形状）
+        print("  SKIP  反向注入探针（--no-injection）—— 这一场的「全绿」不含「断言有约束力」这条")
     bad = [r for r in checks if not r.ok]
+    print(f"  合计判定 {len(checks)} 条")
     print("VERDICT: " + ("ALL GREEN" if not bad else f"RED（{len(bad)} 条未过）"))
     return 0 if not bad else 1
 

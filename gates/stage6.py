@@ -7,7 +7,8 @@
    （`vector_meta` 的结构由迁移定义，ISSUES I62）
 3. VectorStore 能对真迁移链建出来的库增删查
 4. SemanticSearchService 能实例化，空查询返回空
-5. 回归：阶段 3（搜索）和阶段 4（归档）的门禁仍然全绿
+5. 阶段 3 / 阶段 4 的门禁**不在这里代跑**：本脚本只判定上面四条真跑过的，
+   阶段 3/4 由 `gates/stage3.py`、`gates/stage4.py` 各自验（见末尾 SKIP 行）
 
 用法：
     python gates/stage6.py
@@ -22,9 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+JUDGED: list[tuple[str, bool]] = []    # 真判定过的项目，用来数「合计判定 N 条」
+
 
 def check(label: str, ok: bool, detail: str = "") -> bool:
-    """打印检查结果。"""
+    """打印并登记一条判定。"""
+    JUDGED.append((label, ok))
     status = "PASS" if ok else "FAIL"
     msg = f"[{status}] {label}"
     if detail:
@@ -38,15 +42,13 @@ def main() -> int:
     print("阶段 6 门禁 · 语义搜索层")
     print("=" * 70)
 
-    all_pass = True
-
     # 1. EmbeddingService 能实例化
     try:
         from pdfarchiver.semantic.embedding import EmbeddingService
         emb = EmbeddingService()
-        all_pass &= check("EmbeddingService 实例化", True)
+        check("EmbeddingService 实例化", True)
     except Exception as exc:
-        all_pass &= check("EmbeddingService 实例化", False, str(exc))
+        check("EmbeddingService 实例化", False, str(exc))
 
     # 2. VectorStore 实例化 + 缺表时响亮报错
     try:
@@ -60,23 +62,23 @@ def main() -> int:
             AppPaths.resolve(Path(bare)).mkdirs()
             try:
                 VectorStore(Path(bare)).count()
-                all_pass &= check("VectorStore 实例化", False,
+                check("VectorStore 实例化", False,
                                   "库里没有 vector_meta 却成功了 —— 运行时建表又回来了")
             except VectorSchemaMissing as exc:
                 ok = "0007" in str(exc)
-                all_pass &= check("VectorStore 实例化", ok, "" if ok else f"报错没指名迁移 0007：{exc}")
+                check("VectorStore 实例化", ok, "" if ok else f"报错没指名迁移 0007：{exc}")
             except Exception as exc:  # noqa: BLE001 - 报错原文要进门禁输出，不许转述
-                all_pass &= check("VectorStore 实例化", False, f"异常类型不对：{type(exc).__name__}: {exc}")
+                check("VectorStore 实例化", False, f"异常类型不对：{type(exc).__name__}: {exc}")
     except Exception as exc:
-        all_pass &= check("VectorStore 实例化", False, str(exc))
+        check("VectorStore 实例化", False, str(exc))
 
     # 3. SemanticSearchService 能实例化
     try:
         from pdfarchiver.semantic.search_service import SemanticSearchService
         ss = SemanticSearchService()
-        all_pass &= check("SemanticSearchService 实例化", True)
+        check("SemanticSearchService 实例化", True)
     except Exception as exc:
-        all_pass &= check("SemanticSearchService 实例化", False, str(exc))
+        check("SemanticSearchService 实例化", False, str(exc))
 
     # 4. 空查询返回空列表
     try:
@@ -84,9 +86,9 @@ def main() -> int:
         ss = SemanticSearchService()
         results = ss.search("")
         ok = results == []
-        all_pass &= check("空查询返回空列表", ok, f"got {results}")
+        check("空查询返回空列表", ok, f"got {results}")
     except Exception as exc:
-        all_pass &= check("空查询返回空列表", False, str(exc))
+        check("空查询返回空列表", False, str(exc))
 
     # 5. VectorStore 基本操作
     try:
@@ -133,36 +135,38 @@ def main() -> int:
             vector = vector / np.linalg.norm(vector)
             idx = vs.add(doc_id, 1, vector)
             ok = idx >= 0
-            all_pass &= check("VectorStore.add", ok, f"idx={idx}")
+            check("VectorStore.add", ok, f"idx={idx}")
 
             # 搜索
             results = vs.search(vector, top_k=1)
             ok = len(results) == 1 and results[0][0] == doc_id
-            all_pass &= check("VectorStore.search", ok, f"results={results}")
+            check("VectorStore.search", ok, f"results={results}")
 
             # 计数
             count = vs.count()
             ok = count == 1
-            all_pass &= check("VectorStore.count", ok, f"count={count}")
+            check("VectorStore.count", ok, f"count={count}")
     except Exception as exc:
-        all_pass &= check("VectorStore 基本操作", False, str(exc))
+        check("VectorStore 基本操作", False, str(exc))
 
-    # 6. 回归：阶段 3 门禁（跳过，由各自门禁保证）
-    print("\n—— 回归测试（跳过，由各自门禁保证）——")
-    all_pass &= check("阶段 3 门禁回归", True, "跳过")
+    # 6. 阶段 3 / 阶段 4 的门禁不在这里代跑。
+    # 原来这里是两行 `check("…门禁回归", True, "跳过")` —— 结构上永远不会变红，却进了
+    # 判定序列，正是 `gates/final.py` 那条「未跑却算 PASS」的同一形状（ISSUES I36）。
+    # 代跑还会把负载绑定的冷启动读数嵌进这一场（D-033：满载机器上同一命令会判 RED）。
+    print("\n—— 本场未跑的判定 ——")
+    print("  SKIP  阶段 3 门禁（gates/stage3.py）与阶段 4 门禁（gates/stage4.py）"
+          "：这一场不判它们，全绿不覆盖它们")
 
-    # 7. 回归：阶段 4 门禁（跳过，由各自门禁保证）
-    all_pass &= check("阶段 4 门禁回归", True, "跳过")
-
+    failed = [label for label, ok in JUDGED if not ok]
     print("\n" + "=" * 70)
-    if all_pass:
+    print(f"合计判定 {len(JUDGED)} 条｜本场未跑 2 项（阶段 3 / 阶段 4 门禁）")
+    if not failed:
         print("VERDICT: ALL GREEN")
         print("=" * 70)
         return 0
-    else:
-        print("VERDICT: RED")
-        print("=" * 70)
-        return 1
+    print(f"VERDICT: RED（{len(failed)} 条未过：{'、'.join(failed)}）")
+    print("=" * 70)
+    return 1
 
 
 if __name__ == "__main__":
