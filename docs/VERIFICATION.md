@@ -901,10 +901,10 @@ O1–O8（S4 撤销）、S1（台账 `undone`）、P1–P3（状态页磁盘口�
 现读（`python tests/guards/test_doc_pointers.py`）：
 
 ```
-扫了 25 份 md、55 条决策编号、70 条台账编号、537 个测试函数
+扫了 25 份 md、55 条决策编号、71 条台账编号、537 个测试函数
 台账类文档里今天已不存在的测试名（不判红，逐条记在 ISSUES I70）：6 处
-  docs/CHANGELOG.md:252 test_progress_state_vocabulary
-  docs/CHANGELOG.md:444 test_阶段1刻意不建的表确实不存在
+  docs/CHANGELOG.md:324 test_progress_state_vocabulary
+  docs/CHANGELOG.md:516 test_阶段1刻意不建的表确实不存在
   docs/DECISIONS.md:202 test_阶段1刻意不建的表确实不存在
   docs/DECISIONS.md:722 test_阶段1刻意不建的表确实不存在
   docs/DECISIONS.md:975 test_没接上执行器的按钮不许伪装成功
@@ -912,9 +912,15 @@ O1–O8（S4 撤销）、S1（台账 `undone`）、P1–P3（状态页磁盘口�
 VERDICT: ALL GREEN
 ```
 
+**上面这些行号会随台账增长漂移，认名字不认行号** —— 这段是当场输出的逐字粘贴，第二次复跑同一条命令
+读到的是同一**六条名字**、不同行号（`CHANGELOG.md` 那两条从 252/444 漂到 324/516，就差 72/76 行）。
+**这条读数一度被我自己污染成 8 处**：新写的 CHANGELOG 与 §4.19 各把一条已消失的测试名写进了反引号，
+守卫照收（台账类只豁免"判红"、不豁免"计数"）—— 按本轮已有的处置改成「」引用，条数回到 6。
+⇒ 记在 **ISSUES I70** 的那 6 处是**历史条目里的真指过期**，任何新写的散文都不该再往这个数上加值。
+
 **上架当场改掉的活文档坏指针**（每条都可 grep 复验）：
 `docs/DATABASE.md` / `docs/TESTING.md` / `docs/UI-WIREFRAMES.md` 引的
-`test_阶段1刻意不建的表确实不存在`（迁移 0002 建了 `content_fts` 之后这条测试就不在场了）→
+「test_阶段1刻意不建的表确实不存在」（迁移 0002 建了 `content_fts` 之后这条测试就不在场了）→
 改指 `test_documentation_matches_actual_schema` 并写明原因；
 `docs/ARCHITECTURE.md` / `docs/DECISIONS.md` / `docs/OCR.md` / `docs/stage-reports/` 里四个改过名的旧测试名换成现名；
 **ISSUES I51** 的虚拟化口径从 **D-017**（那是「阅读器渲染以 PyMuPDF 为主」）改到 **D-040**；

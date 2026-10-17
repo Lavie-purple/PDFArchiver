@@ -46,7 +46,7 @@
   **ISSUES I66** 把问题表写成 `§十四` 而那份文档最大只到 §十一 —— 与 **ISSUES I34** 同一族：
   文档里的证据指针从来没被机器核对过。上架当场查出并改账的活文档坏指针（**逐条可 grep**）：
   ① `docs/DATABASE.md` / `docs/TESTING.md` / `docs/UI-WIREFRAMES.md` 里引用的
-  `test_阶段1刻意不建的表确实不存在`（0002 建了 `content_fts` 之后这条测试就没了）→ 改指
+  「test_阶段1刻意不建的表确实不存在」（0002 建了 `content_fts` 之后这条测试就没了）→ 改指
   `test_documentation_matches_actual_schema` 并写明原因；② `docs/ARCHITECTURE.md` / `docs/DECISIONS.md` /
   `docs/OCR.md` / `docs/stage-reports/` 里四个**改过名的旧测试名**换成现名。
   **只增不改的台账**（CHANGELOG / DECISIONS / ISSUES / VERIFICATION / REPO-JOURNAL / stage-reports）**不返工改历史**，
