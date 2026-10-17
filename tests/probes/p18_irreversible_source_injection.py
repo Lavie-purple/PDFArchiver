@@ -76,15 +76,17 @@ def main() -> int:
         finally:
             path.write_bytes(raw)
         tail = " | ".join(x.strip() for x in out.strip().splitlines()[-2:])
-        print(f"{mid:3} {'红（有牙）' if code else '绿!! 坏法没被抓住'}  {desc}  "
+        tag = ("红（有牙）" if failed
+               else ("绿!! 坏法没被抓住" if not code else "红但没点名（是崩了不是断言）"))
+        print(f"{mid:3} {tag}  {desc}  "
               f"点名 {failed}  ::  {tail[:120]}")
-        if not code:
+        if not failed:
             survivors.append(mid)
     for path, raw in originals.items():
         if path.read_bytes() != raw:
             path.write_bytes(raw)
             print(f"注意：{path.name} 没还原成注入前的字节，已强制写回")
-    print(f"\nVERDICT: {'ALL INJECTIONS CAUGHT' if not survivors else '漏网 ' + ' '.join(survivors)}")
+    print(f"\nVERDICT: {'ALL GREEN' if not survivors else 'RED（漏网 ' + ' '.join(survivors) + '）'}")
     return 0 if not survivors else 2
 
 

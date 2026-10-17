@@ -5,7 +5,8 @@
     python gates/final.py                       # 默认段：guards + regression + coldstart + e2e + consistency
     python gates/final.py --list                # 打印每段是什么、实测耗时、该不该并进默认
     python gates/final.py --only package        # 只跑打包段（build.py + 冻结冒烟）
-    python gates/final.py --only injection      # 只跑两条反向注入（p9 + p10，约 5 分钟）
+    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18）
+    python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（最慢的一段）
     python gates/final.py --only soak --soak-minutes 4
     python gates/final.py --all --data-root "<要核查的数据根>"
 
@@ -38,6 +39,10 @@ from stage5 import _machine_load  # noqa: E402 复用同一份负载读数口径
 P12 = "tests/probes/p12_consistency.py"
 P13 = "tests/probes/p13_soak.py"
 P14 = "tests/probes/p14_fts_instrument.py"
+P15 = "tests/probes/p15_archive_ui_injection.py"
+P16 = "tests/probes/p16_doc_pointers_injection.py"
+P17 = "tests/probes/p17_handler_shape_injection.py"
+P18 = "tests/probes/p18_irreversible_source_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
 
@@ -207,9 +212,22 @@ def segment_e2e() -> list[Row]:
 
 
 def segment_injection() -> list[Row]:
+    """坏法注入常驻段。四条判据的**口径是同一条**：红 **且** `FAILED` 行点名到该坏法登记的那条测试，
+    只红不点名（崩溃冒充断言）算漏。p15 那一族覆盖归档界面与磁盘链路，单开一段（见 `segment_ui_injection`）。"""
     from stage1 import gate_injection  # noqa: PLC0415
     from stage5 import gate_ocr_injection  # noqa: PLC0415
-    return [gate_injection(), gate_ocr_injection()]
+    return [gate_injection(), gate_ocr_injection(),
+            _gate("p16 文档指针守卫：四档空指 + 台账旧名上限（P1–P6 + 反向对照）", [sys.executable, P16]),
+            _gate("p17 队列处理函数形状核对：三条坏法（H1 少收参数 / H2 吞异常 / H3 只盯一种）",
+                  [sys.executable, P17]),
+            _gate("p18 「不可逆」口径唯一：三条坏法（S1 落库字段 / S2 界面自己数 / S3 服务定义退化）",
+                  [sys.executable, P18])]
+
+
+def segment_ui_injection() -> list[Row]:
+    """S3 四道闸 / 预览执行同源 / S4 撤销 / 状态页磁盘口径那 36 条坏法（2026-10-18 实测 70s，不进默认段）。"""
+    return [_gate("p15 归档界面与磁盘链路 36 条坏法（C1–C11 / A1–A13 / O1–O8 / S1 / P1–P3）",
+                  [sys.executable, P15])]
 
 
 def segment_ocr() -> list[Row]:
@@ -260,7 +278,10 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["~50s"]),
     "coldstart": ("G1 冷启动 + 关窗对账", ["~5s"]),
     "e2e": ("新 · 后台生命周期 + 阶段 2 端到端（真 PDF / 真 worker / 真监听）", ["~40s"]),
-    "injection": ("p9 + p10 反向注入（断言到底有没有约束力）", ["~296s"]),
+    "injection": ("p9 + p10 + p16 + p17 + p18 反向注入（断言到底有没有约束力）",
+                  ["332s（2026-10-18 实测全绿那一场）"]),
+    "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（最慢的一段，不进默认）",
+                  ["70s（2026-10-18 实测全绿那一场）"]),
     "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["~200s"]),
     "consistency": ("p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场", ["~15s"]),
     "soak": ("p13 注入自检 + 真长跑采样", ["~330s @4 分钟"]),
@@ -281,6 +302,8 @@ def build(name: str, args: argparse.Namespace) -> list[Row]:
         return segment_e2e()
     if name == "injection":
         return segment_injection()
+    if name == "ui-inject":
+        return segment_ui_injection()
     if name == "ocr":
         return segment_ocr()
     if name == "consistency":
@@ -300,7 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="gates/final.py", description="最终交付门禁（分段链）")
     ap.add_argument("--only", action="append", default=None, choices=list(SEGMENTS) + ["docs-inject"],
                     help="只跑指定段，可重复")
-    ap.add_argument("--all", action="store_true", help="全链（约 15–20 分钟，超过多数 CI 单命令上限）")
+    ap.add_argument("--all", action="store_true",
+                    help="全链（按 --list 每段标称相加约 23 分钟，超过多数 CI 单命令上限）")
     ap.add_argument("--data-root", default=None, help="要核查一致性并写进交付报告的数据根")
     ap.add_argument("--soak-minutes", type=float, default=4.0, help="长跑采样时长（默认 4 分钟）")
     ap.add_argument("--list", action="store_true", help="列出每段是什么与耗时量级")

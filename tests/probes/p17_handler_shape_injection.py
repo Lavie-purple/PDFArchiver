@@ -73,14 +73,19 @@ def main() -> int:
             code, out = run()
         finally:
             SRC.write_bytes(raw)
+        failed = [ln.split("::")[-1].split(" ")[0] for ln in out.splitlines()
+                  if ln.startswith("FAILED ")]
         tail = " | ".join(x.strip() for x in out.strip().splitlines()[-2:])
-        print(f"{mid:3} {'红（有牙）' if code else '绿!! 坏法没被抓住'}  {desc}  ::  {tail[:130]}")
-        if not code:
+        named = NODE.split("::")[-1] in failed
+        tag = ("红（有牙）" if named
+               else ("绿!! 坏法没被抓住" if not code else "红但没点名（是崩了不是断言）"))
+        print(f"{mid:3} {tag}  {desc}  ← {', '.join(failed) or '无'}  ::  {tail[:130]}")
+        if not named:
             survivors.append(mid)
     if SRC.read_bytes() != raw:
         print("注意：源文件没还原成注入前的字节，已强制写回")
         SRC.write_bytes(raw)
-    print(f"\nVERDICT: {'ALL INJECTIONS CAUGHT' if not survivors else '漏网 ' + ' '.join(survivors)}")
+    print(f"\nVERDICT: {'ALL GREEN' if not survivors else 'RED（漏网 ' + ' '.join(survivors) + '）'}")
     return 0 if not survivors else 2
 
 

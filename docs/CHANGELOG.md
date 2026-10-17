@@ -29,6 +29,25 @@
   增速那条账没变（`+165` 那一轮的原因分析在新册 §4.20 ⑥），甲档（三本一起按阶段切）没做。
   DECISIONS 到 ~1,150 行时仍要单独开一轮 —— 它不是收尾读数块，是逐条编号决定，切它要动的指针多一个量级。
 
+### 勾选轮（七）第二步 · 把四份一次性坏法探针请进门禁链（同一天，销账 **ISSUES I72 / I73**）
+
+- **`injection` 段从 2 条判定变 5 条**（p9 + p10 + **p16 + p17 + p18**），p15 单开 `ui-inject` 段；p17/p18 的末行口径由
+  `ALL INJECTIONS CAUGHT` 改成门禁只认的 `VERDICT: ALL GREEN`。四份探针的判据统一成一条：**红，且 `FAILED` 行点名到
+  该坏法登记的那条测试**（只红不点名 = 崩溃冒充断言，算漏）。
+- **常驻链第一次真跑就红**：p10 的 #8／#26／#28 三条锚点已被上一轮改代码顶掉（熔断器往锚点中间插了一行、
+  `bootstrap` 的 handler 字典撑成多行），原文 `RuntimeError: 注入锚点命中 0 次（要求恰好 1 次）` 逐字进台账（**I73** CLOSED）。
+- **上架秒级预检 `tests/guards/test_probe_anchors.py`**：六份探针表 **133** 条锚点逐条要求在目标文件里**恰好命中 1 次**；
+  它自己三条断言各真注入过一次（含「某份表被清空必须红」，防的就是守卫静默变永真）。同族规则：**新探针上架必须把表接进 `anchors()`**。
+- **时长从估算换成实测**：`injection` **332s**、`ui-inject` **70s** —— 此前引用的「光 p15 约 4 分钟」「~338s／~248s」全是我拍的数，
+  而那条估算正是"要不要常驻"的决策依据；`--all` 标称由约 21 分钟改约 23 分钟。
+- **p10 行尾归一**：288 处 CR CR LF（**已在 HEAD 里**）→ 全文 CRLF；那种行尾被 `test_file_size.py` 的 `splitlines()` 数成 577 行（真实 289）。
+- **I72 落笔**：`docs/USAGE.md` §三 两条 + `docs/BACKUP-RESTORE.md` §七 一条 —— 九键只读、`config/settings.py:106 save()` 产品侧零调用点、
+  两个「设置」不是一个东西。**界面改键**那一档留在 W-OCR 那轮，本轮不偷偷加入口。
+- **两屏线框已出，未写一行界面代码**（AGENTS.md 的线框门）：`docs/UI-WIREFRAMES.md` §W-OCR 与 §W-CONFLICT，各 2 案 + 各 3 条待勾事项。
+- 读数：`pytest tests` **577 passed / 4 skipped in 130.19s**（+3 精确对上守卫那三条）｜`tests/guards` **30 passed in 29.18s**｜
+  `--only guards` 8 条全绿｜台账 **73 行｜CLOSED 48｜MITIGATED 19｜OPEN 5｜WONTFIX 1**｜`--only injection` 与 `--only ui-inject` 各
+  `VERDICT: ALL GREEN`。逐字在 `docs/VERIFICATION-RUNLOGS.md` §4.21。
+
 ---
 
 ## 勾选轮（六）—— 2026-10-18 · **不升版本号**，把上一轮留给勾选的三条编号方案落地，并给"台账里的过期名字"装上会红的上限

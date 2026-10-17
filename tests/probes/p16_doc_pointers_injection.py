@@ -136,7 +136,9 @@ def main() -> int:
     if misattributed or broken_control or skipped:
         print("点名存疑/对照破/锚点失配："
               + " ".join(misattributed + broken_control + skipped))
-    return 0 if not (survivors or misattributed or broken_control or skipped) else 2
+    green = not (survivors or misattributed or broken_control or skipped)
+    print("VERDICT: " + ("ALL GREEN" if green else "RED"))
+    return 0 if green else 2
 
 
 if __name__ == "__main__":

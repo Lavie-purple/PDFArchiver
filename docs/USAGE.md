@@ -73,6 +73,8 @@ PdfArchiver.exe --version              # PdfArchiver 0.5.0
   这个按钮存在的意义就是让"重启后数据还在"当场可验（见 §七）。
 - `设置来源` 一行给出"内置默认值"还是"用户覆盖值 + 来源文件"，这是硬要求：
   你没写 `settings.json` 时它不会假装是你的选择。
+- **改那九个键只能手改 `<数据根>\config\settings.json` 并重启**：`archive_default_template`／`archive_target_root`／`busy_timeout_ms`／`gpu_tasks_concurrent`／`log_keep_files`／`ocr_daily_page_budget`／`scan_poll_seconds`／`scan_verify_minutes`／`worker_threads`（现读 `config/settings.py` 的 `DEFAULTS`，九个，一个不多）。界面上**没有「保存设置」按钮**，写这个文件的函数 `config/settings.py:106 save()` **在产品里零调用点**（全仓只有 `tests/unit/test_settings.py` 引用它），文件也只在装配时读一次（`bootstrap.py:235`），没有热重载 —— 台账 **ISSUES I72**。
+- **别把两个「设置」当成一个**：`config/settings.py::Settings` 读的就是上面那个 JSON 文件，**只读**；界面上的 `ctx.app_settings` 是 `db/repositories/settings.py::SettingsRepository`，写的是**库里的应用状态表**，主题偏好、上次阅读页码、会话状态都走它，重启不丢，与 JSON 文件无关。本项目对「设置」就这两个口径，各自存在哪、谁能写，以上两句为准。
 - 状态页与启动路径**不跑任何同步库检查**（`integrity_check` / `quick_check` 的代价都与库大小同量级，
   2026-10-16 在 6.1GB 真语料库上实测：`integrity_check` 19 小时+未完、`quick_check` 冷/热缓存 452s / 478s，
   塞进启动路径会把应用冻死，见台账 **ISSUES I45**）。库健康核查的唯一入口是离线探针 `tests/probes/p12_consistency.py`

@@ -375,3 +375,68 @@ VERDICT: ALL GREEN
 
 ---
 
+### 4.21 勾选轮（七）第二步 · 把四份一次性坏法探针请进门禁链，它当场逮到一条真缺陷（2026-10-18，销账 **ISSUES I72 / I73**，**R-012** 按"乙"执行）
+
+**动作只有一句**：`gates/final.py` 的 `injection` 段由「p9 + p10」两条扩成「p9 + p10 + p16 + p17 + p18」五条判定，p15 单开 `ui-inject` 段；p17/p18 的末行口径同时由 `ALL INJECTIONS CAUGHT` 改成门禁只认的 `VERDICT: ALL GREEN`（那是进门禁链的入场券）。这几份探针的判据**统一成同一条**：红 **且** `FAILED` 行点名到该坏法登记的那条测试 —— 「红但不点名」（把断言改成崩溃，照样红）与「锚点今天落不进去」同等算漏。
+
+**① `--only injection` 今天跑了三场：两红一绿**（三份日志都留在 `.probe_work/`，逐字取，不转述）
+
+```
+场 1  injection_chain_1018.log     ── 段 injection（232.1s）  → VERDICT: RED（1 条未过）
+  PASS  反向注入探针（断言有没有约束力）
+        实测：46/46 条坏法被抓到
+  RED   G5 OCR 反向注入探针（阶段 5 的断言有没有约束力）
+        实测：RuntimeError: 注入锚点命中 0 次（要求恰好 1 次）：src/pdfarchiver/services/ocr_service.py
+
+场 2  injection_chain_1018b.log    ── 段 injection（322.4s）  → VERDICT: RED（1 条未过）
+  PASS  G5 OCR 反向注入探针
+        实测：45/45 条坏法被抓到            ← 三条锚点改到现码之后
+  RED   p16 文档指针守卫：四档空指 + 台账旧名上限（P1–P6 + 反向对照）
+        实测：1 failed, 4 passed in 29.20s
+E           AssertionError: docs/UI-WIREFRAMES.md:755 引用 ISSUES I72，而 `docs/ISSUES.md` 里没有这一行
+
+场 3  injection_chain_1018c.log    ── 段 injection（331.8s）  → VERDICT: ALL GREEN   ← 门禁标称值取这一场
+        起跑负载：CPU 29.1%｜可用内存 2169MiB｜最吃内存进程 Qoder CN.exe 530MiB
+  PASS  反向注入探针…46/46｜G5 OCR…45/45｜p16「共 6 条（5 条坏法 + 1 条反向对照）：抓住 5、漏网 0、
+        点名存疑 0、对照破 0、锚点失配 0」｜p17 H1/H2/H3 三条全「红（有牙）」且点名｜p18 S1/S2/S3 同
+  合计判定 5 条｜本次未跑 10 段
+```
+
+场 1 那条红**不是探针坏**：是我 10-17 改 `ocr_service.py` 的熔断器（**ISSUES I21**）时往 p10 #8 锚点那两行中间插了一行（`consecutive_timeouts = 0`），又在看 `bootstrap.py` 接 `archive`/`dedup` 时把 #26/#28 那行撑成了多行 —— 三条坏法当天**一条都落不进去**，探针直接 `RuntimeError` 退出。登记为 **ISSUES I73**（CLOSED）。
+场 2 那条红是**我自己刚埋的**：线框 §W-OCR 第 4 条事实写了一句指向 **I72** 的指针，而那时台账里还没有那一行。指针守卫当场拦住"文档引用一个不存在的编号"，处置是**补 I72 那一行**（那件事本来就欠着），不是删掉线框里那句引用。
+
+**② p15 的真实成本是 70s，不是"约 4 分钟"**：`--only ui-inject` 两场 `── 段 ui-inject（71.9s）` 与 `（69.9s）`，末行都是 `VERDICT: ALL GREEN`、`合计判定 1 条｜本次未跑 10 段`。⇒ `docs/REPO-JOURNAL.md` R-012 与本册 §4.20 ④ 那句「光 p15 一份就约 4 分钟」**是估的**，`SEGMENTS` 里两项标称（`~338s`／`~248s`）同样是我拍的。全部换成实测（332s／70s），`--all` 的 help 由「约 21 分钟」改「约 23 分钟」（按 `--list` 每段标称相加）。⚠️ 那条估算把常驻成本抬了约 **5 倍**，而它正是"等勾选"的理由本身 —— **成本没实测就别拿它做决定**。
+
+**③ 秒级预检 `tests/guards/test_probe_anchors.py`**（I73 的处置）：不跑 pytest，把六份探针表里每条锚点在它的目标文件里数一遍，要求**恰好命中 1 次**；口径与探针自己的 `_apply` 同一条，不另立第二份。现读 `核了 133 条锚点，落在 34 个文件上` / `VERDICT: ALL GREEN`。三条断言各自真注入过一次（`.probe_work/anchor_guard_proof_1018.log`，逐字）：
+
+```
+A 锚点被改坏一个字符
+   退出码 2｜红 ✓｜点名「p18 #S3」✓
+B 目标文件混进 CR CR LF
+   退出码 2｜红 ✓｜点名「混用行尾」✓
+C 某份探针的表被清空
+   退出码 2｜红 ✓｜点名「p17=0」✓
+VERDICT: ALL GREEN
+```
+
+C 那条防的是最阴的一种：探针改了名、或它的表被清空，前两条断言会**静默变成永真**。同族规则写进 I73 处置栏：**新探针上架必须把它的表接进 `anchors()`**，否则这条守卫对它一无所知。
+
+**④ p10 的行尾归一 —— 一个数错了两轮的地方**：`tests/probes/p10_reverse_injection_ocr.py` 全文写成 CR CR LF（288 处，且**已经在 HEAD 里**），`test_file_size.py` 用 `splitlines()` 数它得到 **577 行**（`wc -l` 同值），真实 **289 行**。归一后现数 `crlf=289｜裸 LF=0｜CR CR LF=0`。这条不是洁癖：两套口径数同一个东西时，只要有一个错数进了台账，之后每一次对账都在拿错的基线比。
+
+**⑤ I72 落笔（本轮第一步的 ④）**：`docs/USAGE.md` §三 两条 + `docs/BACKUP-RESTORE.md` §七 一条，明写那九个键**只读**（`bootstrap.py:235` 装配时读一次）、`config/settings.py:106 save(settings, settings_file)` 是**模块函数**且产品侧**零调用点**（调用只在 `tests/unit/test_settings.py:104/111`），以及**两个「设置」不是一个东西**（`config/settings.py::Settings` 只读 JSON ⇄ `db/repositories/settings.py::SettingsRepository` 写库）。⚠️ 第一版我在文档里把它写成 `settings.save()`，落笔前 `grep` 现数才发现那个方法**不存在** —— 已改正。
+
+**⑥ 本轮收尾读数**（一条命令一条数，全部现取）：
+- `pytest tests -q -p no:randomly` → `577 passed, 4 skipped in 130.19s (0:02:10)`（上一轮 574，**+3 精确对上**新守卫那三条 `def test_`）；
+- `pytest tests/guards -q` → `30 passed in 29.18s`（上一轮 27，同一处 +3）；
+- `gates/final.py --only guards` → `合计判定 8 条｜本次未跑 10 段` + `VERDICT: ALL GREEN`，起跑负载 `CPU 16.7%｜可用内存 2667MiB｜最吃内存进程 Qoder CN.exe 473MiB`；台账行 `73 行｜I1–I73 连续｜CLOSED 48｜MITIGATED 19｜OPEN 5｜WONTFIX 1`；旧名那行 `现数 6 处，上限 6`（**没涨** ⇒ 本轮没留下新的过期测试名）；
+- `--only injection`／`--only ui-inject` 见上面 ①②。
+- ⚠️ **本册与 CHANGELOG 那几笔落盘之后，又把两段在最终树上重跑了一遍**：`tests/guards` **30 passed in 32.15s**（条数一字未动，29.18s→32.15s 是负载）、`--only guards` 仍 **8 条 ALL GREEN**（台账 `73 行｜I1–I73 连续｜CLOSED 48｜MITIGATED 19｜OPEN 5｜WONTFIX 1`、旧名 `现数 6 处，上限 6`），`--only injection` **312.7s ALL GREEN**。⇒ 门禁 `SEGMENTS` 的标称**仍引全绿那一场（332s），不改写成区间**：区间要的是「同一份树跑 N 次」，而这两场的树不同。逐字 `.probe_work/guards_pytest_final_1018.log`、`final_guards_1018c.log`、`injection_final_1018.log`。
+
+**没测到的（不许混进上面那些绿）**：① 除 guards／injection／ui-inject 三段外，其余 **8 段**今天都没从门禁里跑过（`regression` 是以 `pytest tests` 直接跑的，走链的那条读数仍欠；coldstart／e2e／ocr／consistency／soak／package／g2 全在新树之外）；② 真实语料到今天**一次归档都没跑过**，G4／G17／G18／G19 的性能档无真机读数；③ **I17** 真机首屏、**I5** 改名自愈压测、**I16** 组合内存压测；④ C 块安装包与代码签名（本机无签名证书，按**未交付**标注）。
+
+**本轮的返工与自我否证**：① 三个进了门禁 `--list` 与文档的时长（「约 4 分钟」「~338s」「~248s」）全是我估的，而它们被当成决策依据引用过；② 给 I73 写台账行时用 heredoc 把转义序列直接喂进文档，落到文件里成了**真的 CR 字节**，那一行当场变成它自己正在记录的那个缺陷（1 处 CR CR LF）→ 字节级替换成词 `CR CR LF`，规则同族：**文档正文里要写行尾，写成词，别写转义**；③ `settings.save()` 那一处（见 ⑤）；④ I72 那一行第一次插到了 I73 **之后**，`AssertionError: (83, 84)` 当场逮住编号顺序 —— 顺序也是断言；⑤ p10 那 288 处 CR CR LF 在 HEAD 里躺了三轮，`test_file_size.py` 一直"绿着"报它的行数。
+
+
+> **本册末行现数（2026-10-18 勾选轮（七）第二步收尾取）**：
+> `DECISIONS 1101｜VERIFICATION 847｜本册 442｜CHANGELOG 1106`（`wc -l`＝`splitlines()`＝守卫判定那条口径；
+> 本行是本册最后一行，后面再涨只改这一行，不动上面任何一句 —— §4.20 追记里那句同名规矩从今天起换了落点）。

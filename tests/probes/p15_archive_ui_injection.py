@@ -236,11 +236,14 @@ def main() -> int:
                 pyc.unlink(missing_ok=True)
         failed = [ln.split("::")[-1].split(" ")[0] for ln in out.splitlines()
                   if ln.startswith("FAILED ")]
+        expected = {n.split("::")[-1] for n in nodes}
+        unnamed = sorted(expected - set(failed))
         if code == 0:
             print(f"{mid:4} 绿!! 坏法没被抓住：{desc}")
             survivors.append(mid)
-        elif not failed:
-            print(f"{mid:4} 红但不点名（是崩了不是断言）：{desc}\n" + out[-1500:])
+        elif unnamed:
+            print(f"{mid:4} 红但没点名到该杀的那条（缺 {', '.join(unnamed)}）：{desc}\n"
+                  + out[-1500:])
             misattributed.append(mid)
         else:
             print(f"{mid:4} 红  {desc}  ← {', '.join(failed)}")
@@ -251,7 +254,11 @@ def main() -> int:
         print("漏网：" + " ".join(survivors))
     if misattributed:
         print("点名存疑：" + " ".join(misattributed))
-    return 0 if not survivors else 2
+    # 接进门禁链之后「红但不点名」也算漏：本探针的判据是「红 **且** 点名到该杀的那条测试」，
+    # 只按 survivors 退出的话，一条把断言改成崩溃的坏法会在门禁里报 GREEN。
+    green = not survivors and not misattributed
+    print("VERDICT: " + ("ALL GREEN" if green else "RED"))
+    return 0 if green else 2
 
 
 if __name__ == "__main__":
