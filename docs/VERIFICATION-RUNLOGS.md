@@ -440,3 +440,110 @@ C 那条防的是最阴的一种：探针改了名、或它的表被清空，前
 > **本册末行现数（2026-10-18 勾选轮（七）第二步收尾取）**：
 > `DECISIONS 1101｜VERIFICATION 847｜本册 442｜CHANGELOG 1106`（`wc -l`＝`splitlines()`＝守卫判定那条口径；
 > 本行是本册最后一行，后面再涨只改这一行，不动上面任何一句 —— §4.20 追记里那句同名规矩从今天起换了落点）。
+
+### 4.22 勾选轮（八）· I17 真机首屏核对：第一次有人看见真首屏（2026-10-18，两轮 21 场真进程）
+
+**这条为什么一直空着**：`gates/stage1.py:44-49` 的 `_run()` 给**每一条**子命令注入
+`QT_QPA_PLATFORM=offscreen`，G1 那句 `python main.py` 也不例外。offscreen 不做窗口合成、
+不加载真实字体 —— 此前 18 次冷启动读数（0.344–1.031s）量的是一个「没有屏幕的 Qt」，
+而「首屏看起来对不对」这件事从来没有人核对过。
+
+**驱动**：`.probe_work/i17_real_first_screen.py`。三条边界：只用临时语料 + 临时数据目录
+（真实语料一登记，`_start_background()` 就会自动续跑它那份积压，不是这一轮该动的东西）；
+零点击执行按钮；切页走产品自己的 `ui.last_nav_page`。9 个导航项各一场 + 文档库最大化 +
+设置与状态最大化 = 11 场，**一场一个新进程 = 一次真冷启动读数**，判据沿用 G1 那一条
+（`state.log` 里 `window.ready` 带 `cold_start_seconds` 且有一条 `shutdown`），
+红线 `G1_COLD_START_MAX = 1.5` 不在这里另立口径。
+
+**第一轮（`run.log`）判 RED，而且红得对**：`launches=10 cold=0.781..2.778 shots=10
+errors=1 traceback=0`。超线的是今天这台机器**第一次**把 PySide6 那套 DLL 读进内存的那一场
+（2.778s），后 9 场 0.781–1.067s。同一份 report 里每场 `shutdown_rows=2` —— 驱动自己往同一份
+`state.log` 写了 `startup.begin/…/shutdown` 三条，把我那条 `>= 1` 的判据满足了两遍。
+**判据没牙是我自己写的判据的缺陷**，见下面「探针返工」。
+
+**第二轮（`run2.log`）ALL GREEN**，逐字：
+
+```
+seed: {"drained": true, "documents": 64, "missing": 0, "roots": 1, "jobs_by_state": {"done": 63, "failed": 1}, "fts_by_status": {"done": 63, "failed": 1}, "ocr_pages": 0, "index_backlog": 0}
+library        cold=0.83 exit=0 size=[1922, 1246] md5=91257c2b46e9 shutdown=1
+search         cold=0.873 exit=0 size=[1922, 1246] md5=6d5ea4ee02c0 shutdown=1
+reader         cold=0.824 exit=0 size=[1922, 1246] md5=2f2e41c6ad1a shutdown=1
+archive        cold=0.818 exit=0 size=[1922, 1246] md5=0c2e3de21029 shutdown=1
+operations     cold=0.826 exit=0 size=[1922, 1246] md5=ac3521ffaea9 shutdown=1
+duplicates     cold=0.834 exit=0 size=[1922, 1246] md5=4d6cec8e89e8 shutdown=1
+monitor        cold=0.898 exit=0 size=[1922, 1246] md5=1d001d3523a0 shutdown=1
+categories     cold=0.8 exit=0 size=[1922, 1246] md5=387f10d94cdd shutdown=1
+backup         cold=0.805 exit=0 size=[1922, 1246] md5=2a2a9cebef2c shutdown=1
+library_max    cold=0.882 exit=0 size=[5120, 2114] md5=8f5156c4e54e shutdown=1
+monitor_max    cold=0.853 exit=0 size=[5120, 2114] md5=df07f26e1ced shutdown=1
+launches=11 cold=0.8..0.898 shots=11 errors=1 traceback=0
+VERDICT: ALL GREEN
+```
+
+11 场 `exit=0`、`startup_rows=1`、`shutdown_rows=1`（关窗对账行在真机平台同样落得下来）、
+`window.ready` 在场；11 张图 md5 全不相同（`duplicate_shots: {}`）；`app.log` 251 行里
+ERROR **1 条**、WARNING 0、Traceback 0、启动失败 0，那 1 条 ERROR 是故意造的截断 PDF，原文：
+`任务 62(index) 判定为不可重试失败（不再排第二次）：…损坏文件 截断的 PDF.pdf｜FileDataError:
+Failed to open file …`。语料 64 份（60 中文名 + 1 条 127 字符深路径 + 1 份无文字层 +
+1 份截断 + 1 份字节级重复），从磁盘 `rglob("*.pdf")` 数出来再与库里对，不写死。
+
+**真机 vs 离屏（这条是 I17 的核心疑问，答案是「没有那回事」）**：真机稳态 0.781–1.067s
+（第二轮 0.800–0.898）落在离屏区间 0.344–1.031s 的**上半段**，不是「离屏通常比真机快」，
+两边同量级；1.5s 红线在真机稳态下同样成立，**`gates/stage1.py` 的阈值一处都没动**。
+唯一超线的是第一轮第一场 2.778s，第二轮第一场 0.830s。两次唯一的差别是这台机器今天第一次
+把 Qt 的 DLL 读进内存。**归因（系统文件缓存）与数据一致，但没有证死** —— 要证它得清一次
+系统缓存再跑，那需要管理员工具，本机没有。所以这里按「事实 + 未证归因」记，不写成结论。
+
+**逐屏核对（真字体、真合成，中文第一次是真的）**：9 屏首屏全部正常渲染，侧栏 9 项 + 图标 +
+选中态在位；S1 三栏在 1280 与最大化档（本机 3413 逻辑宽）下都成立；S1 表格 5 列在 1280 档
+需要横向滚动 —— 这是 **D-039/D-040** 定过的地板档行为，不是缺陷。**两条真缺陷**另记台账：
+
+- **ISSUES I74 · 主题里一条 `:disabled` 都没有，禁用态与可用态像素完全相同**。
+  正向对照先证明取色法有效：清空 QSS 走 Qt 默认样式时，同一按钮两态**不同**
+  （可用 `#fefefe/#f9f9f9` vs 禁用 `#eeeeee/#c4c4c4`）；换上 `theme.py generate_qss()` 之后：
+  普通按钮两态直方图**逐格相同**（`#ffffff`×1292 / `#dee2e6`×88 / `#495057`×48），
+  主按钮 `#searchBtn` 两态**逐格相同**（`#2563eb`×1392 / `#ffffff`×48）。
+  `grep -oE ":[a-z][a-z-]*" theme.py` 数出来：`:hover` 10、`:selected` 7、`:pressed` 1、
+  `:focus` 1、`:checked` 1、**`:disabled` 0**。QSS 一旦显式写 `background-color` + `color`，
+  Qt 就不再拿调色板的 Disabled 组画字 —— 主题拿走了默认态，又没补回来。
+  影响面是 14 处 `setEnabled`，其中 4 处是**危险动作的门**：`confirm.py:92`（不输确认词不许执行）、
+  `archive_page.py:279`（执行归档，真搬文件）、`backup_page.py:142`（恢复，覆盖当前库）、
+  `dedup_page.py:203`（开始判重）。
+- **ISSUES I75 · S7 上半区被 `QSplitter` 按 sizeHint 比例冻在 36%，任务/故障读数默认看不见**。
+  offscreen 几何（`.probe_work/s7_splitter_probe.py`，量的是几何与比例，与平台无关）：
+  窗口高 800 → `splitter.sizes=[276, 479]`（上半区 36%）、读数框视口 192px、内容 48 行 ×
+  行高 13px = 624px → 不滚动可见 **14/48 行**，看不见 34 行（70%）；窗口高 1409（本机最大化档）
+  → `sizes=[499, 865]`，**仍是 36%**，可见 31/48，看不见 17 行（35%），而下半区同一时刻有
+  **418px 空白**。36% 这个数不是巧合：两栏 sizeHint 258 / 447 = 36.6%，与两个窗高下实测的
+  36% 吻合 —— 即 `setStretchFactor(0, 1)` / `(1, 1)` 那两行（`settings_page.py:82-83`）
+  在初始分配上不起作用，比例被 sizeHint 冻住。真机最大化截图独立印证：可见到「分类 = 14，标签 = 0」，
+  其后的 `== 默认分类写入结果 ==`、`== 扫描与索引任务：进度 / 错误 / 重试 ==`、`== 界面尚未实现 ==`、
+  `== 还没接到界面上的动作 ==` 与磁盘口径那句，全在窄缝自己的滚动条里 —— 而 S7 存在的理由
+  （AGENTS.md「启动必须打印当前默认值 / 用户覆盖值 / 来源文件」+ SPEC 4.3「数据库损坏要能被知道」）
+  就写在那五块里。
+
+**探针返工四处（全在第二轮之前修掉，逐字记在这里，因为下一轮还会踩）**：① 判据没牙 ——
+`shutdown_rows >= 1` 被驱动自己写的那条 `shutdown` 满足，改成 `== 1` 且 `startup_rows == 1`，
+并把切片起点挪到驱动那次装配之后；② 裁剪把 Windows 的**不可见缩放边框**裁进去了 ——
+`GetWindowRect` 给 1942×1256，可见边框要用 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`
+= 1922×1246（本机 150% 缩放下每边约 11px，最大化那张还会连带裁进邻桌 11px）；③ 第一轮留下的
+旧 PNG 会让「图数 = 场数」拿旧图满足，起跑先删 `real_*.png` / `stdout_*.txt`；④ 语料份数写死
+63 与库里 64 不一致，改成从磁盘数。
+
+**没测到的（不许混进上面那些绿）**：① 真实语料到今天**一次都没被这一轮用过**（故意的，
+见上面那条边界），G4／G17／G18／G19 的性能档仍无真机读数；② `gates/final.py` 除
+guards／injection／ui-inject 三段外，其余 8 段今天都没从门禁里跑过；③ I74 / I75 只到
+**取到数**，一条代码都没改（界面改动要过用户的逐屏确认，见本轮编号清单）；④ 临时数据目录
+收尾删不净：`work_dir_removed` 记的是 `WinError 32 另一个程序正在使用此文件`，残留
+`data\logs\app.log` 与 `state.log` 两个文件，手工删的。**这条不是产品缺陷**：
+`logs.py:66` 的 `RotatingFileHandler` 是进程级的，`ctx.shutdown()` 故意不关它（产品关窗后
+进程就退了，`state_event` 反倒是每写一次开合一次）；是驱动在同一个进程里 bootstrap 了 11 次
+同一个数据目录，句柄一直在。已按此改驱动（rmtree 前先把 owned handler 逐个 close 再摘掉）。
+
+
+**文档层自己的返工三处（都在这一节自己身上，所以记在这里）**：① 更新本册末行现数时用了「替换所有匹配」，把 **§4.20 那条历史读数**一起改掉了（`本册 377` 被覆盖）—— 从 `git show HEAD:docs/VERIFICATION-RUNLOGS.md` 取回原文逐字恢复（那条 blob 是 LF，要 `splitlines()`）；② 更狠的一半：§4.22 的插入点选在**当时那条活行上**，等于把勾选轮（七）那块历史现数**整块删掉**，而轮（七）留下轮（六）那块时是保留的 —— 已按原样补回（`.probe_work/i17_restore_hist.py`，插点唯一 + 只改最后一处 + 行数三处复数一致）。**规则重述**：这类同名格式的行只有**最后一行是活的**，改前先数匹配条数；插新段时旧块留着；③ 本机埋点脚本数台账状态时**又**踩了转义竖线 —— `split("|")` 把 I42 那格（正文里有 `pending\|done\|failed\|skipped`）切成两格，`CLOSED` 少数 1 得 48，而门禁那行是 **49**。权威口径是门禁那一行；「转义竖线不是分隔符」这条这次落成了代码（`.probe_work/i17_ledger_count.py`，与门禁逐字一致），不再只写在文字里。
+
+
+> **本册末行现数（2026-10-18 勾选轮（八）收尾取）**：
+> `DECISIONS 1101｜VERIFICATION 847｜本册 549｜CHANGELOG 1134`（`wc -l`＝`splitlines()`＝守卫判定那条口径；
+> 本行是本册最后一行，后面再涨只改这一行，不动上面任何一句 —— §4.20 追记里那句同名规矩从今天起换了落点）。
