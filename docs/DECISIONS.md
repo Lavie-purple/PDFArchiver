@@ -1069,7 +1069,7 @@ S4 是**阶段 4** 的屏。第 3 问选了"执行跑在后台队列"，**这是
 
 **后果**：装配多一次反射（`inspect.signature` × 5 条 handler，可忽略）；不合时**直接抛 `ValueError` 拒绝构造**，
 不是记日志（记日志的坏法由 H2 注入证伪 —— 捕获不上抛等于这条核对永远绿）。3 条坏法注入全红且点名
-（`tests/probes/p17_handler_shape_injection.py`，见 `docs/VERIFICATION.md` §4.20）。
+（`tests/probes/p17_handler_shape_injection.py`，见 `docs/VERIFICATION-RUNLOGS.md` §4.20）。
 
 ## D-057 · 「不可逆」的唯一出处放在服务侧；产品里今天走不到的那一档**不上屏、写进用户文档**（2026-10-18，**ISSUES I69** 丙）
 

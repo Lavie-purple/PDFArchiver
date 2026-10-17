@@ -51,7 +51,7 @@ SELF_DEFINING = ("DECISIONS.md", "ISSUES.md")
 #: 这批文档**仍然**受编号 / 节号两条检查约束 —— 编号是稳定的，改名不改变它指哪一条。
 #: 现存的失效测试名指针逐条记在 **ISSUES I70**，不是没人看过。
 LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/DECISIONS.md", "docs/ISSUES.md", "docs/VERIFICATION.md",
-               "docs/REPO-JOURNAL.md")
+               "docs/VERIFICATION-RUNLOGS.md", "docs/REPO-JOURNAL.md")
 LEDGER_DIR = "docs/stage-reports/"
 
 #: 台账类文档里「今天已经不存在的测试名」允许的条数上限（**ISSUES I70** 丙）。

@@ -105,7 +105,7 @@
 **给开发者 / 想知道它凭什么可信的人**
 - [`docs/ISSUES.md`](docs/ISSUES.md) —— 已知问题台账，**逐条销账**，现数 71 条：
   已关闭 46 / 有缓解 18 / 待处理 6 / 明确不做 1。待处理那 6 条每条都写着卡在哪一步、需要谁配合。
-- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块（§4.17 起）在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) —— 按阶段记录真正做过并验证过的变更
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) —— 走过的选择与还没走的路
 - [`docs/TESTING.md`](docs/TESTING.md) —— 这个项目的规矩：**每条断言都要先用"能骗过它的坏法"真注入一次，
