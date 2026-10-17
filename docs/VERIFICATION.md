@@ -749,6 +749,46 @@ A/B 对照探针 `.probe_work/i59_budget_shape_probe.py` 当场把它否掉；�
 （真库绑定读数），一次性脚本 means 这组数字不会自己复跑 —— 处置在 **任务 #89**（`--only g2`）。
 `scan_budget` 是**行预算不是时间预算**，语料涨、机器换、SQLite 计划变都会让它漂移，所以这版 GREEN 的有效性依赖"每次都现量"而不是写在文档里的 328ms。
 
+### 4.17 勾选轮（三）收尾读数（2026-10-17，含一条**负载红灯 + A/B 对照**）
+
+**全量回归**：`.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider`
+→ **`471 passed, 1 failed, 4 skipped in 179.99s`**（上一块记录是 438 passed / 4 skipped；本轮新增
+`test_ai_classify_service.py` 5 条，并把 I18 的两条改成断言两参签名 + `crash_log.is_file()`）。
+**唯一红灯逐字原文**：
+
+```
+tests/integration/test_app_shell.py:183: AssertionError
+E   AssertionError: G1 [约定] ≤1.5s，实测 2.457s
+E    assert 2.457 <= 1.5
+```
+
+**这条 RED 判给了负载（ISSUES I25），而判它之前做了对照、不是直接宣布"环境问题"**：
+`.probe_work/g1_ab_probe.py` 在**同一时段交替**跑 `git worktree add --detach` 出来的 HEAD 工作树
+（`d573bd3`，本轮改动之前）与当前工作树，各 3 次；读数用应用自己写进 `state.log` 的
+`window.ready.cold_start_seconds`（与那条测试同一口径，不是外部掐表）：
+
+```
+起跑负载：CPU 98%｜可用内存 2360MiB
+HEAD     cold=6.065s / 3.032s / 2.316s   min=2.316  达标=False
+工作树   cold=2.946s / 2.774s / 2.284s   min=2.284  达标=False
+收口负载：CPU 86%
+```
+
+⇒ 两侧同样不达标、HEAD 的 min 还更差 ⇒ **本轮改动不是成因**。该条单跑三次也全红（1.954 / 2.457 / 2.284s），
+所以旧说法"并发跑才假红"不完整 —— **变量是负载，不是并发**（同码空载的历史读数是 0.57s）。
+**所以今天没有任何一份文档可以写"全量回归全绿"**；G1 要在机器空闲时复跑才算过，本轮没拿到那个读数。
+
+**同轮其余读数**（都是现测）：`test_ui_layout.py` **29** + `test_ui_tier.py` **20** +
+`test_error_handling.py` **14** + `test_job_queue.py` **38** + `test_ai_classify_service.py` **5**
+= 本轮改过的五份文件合跑 **106 passed in 51.21s**；架构守卫 `test_架构守卫全绿` 在 `app.py` 那句盘符字面量
+被改掉后转绿（它就是本轮全量回归里第一次 RED 的那一条，逐字原文记在 `docs/CHANGELOG.md` 勾选轮（三）返工段）；
+I65 的机制证明读数 `AssertionError: assert 2 == 1`（要"摘 `q.stop()` + 主动加宽窗口"才出得来，
+摘掉照原样跑 8 次全绿）。
+**台账现数**：**66 行 = CLOSED 42｜MITIGATED 18｜OPEN 5｜WONTFIX 1**。数法要说明：状态列**不能按竖线切列取第 3 段**
+（`ISSUES I42` / `I22` 这类正文里含转义竖线 `\|` 的行会被切偏，我第一次就这么读错过一次，把 OPEN 数成 3），
+要用 `re.search(r'\|\s*\*\*(OPEN|MITIGATED|CLOSED|WONTFIX)\*\*\s*\|', 行)` 找状态**记号**。
+OPEN 五条 = `I5` `I16` `I17` `I51` `I66`：前三条要真机配合，后两条要先过线框 / 勾选门。
+
 ---
 
 ## 五 · 已验证的决策（可以直接依赖）
