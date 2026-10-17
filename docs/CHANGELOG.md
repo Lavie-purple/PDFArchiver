@@ -6,6 +6,49 @@
 
 ---
 
+## 勾选轮（六）—— 2026-10-18 · **不升版本号**，把上一轮留给勾选的三条编号方案落地，并给"台账里的过期名字"装上会红的上限
+
+用户指令仍是「还差哪些东西才能算完成整个项目做完 ABCD」。本轮清的是上一轮末尾交出的三条勾选方案
+**I68 甲 / I69 丙 / I70 丙**（此前授权"勾选清单均听你推荐"），三条都带断言、都带坏法注入，
+逐字读数见 `docs/VERIFICATION.md` §4.20。
+
+- **I68 甲 · 队列处理函数的形状核对**：`WorkQueue.__init__` 在 KINDS 校验之后遍历注册表，用
+  `inspect.signature(fn).bind(None, None)` 核对每条 handler 能不能按 `handler(job, monitor)` 调用。
+  两个选择值得写下理由：① 核对长在**构造点**而不是 `bootstrap` 装配之后 —— 装配点只覆盖产品那一条注册路径，
+  构造点覆盖所有构造点；② 用 `bind()` 而不是数参数 —— 少收一个位置参数、多要一个必需参数、
+  builtin 取不到签名，三种坏法落进同一条 `ValueError`，且消息里**点名是哪一种 kind**。
+  断言 2 条（`tests/integration/test_job_queue.py`：形状不合当场拒 / 真装配的五条都过），
+  坏法注入 3 条全红且各自点名（`tests/probes/p17_handler_shape_injection.py`，本轮新入仓）。
+  正面那一半不在测试里重抄一遍注册字典 —— `test_真装配的五条处理函数过形状核对` 走的是真 `start_background()`。
+- **I69 丙 · 「不可逆」全站只许有一个表达式**：新增 `PlannedMove.irreversible`（`services/archive_service.py`），
+  S3 界面改成只数不算（页面里那句 `os.path.exists` 连同 `import os` 一起清掉），批次落库的 `reversible`
+  也改写这一条。**今天可达的输入上一字不变**：跳过的项仍写 0，搬得成的仍写 1 ——
+  这轮改的是"两处各算各的"，不是数出来的值。同轮把「这一档今天走不到」从只写在代码注释里，
+  改成写在用户会照着操作的两处（`README.md` 的 ⚠️ 段、`docs/USAGE.md` §一）：按**不上屏、写进文档**处置，
+  界面文案一字不动。**丁 仍等勾选** —— 「覆盖前先把目标备份一份」是一件新的危险操作语义，按 AGENTS.md 要先过线框。
+  断言 3 条 + 坏法注入 3 条（`tests/probes/p18_irreversible_source_injection.py`，本轮新入仓）。
+- **I70 丙 · 台账旧名从此不许无声增长**：那 6 处过期测试名就地各追注继任者（台账原文一字未动，只在同一行后面加括号），
+  新增 `LEDGER_STALE_CAP = 6` —— 守卫多一条 `test_台账旧名不超过上限`，`gates/final.py` 的 `gate_docs()`
+  多一行读数，且条数**直接取守卫那份函数与那个常量**，门禁里不重数一遍（本文件的设计约束：门禁只做编排，不新增判定口径）。
+  注入探针 `tests/probes/p16_doc_pointers_injection.py` 加一条 P6「往台账里再塞一个不存在的测试名」必须红；
+  同时把 P5 反向对照改成只跑被对照的那一条断言 —— 上限进了节点表之后，同一条注入会同时顶破两条判据，
+  对照分支若连着跑 P6 就变成"对照破了"的假红。
+- **收尾时抓出的一处自己的假证据**：§4.19 那段自称"当场输出的逐字粘贴"**不是逐字** —— 真实输出把六条
+  `台账旧名` 行打在 `扫了 …` 之前、每行带前缀、摘要行里的台账编号带星号。改历史不叫修正，所以在原地保留、
+  就地声明它哪几处不是逐字，真逐字的现读贴在 §4.20。AGENTS.md 要的是"报错原文完整粘贴、禁止转述"，
+  同一把尺子量自己粘过的读数：**能被复算对上的应该是字符，不是印象**。
+- **台账对账**：`docs/ISSUES.md` 现数 **71 行**（I1–I71 连续不重号），
+  **CLOSED 46｜MITIGATED 18｜OPEN 6｜WONTFIX 1**（上一轮 45／17／8／1）。OPEN 那 6 条 =
+  **I5**（改名自愈压测）/ **I16**（组合内存压测）/ **I17**（真桌面首屏）/ **I51**（表格虚拟化）/
+  **I67**（OCR 界面入口）/ **I71**（台账切册）—— 前 3 条要真机配合，**I51 / I67** 要先过线框，
+  **I71** 要勾选，本轮没有一条是我一个人能闷头做完的。
+- **I71 本轮见底**（写在台账对账之后，因为它改变了下一轮的动作）：三本台账写完的现数
+  `DECISIONS 1,101｜VERIFICATION 1,184｜CHANGELOG 1,062`，离 `MD_LIMIT = 1,200` 剩 **99／16／138** 行。
+  VERIFICATION 这一本本轮涨了 **+165**（比上一轮记的"+68～+130"还多），原因就是这一轮开始**逐字**粘贴探针与门禁输出。
+  ⇒ 下一轮不论做什么，第一件事都是切册；三档（乙 只切 VERIFICATION／甲 三本一起切／丙 抬阈值）等勾选，本轮不代切。
+
+---
+
 ## 勾选轮（五）—— 2026-10-17 · **不升版本号**，把 A2／A3／A4 三段"按下去真改磁盘"的链路接上，并给文档里的引用装上门禁
 
 用户指令仍是「还差哪些东西才能算完成整个项目做完 ABCD」。上一轮末尾明写的未做项里，
@@ -321,7 +364,8 @@
   `test_换底的状态规则必须带上过AA的字色`（专盯 hover 类规则）与把 hover 配对补进逐主题参数化。
 - **判重页的进度条是死控件**：`_build_progress_bar()` 建了就没人调，`grep` 全项目零引用。现在接的是**队列里那条 `dedup` job**
   （`reload_progress()`：无 job 时隐藏、`total==0` 时不确定态、有 total 时 `setRange(0, total)` + `setValue(job.done)`），
-  按钮改灰只由 `_sync_start_button()` 决定，不在第二处重算。状态词表由 `test_progress_state_vocabulary` 对着仓储 `STATES` 钉。
+  按钮改灰只由 `_sync_start_button()` 决定，不在第二处重算。状态词表由 `test_progress_state_vocabulary`
+  （现已改名 `test_状态口径只有一套`，在 `tests/integration/test_job_queue.py`）对着仓储 `STATES` 钉。
 - **第 6 条（勾甲 + 6b + 6c）**：① `ui/main_window.py:35` `MIN_WINDOW_WIDTH/HEIGHT = 1024×720`（就是 D-039 那条 `[约定]`）
   并 `setMinimumSize` —— 侧栏被榨瘪（**ISSUES I52**）到此不可达；② 1024–1076 那一档按 **D-040** 降级：牺牲右栏、
   左树收成 48px 的条（`ui/tier.py`），实测地板档 S1 splitter `[48, 774]`、浮层宽 420、几何 `(403, 0, 420, 676)` 贴右沿，
@@ -513,7 +557,8 @@
   顺带两条**现跑**的实测（写在 ISSUES I43 里，免得下一步按直觉写）：`pragma foreign_key_list(documents)` 是**空行**（`documents` 不引用任何表），
   而 `grep -rn "DELETE FROM documents" src/ tests/` **零命中** —— 产品只用 `missing_since` 标记消失，从不硬删主记录。
   **ISSUES I44 MITIGATED** = `docs/DATABASE.md` §2.2 把 `duplicate_groups` 列成"首版表"，而两条迁移注释
-  （`0001_initial.py:235`、`0002_text_and_fts.py:86`）明写**故意不建**且有回归 `test_阶段1刻意不建的表确实不存在` 钉住 ——
+  （`0001_initial.py:235`、`0002_text_and_fts.py:86`）明写**故意不建**且有回归 `test_阶段1刻意不建的表确实不存在` 钉住
+  （该断言随 0002 真把 `content_fts` 建出来而不成立、随之删除，继任者 `test_documentation_matches_actual_schema`）——
   与 **ISSUES I40**（`volume_id` 死列）同型的第二次发作。顺着这条把 §2.2 那张表的**每一个表名**都对过迁移与 `db/migrate.py`
   （一次性排查，不逐个查），又查出同一个概念两个数：`docs/ARCHITECTURE.md` 一 与 `docs/DATABASE.md` 四 写"`0001_initial`（13 张表）"，
   而 §一 存储布局写"0001 的 **12** 张表"。**两处本轮都改了**：§2.2 那行改成"故意不建 + 只许 `GROUP BY sha256` 现算（走 `ix_documents_sha`）

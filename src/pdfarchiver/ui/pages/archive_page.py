@@ -18,7 +18,6 @@
 """
 from __future__ import annotations
 
-import os
 import shutil
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -210,11 +209,9 @@ class ArchivePage(QtWidgets.QWidget):
             "same": sum(1 for m in will if m.kind == "move"),
             "cross": sum(1 for m in will if m.kind == "copy"),
             "skipped": len(moves) - len(will),
-            # 不可逆 = 真要执行、而目标位置上此刻已经有文件。默认的冲突处置是**跳过**
-            # （**D-042** 甲），所以这一项今天恒为 0；等"先备份目标再覆盖"那个显式出口做出来，
-            # 它自己就变成正数，分级控件随即切到输入确认词那一档（**D-042** 丙）。
-            # 写死 0 会让那档永远走不到，所以这里按磁盘真的查。
-            "irreversible": sum(1 for m in will if m.dst_path and os.path.exists(m.dst_path)),
+            # 不可逆的口径在 `PlannedMove.irreversible`（**ISSUES I69** 丙），界面只数不算 ——
+            # 两处各算各的会让同一批文件在 S3 要输确认词、在 S4 只要勾一下。
+            "irreversible": sum(1 for m in moves if m.irreversible),
         }
 
     def _copy_bytes(self, moves: list[PlannedMove]) -> int:

@@ -146,7 +146,8 @@ Q7 也必须在此之前答：外壳里没有产品界面，扫描完总得有�
 - S6（备份/恢复/迁移历史）：`ui/pages/backup_page.py` ✓
 - 分级确认控件：`ui/confirm.py`（全站唯一危险操作控件形状，**D-042** 丙）
 - 后端 `ArchiveService`、`DedupService`、`BackupService` 均已实现；`ArchiveService.handle(job, monitor)`
-  的签名在接线时发现与队列契约不符（**ISSUES I68**）
+  的签名在接线时发现与队列契约不符（**ISSUES I68**）。同类问题的一次性规则已落地：`WorkQueue` 构造时
+  逐条核对 handler 能否按 `handler(job, monitor)` 调用（**I68** 甲，2026-10-18）
 - 队列种类 `KINDS` 已加 `"dedup"`，`bootstrap.py` 已注册 `archive` 与 `dedup` 处理器
 
 **⚠️ 一句必须跟着走的限定**：上面这些「真搬文件」的证据全部来自**临时目录里的真文件**，
@@ -154,7 +155,7 @@ Q7 也必须在此之前答：外壳里没有产品界面，扫描完总得有�
 
 **门禁验收（首建于 2026-10-15；**2026-10-17 归档轮当场复跑**，`gates/stage4.py` 末行 `VERDICT: ALL GREEN`，
 八条判定逐字读数见 `docs/VERIFICATION.md` §4.19 —— 冷启动 0.856s、全量回归 568 passed / 0 failed、
-反向注入 46/46 条坏法被抓到）**：
+反向注入 46/46 条坏法被抓到；2026-10-18 勾选轮（六）之后全量回归 **574 passed / 0 failed**，现读见 §4.20）**：
 
 | 门禁 | 内容 | 状态 |
 | --- | --- | --- |
@@ -164,7 +165,7 @@ Q7 也必须在此之前答：外壳里没有产品界面，扫描完总得有�
 | G19 | 跨盘移动**绝不先删源**：注入"删源前崩溃"证明它真的没删 | ✅ **行为已验**（`TestG19CrossDiskNeverDeletesSourceFirst` 4 条：校验失败源仍在、成功才消失、一项坏带不走整批）<br>⚠️ **真语料未跑** |
 | 新 | 预览与实际执行的文件集合**逐条一致**（先算 sha256 集合差，非 0 即中止） | ✅ **已验，但落点不是「执行前重算 sha256」**：`TestPreviewMatchesExecution::test_批次里的条目与plan逐条相等` 钉「落库的 `operation_items` 与 `plan()` 逐条相等」，界面那侧另有「旧预览不许授权执行」（重算 plan 比签名，签名含 `src/dst/kind/skip_reason` 五个字段）。**sha256 集合差这一半仍在跨盘执行路径里**（复制后两侧各算一次才删源），不是执行前的一次全量重算 |
 | 新 | DB 事务回滚**不等于**磁盘回滚 —— 断言存在一条测试专门验这点 | ⚠️ **仍欠一条专门的断言**：现在有的是两侧各自的证据（`test_事务失败时回滚并带上出错场景说明` 验库、`test_取消停在项与项之间且不谎报完成` 验磁盘上不谎报），**没有**一条构造「文件已搬成功而台账事务失败」的组合场景。本轮不伪装成已验，挂在 **ISSUES I55** 的残留事实之外的独立欠账 |
-| 新 · 服务存在性 | ArchiveService / DedupService / BackupService 可 import | ✅ **已验** |
+| 新 · 口径唯一 | 「不可逆」在界面、落库、控件三处只许有一个算法 | ✅ **已验**（**ISSUES I69** 丙，2026-10-18：唯一出处是 `PlannedMove.irreversible`，S3 只数不算、`operation_items.reversible` 同写这一条；3 条断言 + 3 条坏法注入 `tests/probes/p18_irreversible_source_injection.py`）<br>⚠️ **那一档今天仍走不到**：默认冲突处置是跳过（**D-042** 甲），所以 `irreversible` 现数恒为 0 —— 要让它真能到，得加「覆盖前先备份目标」（**I69** 丁），那是新的危险操作语义，**等勾选且要先过线框** |
 | 新 · bootstrap 注册 | 三个服务已注册进 AppContext，KINDS 含 archive/dedup | ✅ **已验** |
 
 **开工前置对账的五件（2026-10-15）**：

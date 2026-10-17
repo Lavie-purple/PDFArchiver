@@ -136,11 +136,25 @@ def gate_docs() -> list[Row]:
         if ledger.is_file() else (["台账文件不存在"], [])
     rows.append(Row("已知问题台账逐条有状态、编号连续不重号", not defects,
                     "｜".join(summary) + (f" ── {defects}" if defects else "")))
+
+    stale, cap = _ledger_stale_pointers()
+    rows.append(Row(f"台账里失效的测试名不超过 {cap} 处（**ISSUES I70** 丙）", stale <= cap,
+                    f"现数 {stale} 处，上限 {cap}",
+                    "涨了就说明这一轮留下了新的过期名字：就地追注继任者，别抬上限"))
     return rows
 
 
+def _ledger_stale_pointers() -> tuple[int, int]:
+    """台账旧名条数与上限。口径直接取守卫那份函数与那个常量，不在门禁里再数一遍
+    （本文件设计约束 1：门禁只做编排，不新增判定口径）。"""
+    sys.path.insert(0, str(REPO / "tests" / "guards"))
+    from test_doc_pointers import LEDGER_STALE_CAP, ledger_stale_test_names  # noqa: E402
+    return len(ledger_stale_test_names()), LEDGER_STALE_CAP
+
+
 def gate_docs_injection() -> Row:
-    """上面那五条的坏法注入：临时造一份残缺报告、一份占位符文档与一份坏台账，要求被抓到。"""
+    """上面那六条里三条能注入的坏法：临时造一份残缺报告、一份占位符文档与一份坏台账，要求被抓到。
+    台账旧名那条的坏法注入不在这里，见 `tests/probes/p16_doc_pointers_injection.py` 的 P6。"""
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="final_docs_") as td:

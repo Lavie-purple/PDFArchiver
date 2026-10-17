@@ -29,6 +29,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
@@ -153,6 +154,17 @@ class WorkQueue:
         unknown = sorted(set(handlers) - set(KINDS))
         if unknown:
             raise ValueError(f"任务类型 {unknown} 不在 {KINDS} 里；处理函数拼错了就该当场说")
+        # 形状核对（**ISSUES I68** 甲）：签名不合的 handler 要等第一次真领任务才炸，而那一刻
+        # 在产品里就是用户按下执行的那一次。用 `bind(None, None)` 而不是数参数 —— 它同时拦住
+        # "少一个"（archive 当年的四条位置参数）与"多要一个必需参数"，且对名字拼错但元数正确的
+        # 那种也无需额外规则：契约只承诺"能按 fn(job, monitor) 调用"。
+        for kind, fn in sorted(handlers.items()):
+            try:
+                inspect.signature(fn).bind(None, None)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"处理函数 {kind} 不合队列契约 handler(job, monitor)：{exc}"
+                ) from exc
         if threads < 1:
             raise ValueError(f"worker 线程数至少 1，收到 {threads}")
         self._jobs = jobs

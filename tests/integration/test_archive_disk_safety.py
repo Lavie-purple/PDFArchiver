@@ -41,7 +41,8 @@ from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.operations import OperationRepository
 from pdfarchiver.fs.identity import read_identity
 from pdfarchiver.jobs.queue import JobCancelled, ProgressMonitor
-from pdfarchiver.services.archive_service import MAX_SAFE_PATH_LENGTH, ArchiveService
+from pdfarchiver.services.archive_service import (MAX_SAFE_PATH_LENGTH, ArchiveService,
+                                                  PlannedMove)
 
 DEFAULT_TEMPLATE = "{category}/{year}/{name}.pdf"
 BODY = b"archive disk safety payload"
@@ -253,6 +254,48 @@ class TestPreviewMatchesExecution:
         assert ghost_item.state == "skipped" and ghost_item.reversible == 0
         assert ghost_item.error and "源文件已经不在" in ghost_item.error
         assert by_src[next(k for k in by_src if "能搬" in k)].state == "pending"
+
+
+class TestIrreversibleSingleSource:
+    """**ISSUES I69** 丙：「不可逆」全站只许有一个算法。
+
+    归一之前是三处各写各的：S3 界面自己 `os.path.exists(dst)` 数一遍、`reversible` 字段按
+    `1 if will_move else 0` 写、S4 数 `reversible == 0`。分级确认控件切的就是这一条数
+    （**D-042** 丙），三处不同一条就意味着同一批文件可能在 S3 要输确认词、在 S4 只要勾一下。
+    """
+
+    @staticmethod
+    def _moves(env) -> list[PlannedMove]:
+        doc_id = _seed(env, "甲.pdf", category="财务")
+        src = str(env["src_dir"] / "甲.pdf")
+        taken = env["dst_dir"] / "已被占位.pdf"
+        taken.write_bytes(BODY)   # 目标位上那份是"别人的文件"，这次不搬它
+        return [PlannedMove(doc_id, src, str(taken), "move"),
+                PlannedMove(doc_id, src, str(env["dst_dir"] / "空位.pdf"), "move"),
+                PlannedMove(doc_id, src, "", "move", "源文件已经不在磁盘上")]
+
+    def test_目标位已有文件才算不可逆(self, env):
+        hit, free, skipped = self._moves(env)
+        assert hit.irreversible is True
+        assert free.irreversible is False, "目标位是空的，搬过去盖不掉任何东西"
+        assert skipped.irreversible is False, "根本不搬的项不许占这条数"
+
+    def test_界面那条数取的是服务的口径(self, env):
+        from pdfarchiver.ui.pages.archive_page import ArchivePage  # 只借静态方法，不起窗口
+        moves = self._moves(env)
+        assert ArchivePage._counts(moves)["irreversible"] == 1, \
+            "界面数出来的与 `PlannedMove.irreversible` 不同一条，就是两个口径又长回来了"
+
+    def test_落库的可逆标记与界面同一条数(self, env):
+        from pdfarchiver.ui.pages.archive_page import ArchivePage
+        moves = self._moves(env)
+        with patch.object(ArchiveService, "plan", return_value=moves):
+            op = env["svc"].submit([int(moves[0].doc_id or 0)],
+                                   str(env["dst_dir"]), DEFAULT_TEMPLATE)
+        pending = [i for i in env["ops"].list_items(op.id) if i.state == "pending"]
+        assert sum(1 for i in pending if i.reversible == 0) == \
+            ArchivePage._counts(moves)["irreversible"] == 1, \
+            "批次里的 `reversible` 与界面上的「不可逆」不同源，撤销那一屏就会给出另一个档"
 
 
 class TestG19CrossDiskNeverDeletesSourceFirst:

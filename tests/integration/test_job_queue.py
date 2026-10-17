@@ -151,6 +151,25 @@ def test_没有处理函数的队列拒绝启动(ctx):
         WorkQueue(ctx.jobs, {"scan": lambda *_: None}, engine=ctx.engine, threads=0)
 
 
+def test_处理函数形状不合队列契约时装配当场拒绝(ctx):
+    """**ISSUES I68** 甲：形状核对长在 `WorkQueue.__init__`，坏签名活不到"用户按下执行"那一刻。
+    这里用的就是 archive 当年那条真签名（四个位置参数），它曾经一路装到领任务才炸。"""
+    def stale(job_id, doc_ids, target_root, template) -> None:
+        ...
+
+    with pytest.raises(ValueError, match="不合队列契约") as exc:
+        WorkQueue(ctx.jobs, {"archive": stale}, engine=ctx.engine)
+    assert "archive" in str(exc.value), "拒绝了但不点名是哪一条，装配现场照样要挨个试"
+    with pytest.raises(ValueError, match="不合队列契约"):
+        WorkQueue(ctx.jobs, {"scan": lambda job: None}, engine=ctx.engine)
+
+
+def test_真装配的五条处理函数过形状核对(ctx):
+    """正面那一半不在测试里重抄一遍注册字典 —— 核对在构造点上，所以"真装配起后台"本身就是证明。"""
+    ctx.start_background()
+    assert ctx.queue is not None
+
+
 # —— 领取：原子性 ————————————————————————————————————————————
 
 def test_四个线程同时领取不会重复(ctx, doc_ids):

@@ -4,10 +4,12 @@
     .venv/Scripts/python.exe tests/probes/p16_doc_pointers_injection.py            # 全跑
     .venv/Scripts/python.exe tests/probes/p16_doc_pointers_injection.py P1 P4 ...   # 只跑指定 id
 
-五条坏法各往文档里插一句"引用一个不存在的东西"，跑守卫的四条断言，要求：
-1. 必须红；2. 红的必须是**对应那一条**断言（点名），不是四条一起红、也不是随便一条崩了。
-P5 是**反向对照**：往台账类文档（`docs/CHANGELOG.md`）里插一个不存在的测试名，必须**仍绿** ——
-这条证明"台账豁免"是刻意划出来的边界，不是守卫整体放空。
+五条坏法各往文档里插一句"引用一个不存在的东西"，跑守卫对应的那一条断言，要求：
+1. 必须红；2. 红的必须是**对应那一条**断言（点名），不是五条一起红、也不是随便一条崩了。
+P5 是**反向对照**：往台账类文档（`docs/CHANGELOG.md`）里插一个不存在的测试名，守卫的「活文档」
+那一条必须**仍绿** —— 这条证明"台账豁免"是刻意划出来的边界，不是守卫整体放空。
+P6 是同一处注入的**另一半**（**ISSUES I70** 丙）：台账豁免不等于没人管 —— 同一条注入必须把
+「台账旧名不超过上限」那条判红，否则那条断言就是个摆设。
 跑完立即按原字节还原；改动只落在工作区，不提交。
 
 锚点按工作区的行尾匹配（本仓索引全是 LF，但 `core.autocrlf=true` 且没有 `.gitattributes`，
@@ -29,6 +31,7 @@ T_DEC = GUARD + "test_文档里的决策编号都真实存在"
 T_ISS = GUARD + "test_文档里的台账编号都真实存在"
 T_SEC = GUARD + "test_文档里的节号指针都落得下去"
 T_TEST = GUARD + "test_活文档里引用的测试名都还在场"
+T_CAP = GUARD + "test_台账旧名不超过上限"
 
 USAGE = "docs/USAGE.md"
 CHANGELOG = "docs/CHANGELOG.md"
@@ -47,6 +50,8 @@ MUTATIONS: list[tuple[str, str, str, str, str, list[str]]] = [
      ANCHOR + "\n\n坏法锚：由 `test_这条根本不存在啊` 钉住。\n", [T_TEST]),
     ("P5", "台账类文档里的旧测试名不判红（反向对照）", CHANGELOG, LEDGER_ANCHOR,
      LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", []),
+    ("P6", "同一条注入必须顶破台账旧名的上限（**ISSUES I70** 丙）", CHANGELOG, LEDGER_ANCHOR,
+     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", [T_CAP]),
 ]
 
 
@@ -70,7 +75,7 @@ def main() -> int:
     wanted = set(sys.argv[1:])
     selected = [m for m in MUTATIONS if not wanted or m[0] in wanted]
 
-    all_nodes = sorted({n for m in selected for n in m[5]}) or [T_DEC, T_ISS, T_SEC, T_TEST]
+    all_nodes = sorted({n for m in selected for n in m[5]}) or [T_DEC, T_ISS, T_SEC, T_TEST, T_CAP]
     code, out = run_nodes(all_nodes)
     if code != 0:
         print("!! 基线就没绿，先修守卫再谈注入：\n" + out[-4000:])
@@ -93,7 +98,9 @@ def main() -> int:
             path.write_bytes(raw.replace(anchor_b, new_b, 1))
             for pyc in _pyc_files(rel):
                 pyc.unlink(missing_ok=True)
-            code, out = run_nodes(nodes or all_nodes)
+            # 反向对照只验"台账豁免"这一件事：注入的是台账，所以只许跑「活文档」那一条。
+            # 混进上限那条会稳定误报"对照破了"——同一条注入本来就该顶破上限（那正是 P6）。
+            code, out = run_nodes(nodes or [T_TEST])
         finally:
             path.write_bytes(raw)
             for pyc in _pyc_files(rel):

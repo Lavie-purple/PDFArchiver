@@ -54,6 +54,13 @@ LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/DECISIONS.md", "docs/ISSUES.md", "docs
                "docs/REPO-JOURNAL.md")
 LEDGER_DIR = "docs/stage-reports/"
 
+#: 台账类文档里「今天已经不存在的测试名」允许的条数上限（**ISSUES I70** 丙）。
+#: 6 = 2026-10-18 现数（`python tests/guards/test_doc_pointers.py` 倒数第二行），逐条记在 I70，
+#: 每一条都当场追注了继任者。这条线不是审美：台账里的旧名字会无声累积，等到没人愿意逐条追注
+#: 那一刻，「台账引用不存在的断言」就退回 **ISSUES I34** 之前的人肉状态。
+#: 要抬高它，必须同时做两件事：给新出现的那条追注继任者，并在 I70 那一行写下为什么会多。
+LEDGER_STALE_CAP = 6
+
 
 def _cn_to_int(text: str) -> int | None:
     """中文节号转数字，只覆盖本仓用到的 `〇`–`九十九`；不认识的写法返回 None（不猜）。"""
@@ -218,11 +225,26 @@ def test_活文档里引用的测试名都还在场() -> None:
         raise AssertionError("\n".join(bad))
 
 
+def test_台账旧名不超过上限() -> None:
+    """台账里的过期名字**可以存在**（改历史记录就是销毁证据），但**不许无声增长**。
+
+    判红的方式只有一条路能走：新一轮改了代码里的测试名、却没给台账那一处追注继任者。
+    那时正确做法是补追注，不是抬这条线（抬线要在 I70 写明理由，见 `LEDGER_STALE_CAP` 的注释）。
+    """
+    stale = ledger_stale_test_names()
+    assert len(stale) <= LEDGER_STALE_CAP, (
+        f"台账旧名 {len(stale)} 处 > 上限 {LEDGER_STALE_CAP} 处。多出来的是这些：\n"
+        + "\n".join(stale))
+
+
 if __name__ == "__main__":
     found = check_pointers()
+    stale = ledger_stale_test_names()
+    if len(stale) > LEDGER_STALE_CAP:
+        found.append(f"台账旧名 {len(stale)} 处 > 上限 {LEDGER_STALE_CAP} 处"
+                     f"（**ISSUES I70** 丙）：新多出来的是这些 → {'；'.join(stale)}")
     for item in found:
         print("  RED  " + item)
-    stale = ledger_stale_test_names()
     for item in stale:
         print("  台账旧名  " + item)
     print(f"扫了 {len(_doc_files())} 份 md、{len(_decision_numbers())} 条决策编号、"

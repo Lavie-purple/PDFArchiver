@@ -169,6 +169,17 @@ class PlannedMove:
     def will_move(self) -> bool:
         return self.skip_reason is None and bool(self.dst_path)
 
+    @property
+    def irreversible(self) -> bool:
+        """这一项执行时会盖掉目标位上已有的东西，所以「撤回去」也拿不回原来那份。
+
+        口径的唯一出处（**ISSUES I69** 丙）：S3 界面显示的那条数、批次里落的 `reversible`
+        字段、分级确认控件切不切到「输入确认词」那一档，三处都取这一个表达式。
+        默认的冲突处置是**跳过**（**D-042** 甲），所以 `plan()` 今天交不出为真的项；
+        它不是写死的 0 —— 等「先备份目标再覆盖」那个显式出口做出来，它自己就变正数。
+        """
+        return self.will_move and Path(self.dst_path).exists()
+
 
 @dataclass(frozen=True)
 class UndoPlan:
@@ -354,7 +365,7 @@ class ArchiveService:
         for move in moves:
             self.ops.add_item(op.id, move.doc_id, kind=move.kind,
                               src_path=move.src_path, dst_path=move.dst_path or None,
-                              reversible=1 if move.will_move else 0,
+                              reversible=0 if (not move.will_move or move.irreversible) else 1,
                               state="pending" if move.will_move else "skipped",
                               error=move.skip_reason)
         return self.ops.get_operation(op.id) or op
