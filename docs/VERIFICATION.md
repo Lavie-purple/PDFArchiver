@@ -791,6 +791,67 @@ OPEN 五条 = `I5` `I16` `I17` `I51` `I66`：前三条要真机配合，后两�
 
 ---
 
+### 4.18 勾选轮（四）· A1 监测根登记接线（2026-10-17，销账 **ISSUES I66**、新开 **ISSUES I67**）
+
+**测的是什么**：S7「设置与状态」下半区「监测目录」的「添加目录...」/「移除选中」两颗按钮，
+从"只弹一句假文案"改成"真的写库 + 真的挂监听 + 真的撤干净"。落点在服务层
+（`services/bootstrap.py:AppContext.register_root` / `unregister_root`），界面只调它 ——
+理由与读数记在台账那行里。
+
+**新增测试**：`tests/integration/test_monitor_roots_ui.py` **10 passed in 3.49s**
+（offscreen 真窗口 + 真 sqlite，无 mock，D-012；`PYTHONIOENCODING=utf-8 PYTHONUTF8=1`）。
+其中 8 条测行为（库里 +1 且 `enabled=1` / 取消选择不动 / 重复登记是重新启用而不是多一行 /
+移除只撤监测：`documents` 条数不变 + 磁盘目录 `exists()` 仍为真 / 确认框答否不生效 /
+没选中不生效 / `start_background()` 之后 `background_state().watched_roots` 随登记 +1 随移除回落 /
+界面不许再出现「只能通过配置文件」那句），另 2 条是**用户文档口径守卫**（见下）。
+
+**坏法注入 14 条，全红且各自点名**（`.probe_work/i66_guard_injection.py`：一次一条字符串替换 →
+只跑那一个 nodeid → `finally` 还原；跑法必须带 UTF-8 环境变量，否则会撞 GBK 编码崩在第 ⑪ 条，
+`UnicodeEncodeError: 'gbk' codec can't encode character '\u246a'` —— 这台机器的老坑，本轮又踩一次）：
+
+```
+①:49 ②:177 ③:188 ④:158 ⑤:137 ⑥:118 ⑦:119 ⑧:120 ⑨:95 ⑩:198 ⑪:66 ⑫:240 ⑬:240 ⑭:265
+```
+
+**⑭ 第一次是假绿，这一条最有价值**：文档守卫原本的判据是"这一行里出现否定词就算老实话"，
+而它要盯的那行前半句本来就写着「界面上**没有**触发入口」，于是"会**自动排队**"这半句被同行另一件事的
+否定词顺手赦免 —— 注入回来照旧绿。判据改成"否定词必须紧贴那四个字（查 `line[at-2:at]`）"之后才红。
+⇒ **行级邻接 ≠ 语义邻接**，凡是"这行有没有否定"型的判据都要问一句：否定的是哪半句。
+
+**文档口径守卫的两条**（同类问题一次声明规则，AGENTS.md；这一族的成因见 **ISSUES I57**）：
+① `test_用户文档不许把未接线的动作写成界面能做的事` —— 把 `README.md` / `docs/USAGE.md` 的能力表按
+`ui/pages/status_page.py:32 UNWIRED_ACTIONS` 逐条对：未接线清单点名的动作所在行，状态列不许打 ✅；
+未接线清单新增条目而映射表没跟上 ⇒ 守卫自己先红（否则它会安静地漏掉新条目）。
+② `test_文档不许宣称OCR会自动排队` —— **D-028 / ISSUES I1** 的红线「绝不自动触发」。
+本轮真从文档里删掉的假话有两句：`README.md` 原「离线 OCR 扫描件 | ✅ 能用」、
+`docs/USAGE.md` §一 原「界面 S7 设置 OCR 参数，**自动排队**」，后者连产品形态都说反了
+（OCR 必须按 `doc_id` 点名，`request_ocr()` 在产品侧**零调用点**）⇒ 记 **ISSUES I67**。
+
+**同轮文档改动**：`README.md`（能力表两行 + 「怎么开始用」第 3 步）、`docs/USAGE.md`（§一 扫描行与 OCR 行、
+§三 S7 行、§四 整节重写：界面按钮在前、命令行作为批量路子保留，那段逐字实测块与 Python 代码原样不动）、
+`docs/BACKUP-RESTORE.md`（§五 第 3 步、§七 搬家）、`docs/TROUBLESHOOTING.md`（§三 那行、
+§十四 问题表把 I66 换成 I67）。
+
+**全量回归（本轮改动之后）**：`.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider`
+→ **`482 passed, 4 skipped in 153.99s`**（上一块是 471 passed / 1 failed / 4 skipped，净增 10 条 =
+`test_monitor_roots_ui.py`）。**§4.17 那条唯一的红灯 G1 这次是绿的** —— 但**"绿"不等于"空载达标"**：
+同一台机器上单独复跑 G1 的那条探针（同一个口径：应用自己写进 `state.log` 的
+`window.ready.cold_start_seconds`）读到 **1.987s > 1.5s**，那一刻的负载是 **CPU 72%｜可用内存 1,714MiB｜
+最吃内存进程是一个 4.6GiB 的游戏客户端**。⇒ **G1 的成因仍然是负载（ISSUES I25），本轮没有拿到空载读数**，
+所以这句只能写成"这次跑绿了"，不能写成"首屏达标了"。回归那一刻的负载没打点（pytest 那条路不打印，
+只有 `gates/stage5.py` 的起跑读数会打），这是本轮留下的一个已知缺口，不是遗漏的证据。
+
+**交付文档门禁**：`gates/final.py` 的 `gate_docs()` 五条全 GREEN —— 四份在场
+（`INSTALL 10KiB｜USAGE 18KiB｜BACKUP-RESTORE 18KiB｜TROUBLESHOOTING 17KiB`）/ 五分栏报告齐 /
+无占位符 / 每份都含「实测」字样 / **台账 67 行、I1–I67 连续、CLOSED 43｜MITIGATED 18｜OPEN 5｜WONTFIX 1**；
+`gate_docs_inject()`（"门禁自己有没有牙"）同时 GREEN。守卫目录 `tests/guards` **22 passed in 5.39s**。
+
+**残留（不销账）**：① 没有真桌面人工点过一遍（offscreen 验的是库状态与监听名单，不是选择器在真人
+面前的手感）⇒ 挂 **ISSUES I17**；② 台账里原候选「丙：列表补『停用』控件」没做 —— 那是新控件，
+受线框确认门约束；③ G1 的空载读数仍未拿到（见上）。
+
+---
+
 ## 五 · 已验证的决策（可以直接依赖）
 
 | # | 决策 | 证据 |

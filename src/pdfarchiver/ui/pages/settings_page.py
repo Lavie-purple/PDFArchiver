@@ -95,12 +95,15 @@ class SettingsPage(QtWidgets.QWidget):
 
     def reload_settings(self) -> None:
         """重查下半区的设置读数。"""
-        # 监测目录
+        # 监测目录：`root_key` 存在 item 的 UserRole 里，不靠回解显示串
         self.roots_list.clear()
         enabled = {r.root_key for r in self.ctx.roots.list_enabled()}
         for root in self.ctx.roots.list():
             status = "" if root.root_key in enabled else " [已禁用]"
-            self.roots_list.addItem(f"{root.root_key}: {root.root_path}{status}")
+            item = QtWidgets.QListWidgetItem(f"{root.root_path}{status}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, root.root_key)
+            item.setToolTip(f"登记键：{root.root_key}")
+            self.roots_list.addItem(item)
 
         # OCR 三读数（从 app_settings 现数，不缓存）
         try:
@@ -131,16 +134,33 @@ class SettingsPage(QtWidgets.QWidget):
             self.model_path.setText("—")
 
     def add_root(self) -> None:
-        """添加监测目录（暂不实现，等阶段 4 的归档目标根一起定）。"""
-        QtWidgets.QMessageBox.information(
-            self, "添加监测目录",
-            "此功能将在阶段 4 落地时实现。\n"
-            "当前监测目录只能通过配置文件修改。"
-        )
+        """登记一个监测根。真写库：走 `ctx.register_root`，它同时负责挂上文件监听。
+
+        这里不许直接 `ctx.roots.add(...)`：漏掉 `watch()` 的话新登记的根只有周期校验在管、
+        实时事件一条收不到，而界面上完全看不出来（**ISSUES I5** 那一族"看着对、其实没接"）。
+        """
+        raw = QtWidgets.QFileDialog.getExistingDirectory(self, "选择要监测的目录")
+        if not raw:
+            return
+        try:
+            self.ctx.register_root(raw)
+        except Exception as exc:  # 用户挑的目录可能正好读不动（断网盘、权限）—— 回显原文，不吞
+            QtWidgets.QMessageBox.critical(self, "添加监测目录失败", str(exc))
+            return
+        self.reload_settings()
 
     def remove_root(self) -> None:
-        """移除监测目录（暂不实现）。"""
-        QtWidgets.QMessageBox.information(
+        """移除选中的监测根：只撤监测配置，磁盘文件不动，库里的文档记录与分类标注也不删。"""
+        item = self.roots_list.currentItem()
+        if item is None:
+            QtWidgets.QMessageBox.information(self, "移除监测目录", "先在列表里选中一个目录。")
+            return
+        answer = QtWidgets.QMessageBox.question(
             self, "移除监测目录",
-            "此功能将在阶段 4 落地时实现。"
-        )
+            "移除只是不再监测这个目录：\n"
+            "磁盘上的文件不动，库里已登记的文档记录与分类标注也不删。\n"
+            "要重新监测，再点「添加目录...」选它一次就行。\n\n确定移除？")
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self.ctx.unregister_root(item.data(QtCore.Qt.ItemDataRole.UserRole))
+        self.reload_settings()

@@ -22,6 +22,7 @@ from pdfarchiver.config.paths import AppPaths
 from pdfarchiver.config.settings import DEFAULTS, Settings, SettingsError, load
 from pdfarchiver.db.engine import Engine
 from pdfarchiver.db.migrate import MigrationReport, current_version, migrate
+from pdfarchiver.db.models import MonitoredRoot
 from pdfarchiver.db.repositories.catalog import CatalogRepository
 from pdfarchiver.db.repositories.collections import CollectionRepository
 from pdfarchiver.db.repositories.documents import DocumentRepository
@@ -33,6 +34,7 @@ from pdfarchiver.db.repositories.settings import SettingsRepository
 from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.diagnostics.logs import install_crash_hooks, setup_logging, state_event
 from pdfarchiver.fs.exclude import Exclusions
+from pdfarchiver.fs.identity import identity_key, normalize_path
 from pdfarchiver.fs.watcher import EventBuffer, WatchManager
 from pdfarchiver.jobs.queue import DEFAULT_MAX_ATTEMPTS, WorkQueue
 from pdfarchiver.ocr.budget import OcrBudget
@@ -89,9 +91,12 @@ class AppContext:
     """一次启动的全部运行时依赖。UI 只认这个对象，不自己拼路径、不自己开连接。
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
-    `patrol` 这几个字段（后四个是阶段 2 的服务入口）和 `background_state()`；仓储对象是给服务层和
-    测试用的，界面直取等于绕过依赖方向。`queue` / `watch` / `events` 是**私有运行时**，
-    界面要那三样的数字就走 `background_state()`，不许自己摸线程对象。
+    `patrol` 这几个字段（后四个是阶段 2 的服务入口）和 `background_state()`、`register_root()`、
+    `unregister_root()`；仓储对象是给服务层和测试用的，界面直取等于绕过依赖方向。
+    `queue` / `watch` / `events` 是**私有运行时**，
+    界面要那三样的数字就走 `background_state()`，不许自己摸线程对象 —— 所以登记/移除监测根走上面
+    那两个方法而不是 `ctx.roots` 加 `ctx.watch`：漏掉 `watch()` 的话新登记的根**从此只有周期校验
+    在管，实时事件一条收不到**，而界面上完全看不出来。
 
     `ocr` 是阶段 5 的服务入口，**故意不在上面那份界面可用清单里**：OCR 的入口界面还没经线框确认
     （AGENTS.md），现在只有测试与门禁通过它排队。装配无条件进行、引擎惰性加载，
@@ -166,6 +171,28 @@ class AppContext:
                  self.queue.thread_count, len(self.watch.observed_roots),
                  recovered["requeued"], resuming)
         return self.queue
+
+    def register_root(self, raw_path: str | Path) -> MonitoredRoot:
+        """S7「添加目录…」的唯一入口：登记 = 写 `monitored_roots` + 挂上监听。
+
+        `roots.add` 对同一路径幂等并重开 `enabled=1`（`ON CONFLICT ... DO UPDATE`），所以重复
+        添加是"重新启用"而不是报错；重复添加也不会多出一行。
+        """
+        path = normalize_path(raw_path)
+        root = self.roots.add(path, identity_key(path), label=Path(path).name)
+        if self.watch is not None:
+            self.watch.watch(root.root_path, root.root_key)
+        log.info("已登记监测根：%s", root.root_path)
+        return root
+
+    def unregister_root(self, root_key: str) -> bool:
+        """只撤监测：磁盘上的文件不动，库里的文档主记录与分类标注也不删
+        （`RootRepository.remove` 的同一口径）。"""
+        removed = self.roots.remove(root_key)
+        if removed and self.watch is not None:
+            self.watch.unwatch(root_key)
+        log.info("已移除监测根：%s（%s）", root_key, "移除" if removed else "本就不在列表里")
+        return removed
 
     def background_state(self) -> BackgroundState:
         """后台此刻的只读快照；`start_background()` 之前 `running=False`，其余取零值。"""
