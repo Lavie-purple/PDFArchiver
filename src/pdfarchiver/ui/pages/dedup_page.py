@@ -23,11 +23,12 @@ import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                                QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox,
+                                QTableWidget, QTableWidgetItem, QGroupBox,
                                 QProgressBar, QMessageBox)
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_day
+from pdfarchiver.ui.table_layout import set_table_columns, CELL_PADDING_WIDTH
 
 log = logging.getLogger("pdfarchiver.ui.dedup")
 
@@ -119,15 +120,16 @@ class DedupPage(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["浪费量", "SHA256（前8位）", "份数", "路径（悬停看全长）", "状态"])
-        header = self.table.horizontalHeader()
-        # 这张表是全站唯一不经 `ui/table_layout.set_table_columns()` 的（表头按内容自适应），
-        # 所以行号列也得在这里单独关掉 —— 它没人要过，Qt 却会自己长出来吃掉 38~51px（ISSUES I54）。
-        self.table.verticalHeader().hide()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        # 判重页并进 `set_table_columns` 定宽口径（ISSUES I61 选甲）：与其他 7 张表同一套口径，
+        # 列宽按内容上限反算 + CELL_PADDING_WIDTH。路径列（col=3）作为 stretch_col 吸收剩余。
+        # 500 组档上限实测：浪费量最长 "999.99 GB"、SHA 固定 8 字符、份数 ≤3 位、状态最长 "缺+硬链接"。
+        # 列头宽度也要算进去："SHA256（前8位）" = 107px + 23 = 130px。
+        set_table_columns(self.table, widths={
+            0: 103,  # 浪费量：10 字符内容 + 23 内边距
+            1: 130,  # SHA256 前 8 位：列头 107px + 23（列头比内容宽）
+            2: 63,   # 份数：3 位数字 + 23
+            4: 103,  # 状态：5 中文字 + 23
+        }, stretch_col=3)  # 路径列吸收剩余
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)

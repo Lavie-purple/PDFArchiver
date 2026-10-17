@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 import traceback
+from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
@@ -41,15 +43,23 @@ def _parser() -> argparse.ArgumentParser:
 def run(argv: list[str] | None = None, process_started_at: float | None = None) -> int:
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     paths = AppPaths.resolve(args.data_dir)
+
+    # ISSUES I18：QApplication 必须在 bootstrap 之前创建，否则装配失败时无法弹 GUI 错误对话框。
+    # 复用已存在的单例（`instance() or ...`）：同一进程里第二次进 run() 时（测试会这样），
+    # 直接 new 一个会抛 "destroy the QApplication"，产品单次启动则永远走新建那一支。
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
+    app.setApplicationName(APP_NAME)
+
     try:
         ctx = bootstrap(args.data_dir)
     except (SettingsError, DatabaseError, OSError) as exc:
         dest = append_crash(f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", paths.logs_dir)
-        print(f"启动失败：{exc}\n完整堆栈已写入 {dest}", file=sys.stderr)
+        msg = f"启动失败：{exc}\n完整堆栈已写入 {dest}"
+        print(msg, file=sys.stderr)
+        log.error("启动失败：%s（堆栈已写入 %s）", exc, dest)
+        _show_startup_error(f"启动失败：{exc}", dest)
         return EXIT_BOOTSTRAP_FAILED
 
-    app = QtWidgets.QApplication(sys.argv[:1])
-    app.setApplicationName(APP_NAME)
     window = MainWindow(ctx)
     window.show()
     if process_started_at is not None:
@@ -68,6 +78,29 @@ def run(argv: list[str] | None = None, process_started_at: float | None = None) 
     return code
 
 
+def _show_startup_error(message: str, crash_log: Path) -> None:
+    """ISSUES I18：装配失败时弹 GUI 错误对话框，让双击启动的用户能看到错误而不是"闪退"。
+
+    offscreen 平台（测试环境）跳过对话框，避免阻塞自动化。
+    日志落点只能用调用方传进来的**真路径**：在这里写一个"典型路径"字面量，
+    就是在教用户去翻一个可能根本不存在的位置（架构守卫禁止 `src/` 里出现盘符路径）。
+    """
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        return  # 测试环境不弹窗
+
+    from PySide6 import QtWidgets
+    box = QtWidgets.QMessageBox()
+    box.setIcon(QtWidgets.QMessageBox.Icon.Critical)
+    box.setWindowTitle("启动失败")
+    box.setText(message)
+    box.setDetailedText(
+        f"完整错误堆栈在这一份日志里：\n{crash_log}\n\n"
+        f"同一目录（{crash_log.parent}）下还有两份：\n"
+        "  app.log   —— 全部运行日志\n"
+        "  state.log —— 生命周期事件，一行一条 JSON")
+    box.exec()
+
+
 def _start_background(ctx: AppContext, window: MainWindow) -> bool:
     """起 worker 线程 + 文件监听 + 巡检定时器。
 
@@ -80,7 +113,10 @@ def _start_background(ctx: AppContext, window: MainWindow) -> bool:
     except (DatabaseError, OSError) as exc:
         dest = append_crash(f"后台启动失败 {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                             ctx.paths.logs_dir)
-        print(f"后台启动失败：{exc}\n完整堆栈已写入 {dest}", file=sys.stderr)
+        msg = f"后台启动失败：{exc}\n完整堆栈已写入 {dest}"
+        print(msg, file=sys.stderr)
+        log.error("后台启动失败：%s（堆栈已写入 %s）", exc, dest)
+        _show_startup_error(f"后台启动失败：{exc}", dest)
         return False
     window.start_patrol()
     log.info("后台与巡检已就绪：worker %d，回收中断后队列状态 %s",

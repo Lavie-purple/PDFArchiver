@@ -309,15 +309,23 @@ def _seed_worst_readings(window, ctx, page_id: str) -> None:
         ctx.operations.finish_operation(op.id, status="partially_done")
     elif page_id == "backup":
         ctx.backup.create_backup()
+    elif page_id == "duplicates":
+        # 判重页最宽读数：浪费量 "999.99 GB"、SHA 固定 8 字符、份数 3 位、状态 "缺+硬链接"。
+        # 灌一条重复组（2 份同哈希），让表格有数据可量。
+        from pdfarchiver.db.models import Document
+        sha = "a" * 64
+        for i, name in enumerate(("report_1.pdf", "report_1_copy.pdf")):
+            ctx.documents.upsert(Document(
+                path=f"D:\\docs\\{name}", path_key=f"d:\\docs\\{name}".casefold(),
+                name=name, size_bytes=500 * 1024 * 1024,  # 500 MB × 2 = 浪费 500 MB
+                sha256=sha, text_status="done", fts_status="done"))
 
 
 @pytest.mark.parametrize("page_id", [i.page_id for i in NAV_ITEMS if i.implemented])
 def test_定宽列必须装得下最宽读数(window, ctx, page_id, qapp) -> None:
     """两条承诺按列分工：**不许截断的列**必须装得下，**允许截断的列**必须能悬停回读。
 
-    判重表整体落在守卫外面：它四列是 `ResizeToContents`（不是 Interactive），
-    列宽由当前这批数据决定 —— 那是 **ISSUES I48** 里写明"量了故意没改"的一条豁免，
-    不是漏网。
+    判重表已并进 `set_table_columns` 定宽口径（ISSUES I61 选甲），与其他 7 张表统一。
     """
     _seed_worst_readings(window, ctx, page_id)
     window._select_by_page_id(page_id)

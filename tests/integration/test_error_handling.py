@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -175,6 +176,67 @@ def test_装配失败时组合根返回非0并把堆栈写进crash_日志(data_r
     assert "启动失败" in err and "settings.json" in err
     crash = data_root / "logs" / "crash.log"
     assert crash.is_file() and "SettingsError" in crash.read_text(encoding="utf-8")
+
+
+def test_装配失败会调起启动失败对话框(monkeypatch, data_root) -> None:
+    """ISSUES I18：双击图标的人拿不到 stderr，装配失败必须走一次 GUI 提示。
+
+    offscreen 平台下 `_show_startup_error` 会直接 return（不阻塞自动化），所以这里不打真框，
+    而是证明**失败分支真的调用了它**、且传进去的是**本次现场真写出来的那份 crash.log**。
+    坏法：删掉 run() 里那行 `_show_startup_error(...)` → `calls` 为空 → 本条变红；
+    把落点参数改成写死的"典型路径" → 红在 `calls[0][1] == 现场 crash.log` 那句。
+    """
+    cfg = data_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "settings.json").write_text("{ 坏 JSON", encoding="utf-8")
+
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(appmod, "_show_startup_error",
+                        lambda msg, crash_log: calls.append((msg, crash_log)))
+    code = appmod.run(["--data-dir", str(data_root)])
+    assert code == appmod.EXIT_BOOTSTRAP_FAILED
+    assert len(calls) == 1, f"装配失败必须弹且只弹一次，实际 {len(calls)} 次"
+    message, crash_log = calls[0]
+    assert "启动失败" in message, f"对话框正文要把错误原文交给用户：{message}"
+    assert crash_log == data_root / "logs" / "crash.log", \
+        f"落点必须是这次现场真写的那份日志，不是样板路径：{crash_log}"
+    assert crash_log.is_file(), "对话框指给用户的日志必须真在场，否则用户去翻一个空位置"
+
+
+def test_启动失败对话框是严重级且写明日志落点(monkeypatch, tmp_path) -> None:
+    """ISSUES I18：非 offscreen 平台下 `_show_startup_error` 要真建一个 Critical 对话框。
+
+    把平台名改成非 offscreen 并塞一个假 `QMessageBox` 记录构造参数，逐字段钉住图标级别、
+    标题、正文与"日志落点"详情。坏法：把 `Icon.Critical` 换成 `Icon.Warning`、把窗口标题
+    改掉、或把 detailedText 里那份路径抹掉 → 各自那条断言变红。
+    """
+    recorded: dict[str, object] = {}
+
+    class FakeBox:
+        class Icon:
+            Critical = "critical"
+            Warning = "warning"  # 诱饵：坏法把图标降级成 Warning 时，要红在下面那句命名断言上
+            NoIcon = "noicon"
+
+        def setIcon(self, i): recorded["icon"] = i
+        def setWindowTitle(self, t): recorded["title"] = t
+        def setText(self, t): recorded["text"] = t
+        def setDetailedText(self, t): recorded["detail"] = t
+        def exec(self): recorded["shown"] = True
+
+    from PySide6 import QtWidgets
+    monkeypatch.setattr(QtWidgets, "QMessageBox", FakeBox)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "windows")  # 不是 offscreen → 走到构造分支
+    crash = tmp_path / "logs" / "crash.log"
+    appmod._show_startup_error("启动失败：SettingsError: 坏 JSON", crash)
+    assert recorded.get("shown") is True, "对话框没弹出来"
+    assert recorded["icon"] == FakeBox.Icon.Critical, "启动失败要用严重级图标"
+    assert recorded["title"] == "启动失败"
+    assert recorded["text"] == "启动失败：SettingsError: 坏 JSON", "正文不许被改写"
+    detail = str(recorded["detail"])
+    assert str(crash) in detail, f"详情要写清这次真正落地的日志：{detail}"
+    assert str(tmp_path / "logs") in detail, f"详情要连目录一起给：{detail}"
+    assert "app.log" in detail and "state.log" in detail, "三件套只报一份，用户还是会只翻一份"
 
 
 def test_坏值回落默认值时必须留下warning(bare_ctx, caplog) -> None:

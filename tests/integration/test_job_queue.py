@@ -727,6 +727,7 @@ def test_clear_finished只删终结的(ctx, make_queue, doc_ids):
     q = make_queue({"index": lambda job, monitor: None}, threads=1)
     finished = ctx.jobs.enqueue("index", doc_ids[0])
     assert _start_and_wait(q)
+    q.stop()  # ISSUES I65：不 stop 的话 worker 还活着，下一条入队会被立刻抢走
     pending = ctx.jobs.enqueue("index", doc_ids[1])
     assert ctx.jobs.clear_finished() == 1
     assert ctx.jobs.get(int(finished.id)) is None

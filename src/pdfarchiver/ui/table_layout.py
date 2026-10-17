@@ -1,6 +1,6 @@
-"""文档表格的列宽口径 —— 五张表共用。
+"""文档表格的列宽口径 —— 八张表共用。
 
-原先五张表都只写了一句 `setStretchLastSection(True)`：Qt 于是把除最后一列以外的所有列
+原先八张表都只写了一句 `setStretchLastSection(True)`：Qt 于是把除最后一列以外的所有列
 留在默认 100px，把全部剩余宽度给最后一列。实测结果是文档库的「文件名」和「路径」各挤在
 100px 里，而「分类」拿到 225px；归档页「文件名」100px、「分类」888px；操作日志批次表
 把 688px 给了「失败」这一列**计数**。
@@ -20,6 +20,9 @@
 **所以 500 行档上性能不是理由**（这里原先写的「定宽 19ms / 29ms」复现不出来，已更正）。
 不用它的真理由是列宽不可控 + ×10 档 8 万行时那次重排没人量过，而 AGENTS.md 要求
 写死的阈值按最大量级反算 —— 量不到的那一档不许当作已经安全。
+
+**ISSUES I61 选甲（2026-10-17）**：判重页并进本口径，全站 8 张表统一。判重页的列宽
+按 500 组档上限反算（浪费量 103 / SHA 93 / 份数 63 / 状态 103），路径列作 stretch_col。
 """
 from __future__ import annotations
 
@@ -48,6 +51,9 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
 
     `stretch_col` 只在**其余列的定宽合计远小于视口**时才给：那一列吸收剩余宽度。
     传 `None` 就全部定宽，视口装不下时表格横向滚动。
+
+    全站 8 张表都经这里（ISSUES I61 选甲：判重页并进）：archive 2 / backup 2 / library 1 /
+    operations 2 / dedup 1。行号列统一 `hide()`，守卫 `test_ui_tier.py` 逐屏扫全部 8 张。
     """
     header = table.horizontalHeader()
     header.setStretchLastSection(False)

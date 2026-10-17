@@ -569,7 +569,7 @@ class LibraryPage(QtWidgets.QWidget):
             self.ai_classify_btn.setEnabled(True)
             return
         if not suggestions:
-            self.ai_result_label.setText("无匹配分类（向量库为空或相似度不足）")
+            self.ai_result_label.setText("暂无向量数据，请先执行语义索引（或相似度不足阈值）")
         else:
             lines = ["AI 推荐分类："]
             for s in suggestions:
