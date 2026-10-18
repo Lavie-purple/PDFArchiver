@@ -242,11 +242,20 @@ def n5_clock_matches_settings(case: str, latency: float | None, expected: float,
 
 
 def n6_app_survived(rc: int | None, crash_bytes: int, alive_to_end: bool) -> Row:
-    """排除"其实是应用崩了所以没发现" —— 那会让上面所有延迟读数变成另一种东西。"""
-    ok = alive_to_end and crash_bytes == 0 and (rc is None or rc == 0)
+    """排除"其实是应用崩了所以没发现" —— 那会让上面所有延迟读数变成另一种东西。
+
+    **退出码在 Windows 上不能当崩溃证据**：本场收尾用 `proc.terminate()`，它对应
+    `TerminateProcess(handle, 1)`，所以一次干净终止的 `rc` **恒为 1**（**ISSUES I92**：
+    原先这里判 `rc == 0`，而自检喂的好例子是 `(0, 0, True)` —— 那个三元组在生产路径上
+    根本产生不出来，于是注入永远绿、真跑永远红）。存活由 `alive_to_end` 判，异常终止由
+    `crash.log` 判，`rc` 只兜"既不终止也不该出现的值"。
+    """
+    rc_clean = rc is None or rc in (0, 1)
+    ok = alive_to_end and crash_bytes == 0 and rc_clean
     return Row("n6 应用进程在整个观察期里活着且没崩（排除「没发现其实是崩了」）",
                ok,
                f"观察结束时进程还在={alive_to_end}｜crash.log {crash_bytes} 字节｜退出码 {rc}"
+               "（terminate() 在 Windows 恒回 1，故 0/1 都算干净退出）"
                + ("" if ok else " ── 这一场的延迟读数不能读成「监听盲」，要按崩溃另立一条"))
 
 
@@ -285,6 +294,17 @@ def inject() -> int:
     # 坏法 6：其实是崩了 → n6 必须红（不能把崩溃读成"监听是盲的"）
     bad.append((n6_app_survived(1, 4096, False),
                 "应用退出码 1 + crash.log 4,096 字节"))
+    # 坏法 6b：进程在观察期内就自己走了（装配失败那类），crash.log 反而是空的 ——
+    #         旧判据只看退出码，Windows 上干净终止也是 1，分不出这两种；靠 alive 兜住
+    bad.append((n6_app_survived(1, 0, False),
+                "观察期内进程就没了，但崩溃日志一个字没写"))
+    # 坏法 6c：还活着但 crash.log 有内容（子线程崩了）→ 崩溃那一路单独要红
+    bad.append((n6_app_survived(1, 512, True),
+                "crash.log 512 字节：有崩溃记录，即便观察结束时还活着"))
+    # 坏法 6d：退出码既不是 0 也不是 1（如访问违例那一类崩溃码）→ rc 那一路单独要红；
+    #         alive 为真因为它是 terminate 之前采的样，最后一刻崩正好是这种组合
+    bad.append((n6_app_survived(-1073741819, 0, True),
+                "退出码 -1073741819（访问违例那一类），不在 0/1 之内"))
 
     good = [n1_op_landed("rename", {"gone": True, "moved_in": True, "pdfs_after": 10,
                                     "error": None}),
@@ -294,7 +314,10 @@ def inject() -> int:
             n3_reported_somewhere("rename", "FileNotFoundError: 根目录不存在", 3),
             n4_converged("rename", 10, 10, 0),
             n5_clock_matches_settings("rename", 1780.0, 1810.0, "settings"),
-            n6_app_survived(0, 0, True)]
+            # 好例子必须取生产真会产生的三元组：terminate() 之后 rc 恒 1（I92）
+            n6_app_survived(1, 0, True),
+            # 另一种同样可达：取样时进程仍在场，还没轮到读退出码
+            n6_app_survived(None, 0, True)]
 
     caught = 0
     for row, why in bad:

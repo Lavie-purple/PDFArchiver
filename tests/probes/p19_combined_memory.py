@@ -1,7 +1,7 @@
 """P19 组合内存压测 —— 销账 ISSUES I16（各组件只单点测过，合起来从来没量过）。
 
 跑法：
-    python tests/probes/p19_combined_memory.py            # 四个窗口跑完，7 条判定
+    python tests/probes/p19_combined_memory.py            # 四个窗口跑完，8 条判定
     python tests/probes/p19_combined_memory.py --inject   # 反向注入自检（每条判据真喂坏读数）
     python tests/probes/p19_combined_memory.py --keep     # 跑完保留现场，进去看日志
 
@@ -55,6 +55,8 @@ SCANNED_DOCS = 4            # 纯扫描件：整页贴图、零文本层，OCR �
 PAGES_PER_SCANNED = 3       # → OCR 窗口共 12 页（峰值主要由引擎载入决定，页数只是让它持续几秒）
 NATIVE_DOCS = 30            # 有原生文本层的样本：索引窗口的活
 CHURN_DOCS = 12             # 窗口 C 期间每轮投放几份，让索引在 OCR 跑着的时候同时在跑
+CHURN_ROUNDS_MAX = 2        # 投放轮数上限 —— 窗口长度由巡检地板定，不由"自己排了多少活"定（见窗口 C 注释）
+OBSERVE_TICK_SECONDS = 1.0  # 投放封顶后的观察节拍，与采样网格同宽：秒级轮询只读库不许烧成空转
 IDLE_SECONDS = 25.0         # 窗口 A 的长度
 CAP_SCAN = 240.0            # 窗口 B 等排空的上限
 CAP_OCR = 300.0             # 窗口 C 等「OCR 落库 + 队列排空」的上限
@@ -65,6 +67,21 @@ LINES_PER_PAGE = 12         # 与 conftest 同口径：12 行 × 每行 ≥4 字
 G8_STRICT_MIB = 1200.0      # "1.2GB" 按 1.2×10^9 折 MiB
 G8_LOOSE_MIB = 1228.8       # "1.2GiB" 按 1.2×2^30 折 MiB
 OPEN_STATES = ("queued", "running", "paused")
+
+
+def patrol_floor() -> tuple[float, str]:
+    """窗口 C 的**时长地板**：至少要跨过两次巡检轮询，"索引这一路"才有可能发生。
+
+    上一场实测窗口 C 只跑了 **3.2s**（OCR 12 页一落库、队列一空就 break），而巡检是
+    `scan_poll_seconds` 一格 —— 于是 `churn 入库 0/12`、`index 完成 +0`，m2 红。那不是产品坏，
+    是探针给的观察时间比产品的最小反应单位还短（**ISSUES I92**）。地板从设置反算，
+    探针不许自带第二个"5 秒"字面量。
+    """
+    from pdfarchiver.config.settings import DEFAULTS
+
+    poll = float(DEFAULTS["scan_poll_seconds"])
+    return poll * 2.0, (f"scan_poll_seconds={poll:g}×2={poll * 2:.0f}s"
+                        "（跨两次轮询，兜事件缓冲与写盘抖动）")
 
 
 @dataclass
@@ -188,6 +205,17 @@ def enqueue(data_root: Path, kind: str, doc_ids: list[int]) -> int:
         engine.close_thread_connection()
 
 
+def index_jobs(data_root: Path, state: str | None = None) -> int:
+    """窗口 C 里 index 这一路的读数。默认数**全部状态** —— m2b 判的是"排进队列"，
+    不是"跑完"（`worker_threads=1` 下跑完数被 OCR 独占，不是证据，**ISSUES I92**）。"""
+    sql = "SELECT count(*) FROM processing_jobs WHERE kind='index'"
+    args: tuple[object, ...] = ()
+    if state is not None:
+        sql += " AND state=?"
+        args = (state,)
+    return int(scalar(data_root, sql, args))
+
+
 # ───────────────────────────── 采样 ─────────────────────────────
 # 窗口 A/B/C 复用 p13 的 Sampler：**必须采整棵进程树**，本机 venv 的 python.exe 是个启动壳，
 # 真跑 Qt 的是它 spawn 的子进程，只盯 launcher 会采出一组漂亮但无意义的读数（I29）。
@@ -256,24 +284,40 @@ def m1_windows_measured(peaks: dict[str, float], alive_to_end: bool) -> Row:
                + ("" if alive_to_end else " ── 应用进程在窗口 C 结束前就退出了"))
 
 
-def m2_combination_actually_ran(ocr_delta: int, index_delta: int,
-                                churn_seen: int, churn_planted: int) -> Row:
-    """整个探针的存在理由。没有它，"组合峰值"可以只是 UI 空转时的那块内存。
+def m2a_ui_and_ocr_same_window(ocr_delta: int, peak_c: float) -> Row:
+    """组合内存之所以是"组合"，第一条腿是 OCR 这一路在窗口 C 里**真的落过页**。
 
-    三路增量缺一判红：OCR 页落库、窗口 C 内完成的 index 任务、churn 投放的文件真进了库。
+    没有它，峰值可以只是界面空转时那块内存（本探针存在理由的前半，**ISSUES I92** 拆分后的一条）。
     """
     problems = []
     if ocr_delta <= 0:
-        problems.append(f"OCR 页落库增量 {ocr_delta} —— 引擎根本没跑，C 不是「界面+索引+OCR」")
-    if index_delta <= 0:
-        problems.append(f"窗口 C 内完成的 index 任务 {index_delta} 条 —— 索引没和 OCR 同场")
-    if churn_seen <= 0:
-        problems.append(f"churn 投放 {churn_planted} 份里 {churn_seen} 份进了库 —— "
-                        "监听/巡检那条路没在跑，索引增量来自旧文件，同场是假的")
-    return Row("m2 窗口 C 确实是「界面 + 索引 + OCR」同场（三路增量都要在场）",
+        problems.append("OCR 页落库增量 0 —— 引擎根本没跑，C 不是「界面+OCR」")
+    if peak_c <= 0.0:
+        problems.append("窗口 C 一个采样点都没有 —— 峰值无从谈起")
+    return Row("m2a 窗口 C 确实是「界面 + OCR」同场（OCR 页在窗内落库）",
                not problems,
-               f"OCR 页 +{ocr_delta}｜窗口内完成 index +{index_delta}｜"
-               f"churn 入库 {churn_seen}/{churn_planted}"
+               f"OCR 页 +{ocr_delta}｜窗口 C 峰值 {peak_c:.1f}MiB"
+               + ("" if not problems else " ── " + "；".join(problems)))
+
+
+def m2b_index_path_enqueued(index_new: int, index_queued_new: int, index_done_new: int,
+                            churn_seen: int, churn_planted: int,
+                            elapsed: float, floor: float, basis: str) -> Row:
+    """第二条腿按**排进队列**判，不按"窗口内完成数"判。
+
+    出厂默认 `worker_threads=1`（**ISSUES I46** 甲）下唯一的 worker 被 OCR 占着，index 只能排队 ——
+    完成数 0 因此**不是**"索引没在跑"的证据，原 m2 拿它当证据就是在产品完全正确时也会红
+    （**ISSUES I92**）。窗口跨不过巡检地板时，连排队都不会发生，所以地板也要上屏。
+    """
+    problems = []
+    if index_new <= 0:
+        problems.append(f"窗口 C 新增 index 任务 {index_new} 条 —— 监听/巡检那条路一次都没排过队"
+                        f"（窗口只跨了 {elapsed:.1f}s，地板要 {floor:.0f}s：{basis}）")
+    return Row("m2b 索引这一路在窗口 C 里排进了队列（排队 ≠ 与 OCR 并行）",
+               not problems,
+               f"新增 index 任务 +{index_new}（其中窗内仍在排队 {index_queued_new}｜窗内跑完 {index_done_new}）｜"
+               f"churn 入库 {churn_seen}/{churn_planted}｜窗口 C 跨 {elapsed:.1f}s ≥ 地板 {floor:.0f}s"
+               f"｜{basis}｜口径：worker_threads=1，这一路是**排进队列**不是并行（I46 甲 / I92）"
                + ("" if not problems else " ── " + "；".join(problems)))
 
 
@@ -323,8 +367,14 @@ def m7_no_crash(crash_bytes: int, traceback_count: int, tail: str) -> Row:
 # ───────────────────────────── 反向注入自检 ─────────────────────────────
 
 def inject() -> int:
-    """每条判据喂一份**真实存在的坏法**要求变红，再喂一份好读数要求放行。"""
+    """每条判据喂一份**真实存在的坏法**要求变红，再喂一份好读数要求放行。
+
+    好读数一律取**生产路径真会产生的那一组**（**ISSUES I92** 那条规则）：m2b 的两份好读数
+    一份是"排队且已跑完"，一份是"排了队但被单 worker 占着还没跑完"（`worker_threads=1`，
+    **ISSUES I46** 甲）—— 后者专门用来证明"拿完成数当证据"那种退化会被自检逮住。
+    """
     good_peaks = {"A": 90.0, "B": 260.0, "C": 980.0, "D": 900.0}
+    floor, basis = patrol_floor()
     bad: list[tuple[Row, str]] = []
 
     # 坏法 1：窗口 D 没跑起来（可选层没装 / OCR 任务没人领）→ m1 必须红
@@ -333,13 +383,16 @@ def inject() -> int:
     # 坏法 1b：应用进程半路退出 → m1 必须红
     bad.append((m1_windows_measured(good_peaks, False),
                 "应用进程在窗口 C 结束前退出（装配失败 / 被杀）"))
-    # 坏法 2：三路增量各缺一条。第一缺是本探针最容易被骗过去的一种绿 ——
-    #         OCR 任务排了但一页没落库（text_status=pending 被 PermanentFailure 拒掉），
-    #         量了一下午"组合内存"其实是 UI + 索引
-    bad.append((m2_combination_actually_ran(0, 12, 12, 12), "OCR 页增量 0：排了任务但一页没落库"))
-    bad.append((m2_combination_actually_ran(12, 0, 12, 12), "窗口 C 内完成的 index 任务 0 条：OCR 独跑"))
-    bad.append((m2_combination_actually_ran(12, 12, 0, 12),
-                "churn 投放的一份没进库：监听断了，索引增量来自旧文件，同场是假的"))
+    # 坏法 2a：三路增量缺第一条 —— OCR 任务排了但一页没落库（text_status=pending 被
+    #         PermanentFailure 拒掉），量了一下午"组合内存"其实是 UI + 索引
+    bad.append((m2a_ui_and_ocr_same_window(0, 392.7),
+                "OCR 页增量 0：排了任务但一页没落库"))
+    bad.append((m2a_ui_and_ocr_same_window(12, 0.0),
+                "窗口 C 一个采样点都没有：峰值无从谈起"))
+    # 坏法 2b：索引这一路一次都没排过队。读数取的是**上一场真实跑出来的那一组**
+    #         （3.2s 窗口、0 条新增），旧判据把「完成数 0」当证据，新判据改数「排进队列」
+    bad.append((m2b_index_path_enqueued(0, 0, 0, 0, 12, 3.2, floor, basis),
+                "新增 index 任务 0 条：监听/巡检那条路没跑，或窗口比巡检地板还短"))
     # 坏法 3：越线。两条 —— 一条两档都越，一条**只有严档越**。
     #         后者正是 G8 单位口径没定死时会被放过去的那一段（1,210MiB 按 1,228.8 算绿）
     bad.append((m3_peak_within_g8(1300.0), "组合峰值 1,300MiB：两档都越"))
@@ -365,7 +418,9 @@ def inject() -> int:
         caught += 1 if not row.ok else 0
 
     good = [m1_windows_measured(good_peaks, True),
-            m2_combination_actually_ran(12, 9, 12, 12),
+            m2a_ui_and_ocr_same_window(12, good_peaks["C"]),
+            m2b_index_path_enqueued(12, 0, 12, 12, 12, floor + 2.4, floor, basis),
+            m2b_index_path_enqueued(12, 12, 0, 12, 12, floor + 2.4, floor, basis),
             m3_peak_within_g8(good_peaks["C"]),
             m4_attribution_present(good_peaks),
             m5_phase_d_has_no_qt([]),
@@ -523,37 +578,52 @@ def run(keep: bool) -> int:
                        query(data_root, "SELECT id FROM documents WHERE path LIKE ?",
                              ("%p19_scan_%",))]
         ocr_before = scalar(data_root, "SELECT count(*) FROM text_pages WHERE source_kind='ocr'")
-        index_before = scalar(data_root, "SELECT count(*) FROM processing_jobs "
-                                         "WHERE kind='index' AND state='done'")
+        index_before = index_jobs(data_root)
+        index_before_done = index_jobs(data_root, "done")
         queued_ocr = enqueue(data_root, "ocr", scanned_ids)
         ocr_target = ocr_before + SCANNED_DOCS * PAGES_PER_SCANNED
+        floor, floor_basis = patrol_floor()
         churn_start = time.monotonic()
         stamps = 0
         last_probe = ""
         while time.monotonic() - churn_start < CAP_OCR and proc.poll() is None:
-            stamps += 1
-            churn(corpus, stamps)
+            # 投放必须封顶：上一场这里无界投放，`open_backlog` 永远排不空（活是探针自己造的），
+            # 300 秒里造出 8,920 份合成 PDF —— 那是自反馈回路，量到的峰值不对应任何真实形态。
+            # 窗口的长度由巡检地板（产品的最小反应单位）决定，不由"我还排得下多少活"决定。
+            if stamps < CHURN_ROUNDS_MAX:
+                stamps += 1
+                churn(corpus, stamps)
             ok_c, _, err_c = wait_for(
                 data_root,
                 lambda: scalar(data_root, "SELECT count(*) FROM text_pages "
                                           "WHERE source_kind='ocr'") >= ocr_target,
                 DRAIN_SETTLE)
             last_probe = err_c or ""
-            if scalar(data_root, "SELECT count(*) FROM text_pages WHERE source_kind='ocr'") \
-                    >= ocr_target and not open_backlog(data_root):
+            drained = (scalar(data_root, "SELECT count(*) FROM text_pages "
+                                         "WHERE source_kind='ocr'") >= ocr_target
+                       and not open_backlog(data_root))
+            # 排空了还要跨过巡检地板才收窗：上一场 3.2s 就 break，索引那一路根本来不及发生
+            if drained and time.monotonic() - churn_start >= floor:
                 break
+            if stamps >= CHURN_ROUNDS_MAX:
+                # OCR 早已落库时 wait_for 会立刻返回，投放封顶后这一拍不 sleep 就成空转烧 CPU，
+                # 把探针自己加进被采样的负载里。
+                time.sleep(OBSERVE_TICK_SECONDS)
         cut_c = len(sampler.samples)
         peaks["C"] = peak(sampler.samples[cut_b:])
+        elapsed_c = time.monotonic() - churn_start
         ocr_after = scalar(data_root, "SELECT count(*) FROM text_pages WHERE source_kind='ocr'")
-        index_after = scalar(data_root, "SELECT count(*) FROM processing_jobs "
-                                        "WHERE kind='index' AND state='done'")
+        index_after = index_jobs(data_root)
+        index_done_after = index_jobs(data_root, "done")
+        index_open = index_jobs(data_root, "queued") + index_jobs(data_root, "running")
         churn_seen = scalar(data_root, "SELECT count(*) FROM documents WHERE path LIKE ?",
                             ("%p19_churn_%",))
         alive_to_end = proc.poll() is None
         log(f"窗口 C（同场）峰值 {peaks['C']:.1f}MiB｜排进 ocr {queued_ocr}/{len(scanned_ids)} 条｜"
-            f"OCR 页 {ocr_before}→{ocr_after}｜index 完成 {index_before}→{index_after}｜"
-            f"投放 {stamps} 轮共 {stamps * CHURN_DOCS} 份、入库 {churn_seen} 份｜"
-            f"用时 {time.monotonic() - churn_start:.1f}s"
+            f"OCR 页 {ocr_before}→{ocr_after}｜index 任务 {index_before}→{index_after} 条"
+            f"（其中跑完 {index_before_done}→{index_done_after}、仍在队列 {index_open}）｜"
+            f"投放 {stamps}/{CHURN_ROUNDS_MAX} 轮共 {stamps * CHURN_DOCS} 份、入库 {churn_seen} 份｜"
+            f"用时 {elapsed_c:.1f}s（地板 {floor:.0f}s：{floor_basis}）"
             + (f"｜读库原文：{last_probe}" if last_probe else ""))
 
         samples = sampler.stop()
@@ -591,9 +661,11 @@ def run(keep: bool) -> int:
         # `peaks`。原来 m1 排在窗口 D **之前**，于是 D 恒为 0.0MiB、这一条在真实路径上永远红
         # —— 而 `--inject` 自检喂的是手工造的 peaks，从来照不到这个顺序（**ISSUES I92** ②）。
         rows.append(m1_windows_measured(peaks, alive_to_end))
-        rows.append(m2_combination_actually_ran(ocr_after - ocr_before,
-                                                index_after - index_before,
-                                                churn_seen, stamps * CHURN_DOCS))
+        rows.append(m2a_ui_and_ocr_same_window(ocr_after - ocr_before, peaks["C"]))
+        rows.append(m2b_index_path_enqueued(index_after - index_before, index_open,
+                                            index_done_after - index_before_done,
+                                            churn_seen, stamps * CHURN_DOCS,
+                                            elapsed_c, floor, floor_basis))
         rows.append(m3_peak_within_g8(peaks["C"]))
         rows.append(m4_attribution_present(peaks))
         rows.append(m5_phase_d_has_no_qt(qt_in_d))
@@ -605,7 +677,12 @@ def run(keep: bool) -> int:
         RESULT.write_text(json.dumps({
             "peaks_mib": peaks, "samples_app": samples, "window_d": d,
             "ocr_pages_before_after": [ocr_before, ocr_after],
-            "index_done_before_after": [index_before, index_after],
+            "index_jobs_before_after": [index_before, index_after],
+            "index_done_before_after": [index_before_done, index_done_after],
+            "index_open_at_window_end": index_open,
+            "window_c_seconds": round(elapsed_c, 1),
+            "window_c_floor_seconds": floor,
+            "window_c_floor_basis": floor_basis,
             "churn_rounds": stamps, "churn_in_library": churn_seen,
             "documents_end": scalar(data_root, "SELECT count(*) FROM documents"),
             "avail_mib_start": round(avail_start, 1),

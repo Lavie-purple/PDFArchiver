@@ -41,12 +41,18 @@ class Row:
     note: str = ""
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+#: 全链共享的子进程超时天花板。**这一档是按临时小库反算的，不是按真语料量级** ——
+#: 真根 p12 一场实测 3,661.7s（**ISSUES I91**），所以带 `--data-root` 的一致性核查在链里
+#: 会结构性超时；那一档单独给了更大的值，改法与出处见 `gates/final.py::REAL_ROOT_TIMEOUT`。
+GATE_TIMEOUT_SECONDS = 1800
+
+
+def _run(cmd: list[str], timeout: float = GATE_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=str(REPO),
                           env={**os.environ, "QT_QPA_PLATFORM": "offscreen",
                                "PYTHONIOENCODING": "utf-8"},
                           capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=1800)
+                          errors="replace", timeout=timeout)
 
 
 def _last_line(proc: subprocess.CompletedProcess[str]) -> str:

@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stage1 import REPO, Row, _last_line, _run  # noqa: E402
+from stage1 import (GATE_TIMEOUT_SECONDS, REPO, Row, _last_line, _run)  # noqa: E402
 from stage5 import _machine_load  # noqa: E402 复用同一份负载读数口径，不写第二份
 
 P12 = "tests/probes/p12_consistency.py"
@@ -45,6 +45,14 @@ P17 = "tests/probes/p17_handler_shape_injection.py"
 P18 = "tests/probes/p18_irreversible_source_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
+
+#: 带 `--data-root` 的一致性核查单独那一档超时。**按实测反算，不是拍的**：
+#: 2026-10-18 真根（10,977 份 / 202 万页语料）p12 一场跑了 **3,661.7s**
+#: （`.probe_work/serial_run_status.json`），全链共享的 1,800s 比它小一半，于是
+#: `consistency` 段在真库上结构性恒红 —— 红的是闸门不是产品（**ISSUES I91** 甲）。
+#: 取 **2× 实测**（留一倍余量给机器负载，同 I17 那轮「慢探针会因负载整批作废」的教训）≈ 7,300s。
+#: 小库/临时根路径**不动**，仍走 `GATE_TIMEOUT_SECONDS = 1800`。
+REAL_ROOT_TIMEOUT = 7300.0
 
 USER_DOCS = ["docs/INSTALL.md", "docs/USAGE.md", "docs/BACKUP-RESTORE.md", "docs/TROUBLESHOOTING.md"]
 REPORT_GLOB = "docs/stage-reports/最终交付报告.md"
@@ -130,9 +138,20 @@ def ledger_check(text: str) -> tuple[list[str], list[str]]:
     return defects, reading
 
 
-def _gate(name: str, cmd: list[str], *, hint: str = "") -> Row:
-    """把一个"探针/脚本自己判生死"的东西接进门禁：退出码 0 且末行 ALL GREEN 才算过。"""
-    p = _run(cmd)
+def _gate(name: str, cmd: list[str], *, hint: str = "",
+          timeout: float = GATE_TIMEOUT_SECONDS) -> Row:
+    """把一个"探针/脚本自己判生死"的东西接进门禁：退出码 0 且末行 ALL GREEN 才算过。
+
+    超时那一档现在会自己说明自己：原先 `TimeoutExpired` 直接把整段炸掉，读的人分不清
+    「产品坏了」与「闸门时间到」，而真根一致性恰恰只有后者（**ISSUES I91**）。
+    """
+    try:
+        p = _run(cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return Row(name, False,
+                   f"闸门时间到：这一档上限 {timeout:.0f}s（不是产品判定，是链的天花板 —— "
+                   f"要跑更长的现场就把 --data-root 那条走 {REAL_ROOT_TIMEOUT:.0f}s 那一档）",
+                   hint)
     text = (p.stdout or "") + (p.stderr or "")
     green = p.returncode == 0 and "VERDICT: ALL GREEN" in text
     return Row(name, green, _last_line(p), hint or text[-900:])
@@ -290,7 +309,8 @@ def segment_consistency(data_root: str | None) -> list[Row]:
                   [sys.executable, P14], hint="")]
     if data_root:
         rows.append(_gate(f"一致性核查 p12 对指定数据根（{data_root}）",
-                          [sys.executable, P12, "--data-root", data_root]))
+                          [sys.executable, P12, "--data-root", data_root],
+                          timeout=REAL_ROOT_TIMEOUT))
     else:
         # 这句原来写死「默认数据根 %LOCALAPPDATA%\PdfArchiver 在本机不存在」—— 那是阶段 0/1 的
         # 事实，真语料首扫之后就过期了。机器的状态不许抄成常量：改成现场数一遍，
@@ -331,19 +351,20 @@ def segment_g2() -> list[Row]:
 
 
 SEGMENTS: dict[str, tuple[str, list[str]]] = {
-    "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["~15s"]),
-    "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["~50s"]),
-    "coldstart": ("G1 冷启动 + 关窗对账", ["~5s"]),
-    "e2e": ("新 · 后台生命周期 + 阶段 2 端到端（真 PDF / 真 worker / 真监听）", ["~40s"]),
+    "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["1.4–1.6s"]),
+    "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["49.6–156.1s"]),
+    "coldstart": ("G1 冷启动 + 关窗对账", ["1.0–1.6s"]),
+    "e2e": ("新 · 后台生命周期 + 阶段 2 端到端（真 PDF / 真 worker / 真监听）", ["10.1–15.2s"]),
     "injection": ("p9 + p10 + p16 + p17 + p18 反向注入（断言到底有没有约束力）",
-                  ["332s（2026-10-18 实测全绿那一场）"]),
-    "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（最慢的一段，不进默认）",
-                  ["70s（2026-10-18 实测全绿那一场）"]),
-    "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["~200s"]),
-    "consistency": ("p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场", ["~15s"]),
-    "soak": ("p13 注入自检 + 真长跑采样", ["~330s @4 分钟"]),
-    "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["~262s"]),
-    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["~30s"]),
+                  ["170.9–415.3s（跑临时库时最慢的一段）"]),
+    "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（不进默认段）",
+                  ["71.8s（2026-10-18 实测）"]),
+    "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["28.4–30.6s"]),
+    "consistency": ("p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场",
+                    ["3.5–5.7s ＋真根另加 3,661.7s"]),
+    "soak": ("p13 注入自检 + 真长跑采样", ["288.8–289.3s @4 分钟"]),
+    "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["241.9–255.0s"]),
+    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["83.9s"]),
 }
 DEFAULT_ORDER = ["guards", "regression", "coldstart", "e2e", "consistency"]
 
@@ -390,8 +411,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         print(f"共 {len(SEGMENTS)} 段｜默认跑 {' + '.join(DEFAULT_ORDER)}")
         for name, (what, cost) in SEGMENTS.items():
-            print(f"  {name:<12} {cost[0]:>16}  {what}")
-        print("  docs-inject     ~1s  交付文档门禁自己的坏法注入")
+            print(f"  {name:<12} {cost[0]:>22}  {what}")
+        print("  docs-inject           ~1s  交付文档门禁自己的坏法注入")
+        print(f"  耗时是 2026-10-18 分段实测（`.probe_work/b1_seg*.log`）；"
+              f"跑临时库的段共用 {GATE_TIMEOUT_SECONDS:.0f}s 那一档，"
+              f"带 --data-root 的真根核查单独走 {REAL_ROOT_TIMEOUT:.0f}s 那一档（I91）")
         return 0
 
     order = list(SEGMENTS) if args.all else (args.only or DEFAULT_ORDER)
