@@ -55,10 +55,41 @@ PLACEHOLDER_RE = re.compile(r"TBD|TODO|待填|<<[^>]*>>|此处省略")
 LEDGER_ROW_RE = re.compile(r"^\| ISSUES I(\d+)\b")
 LEDGER_STATUS_RE = re.compile(r"\*\*(OPEN|MITIGATED|CLOSED|WONTFIX)\*\*")
 
+#: 台账表格的格子口径：`| 编号 | 标题 | 状态 | 事实 | 后果 | 销账条件 |` 共 6 格。
+#: 为什么要数格子：2026-10-18 收尾时发现自己上一轮在 I86 那行写进了一个**裸竖线** ——
+#: 它不是转义符而是分列符，渲染时把「残留事实不销账」那半段甩成了第 7 列（等于从表里掉出去）。
+#: 而上面那两条老判据对这件事完全无感：那一行照样只有一个 `**CLOSED**`、编号照样连续。
+LEDGER_CELL_COUNT = 6
+#: 允许的历史伤条数。现数 1 处 = **ISSUES I35**（2026-10-15 写成四格、正文还跨了两物理行的历史行）。
+#: 与 `LEDGER_STALE_CAP` 同一形状：带日期的记录不改写，但**不许再涨**；涨了就地修，不抬这条线。
+LEDGER_SHAPE_CAP = 1
+_ESC_PIPE = "\x01"
+
+
+def ledger_row_cells(line: str) -> list[str]:
+    """把一行台账切成格子：先把转义竖线 `\\|` 换成占位符再切，
+    这样「正文里转义过」与「真多出一列」两种形状被分开数（前者无害，后者是伤）。"""
+    return line.replace("\\|", _ESC_PIPE).split("|")
+
+
+def ledger_shape_rows(text: str) -> list[str]:
+    """结构不合格的台账行（格子数不是 6，或行尾没有闭合竖线），逐条点名。
+    单独成一个函数而不是埋在 `ledger_check` 的循环里：守卫与门禁共用这一个口径。"""
+    out: list[str] = []
+    for line in text.splitlines():
+        m = LEDGER_ROW_RE.match(line)
+        if not m:
+            continue
+        cells = ledger_row_cells(line)
+        if len(cells) - 2 != LEDGER_CELL_COUNT or cells[-1].strip():
+            out.append(f"I{m.group(1)}（{len(cells) - 2} 格"
+                       f"{'、行尾未闭合' if cells[-1].strip() else ''}）")
+    return out
+
 
 def ledger_check(text: str) -> tuple[list[str], list[str]]:
-    """台账自身的三条口径：每行**有且只有一个**合法状态、编号从 I1 连续、不重号。
-    返回 (缺陷列表, 读数列表)。
+    """台账自身的四条口径：每行**有且只有一个**合法状态、编号从 I1 连续、不重号、
+    每行格子结构与表头一致（6 格且以竖线闭合）。返回 (缺陷列表, 读数列表)。
 
     为什么要在门禁里数，而不是只在文档里写一句"收尾逐条销账"：2026-10-16 收尾时发现
     `docs/stage-reports/最终交付报告.md` §六 那条"现数命令"的正则**已经过期成打空**了 ——
@@ -84,11 +115,18 @@ def ledger_check(text: str) -> tuple[list[str], list[str]]:
                            f"且只能是 OPEN/MITIGATED/CLOSED/WONTFIX 加粗之一）")
         else:
             tally[states[0]] = tally.get(states[0], 0) + 1
+    shape = ledger_shape_rows(text)
     gaps = [n for n in range(1, max(nums) + 1) if n not in seen] if nums else ["空台账"]
     if gaps:
         defects.append(f"编号断档：{gaps}")
+    if len(shape) > LEDGER_SHAPE_CAP:
+        defects.append(f"表格结构不合格 {len(shape)} 行 > 上限 {LEDGER_SHAPE_CAP}："
+                       + "、".join(shape)
+                       + f"（每行要正好 {LEDGER_CELL_COUNT} 格且以竖线闭合；"
+                         "正文里的竖线必须写成 `\\|`）")
     reading = [f"{len(nums)} 行｜I1–I{max(nums) if nums else 0} 连续",
-               "｜".join(f"{k} {v}" for k, v in sorted(tally.items()))]
+               "｜".join(f"{k} {v}" for k, v in sorted(tally.items())),
+               f"结构不合格 {len(shape)} 行（上限 {LEDGER_SHAPE_CAP}）：{'、'.join(shape) or '无'}"]
     return defects, reading
 
 
@@ -139,7 +177,7 @@ def gate_docs() -> list[Row]:
     ledger = REPO / "docs/ISSUES.md"
     defects, summary = ledger_check(ledger.read_text(encoding="utf-8", errors="replace")) \
         if ledger.is_file() else (["台账文件不存在"], [])
-    rows.append(Row("已知问题台账逐条有状态、编号连续不重号", not defects,
+    rows.append(Row("已知问题台账逐条有状态、编号连续不重号、格子结构与表头一致", not defects,
                     "｜".join(summary) + (f" ── {defects}" if defects else "")))
 
     stale, cap = _ledger_stale_pointers()
@@ -177,17 +215,26 @@ def gate_docs_injection() -> Row:
             bad.append("占位符 TBD 没被抓到")
         if "实测" in (root / "docs" / "USAGE.md").read_text(encoding="utf-8"):
             bad.append("好读数误判（不该算坏法）")
-        # 台账坏法两条：编号断档（缺 I2）+ 某行状态字段不是那四个词之一
-        ledger_bad, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b |\n"
-                                     "| ISSUES I3 | c | **FIXED someday** | d |\n")
+        # 台账坏法三条：编号断档（缺 I2）+ 某行状态字段不是那四个词之一 + 表格结构（裸竖线多出
+        # 一列 / 行尾没闭合）。后两条故意同时喂，判据要能只报「结构」那一档一次。
+        ledger_bad, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b | c | d |\n"
+                                     "| ISSUES I3 | c | **FIXED someday** | d | e | f |\n")
         if len(ledger_bad) != 2:
             bad.append(f"台账坏行只抓到 {len(ledger_bad)} 项（应 2 项：编号断档 + 状态字段非法）")
-        ledger_good, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b |\n"
-                                      "| ISSUES I2 | c | **WONTFIX** | d |\n")
+        ledger_good, _ = ledger_check("| ISSUES I1 | a | **OPEN** | b | c | d |\n"
+                                      "| ISSUES I2 | c | **WONTFIX** | d | e | f |\n")
         if ledger_good:
             bad.append(f"好台账被误判：{ledger_good}")
+        ledger_shape, read_shape = ledger_check("| ISSUES I1 | a | **OPEN** | b | c | 没闭合\n"
+                                                "| ISSUES I2 | c | **OPEN** | d | e | f | g |\n")
+        hits = [d for d in ledger_shape if "表格结构不合格" in d]
+        if len(ledger_shape) != 1 or len(hits) != 1:
+            bad.append(f"表格结构坏法抓到 {len(ledger_shape)} 项（应正好 1 项且是新那一档）："
+                       f"{ledger_shape}")
+        if not any("结构不合格 2 行" in r for r in read_shape):
+            bad.append(f"结构读数没上屏：{read_shape}")
     return Row("交付文档门禁自己有没有牙（坏法注入实测）", not bad,
-               "残缺报告 + TBD 文档 + 坏台账：抓到 "
+               "残缺报告 + TBD 文档 + 坏台账（编号断档 / 非法状态 / 裸竖线与未闭合行）：抓到 "
                + ("、".join(bad) if bad else "三条坏法全红、好台账不误判"))
 
 
