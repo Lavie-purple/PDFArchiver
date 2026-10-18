@@ -113,7 +113,11 @@ def main() -> int:
 
         # 外推：p1 的口径是 bm25_top50=134ms@30万行，线性到当前行数
         scale = rows_pages / 300_000 if rows_pages else 0
-        verdict = "GREEN" if p95 <= 500 else "RED"
+        # 末行必须是门禁链认的那句口径（`gates/final.py::_gate`：退出码 0 且含
+        # "VERDICT: ALL GREEN"）。这里原来写的是 "GREEN"，实测让 g2 段自己判 GREEN、
+        # 外层判 RED —— 同一个判定两个拼法就是两个口径，统一成链里那一个。
+        green = p95 <= 500.0
+        verdict = "ALL GREEN" if green else f"RED（P95={p95:.1f}ms 超 500ms）"
         print(f"行数口径：text_pages={rows_pages:,}（p1 的 30 万行 × {scale:.1f}）")
         print(f"G2 判定：P95={p95:.1f}ms vs 500ms → {verdict}")
 
@@ -133,7 +137,7 @@ def main() -> int:
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"报告：{OUT}")
         print(f"VERDICT: {verdict}")
-        return 0 if verdict == "GREEN" else 1
+        return 0 if green else 1
     finally:
         ctx.shutdown()
 

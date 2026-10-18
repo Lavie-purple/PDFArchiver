@@ -245,8 +245,18 @@ def segment_consistency(data_root: str | None) -> list[Row]:
         rows.append(_gate(f"一致性核查 p12 对指定数据根（{data_root}）",
                           [sys.executable, P12, "--data-root", data_root]))
     else:
+        # 这句原来写死「默认数据根 %LOCALAPPDATA%\PdfArchiver 在本机不存在」—— 那是阶段 0/1 的
+        # 事实，真语料首扫之后就过期了。机器的状态不许抄成常量：改成现场数一遍，
+        # 读数与判定各说各的（**ISSUES I87**）。
+        # 取默认根只走产品自己那条口径（显式参数 > 环境变量 > 系统目录），门禁不许自己拼第二遍
+        # —— 设了 PDFARCHIVER_DATA_DIR 时，用 os.environ 现读会报出一个不是产品真正在用的根。
+        from pdfarchiver.config.paths import resolve_data_root  # noqa: PLC0415
+        default_root = resolve_data_root()
+        exists = default_root.is_dir()
         rows.append(Row("一致性核查 p12 对真实数据根", False,
-                        "本次未跑：没给 --data-root。默认数据根 %LOCALAPPDATA%\\PdfArchiver 在本机不存在，"
+                        f"本次未跑：没给 --data-root。默认数据根 {default_root} "
+                        f"{'**在场**' if exists else '**不在场**'}；"
+                        "门禁不自己默认去碰真库（要显式指定，见 I64 那条「用户数据不当夹具」），"
                         "**这行是 RED，不许把它读成「真实现场已核查」；要变绿必须给 --data-root**"))
     return rows
 
