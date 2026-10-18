@@ -134,8 +134,12 @@ class Sampler:
     就是这么绿的，绿得没有意义（两侧读数的对账记在 `docs/ISSUES.md` **I29**）。
     """
 
-    def __init__(self, proc: subprocess.Popen[str]) -> None:
+    def __init__(self, proc: subprocess.Popen[str],
+                 interval: float = SAMPLE_SECONDS) -> None:
         self.proc = proc
+        # interval 是给「同一棵树要量峰值而不是趋势」的探针（p19）留的口子：2s 采趋势够用，
+        # 但一次几秒就完成的内存尖峰会被 2s 网格整个漏掉。默认值不变，p13 的读数口径不变。
+        self.interval = interval
         self.samples: list[dict[str, float]] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -150,7 +154,7 @@ class Sampler:
         import psutil
 
         root = psutil.Process(self.proc.pid)
-        while not self._stop.wait(SAMPLE_SECONDS):
+        while not self._stop.wait(self.interval):
             # 树里一个进程都没剩 = 应用真的死了，这才算失败；启动壳先退、子进程还活着不算
             procs = [root] + root.children(recursive=True)
             live = []
@@ -175,7 +179,7 @@ class Sampler:
     def stop(self) -> list[dict[str, float]]:
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=SAMPLE_SECONDS * 3)
+            self._thread.join(timeout=self.interval * 3)
         return self.samples
 
 
