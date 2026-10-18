@@ -11,7 +11,8 @@
 
 守卫查四类指针（口径都取自被引用文件自己的定义处，不另立第二份）：
 
-1. `D-\\d{3}` → 必须在 `docs/DECISIONS.md` 有 `## D-0xx` 标题（该文件本身是定义处，不查）；
+1. `D-\\d{3}` → 必须在 `docs/DECISIONS*.md`（活册 + 2026-10-18 切出的 `DECISIONS-ARCHIVE.md`）
+   有 `## D-0xx` 标题（这两份合起来是定义处，不反过来查自己）；
 2. `ISSUES I\\d+` → 必须在 `docs/ISSUES.md` 有 `| ISSUES Ixx ` 行（同上）；
 3. `某某.md §<中文节号>` → 那份文件里必须有对应编号的 `## ` 标题（`## 一、` 与 `## 一 ·` 两种写法都认）；
 4. 反引号里的 `test_\\w+` → 必须在 `tests/` 里真的 `def` 出来，**或**是同名的测试模块文件
@@ -44,13 +45,18 @@ ROOT = Path(__file__).resolve().parents[2]
 CN_DIGITS = "〇一二三四五六七八九十"
 
 #: 台账与决策集自己就是编号的定义处，不反过来查自己。
-SELF_DEFINING = ("DECISIONS.md", "ISSUES.md")
+#: `DECISIONS-ARCHIVE.md` 是 2026-10-18 切册（**D-059**）搬出来的 D-001 … D-038 逐字原文，
+#: 它**也是**定义处：那些编号的正文在这里，所以它跟活册一样不反过来查（切册前它的引用根本不被扫，
+#: 切完突然开始扫会把一批历史写法判成空指 —— 那是切册造成的假红，不是新问题）。
+SELF_DEFINING = ("DECISIONS.md", "DECISIONS-ARCHIVE.md", "ISSUES.md")
 
 #: **带日期的记录**：它们写的是「那一轮当时由哪条断言钉住」，其中的测试名允许已经改名或作废，
 #: 因为把历史条目改成今天的样子等于销毁证据（AGENTS.md「不许伪装成功」的反面就是不许重写记录）。
 #: 这批文档**仍然**受编号 / 节号两条检查约束 —— 编号是稳定的，改名不改变它指哪一条。
 #: 现存的失效测试名指针逐条记在 **ISSUES I70**，不是没人看过。
-LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/DECISIONS.md", "docs/ISSUES.md", "docs/VERIFICATION.md",
+LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/CHANGELOG-ARCHIVE.md",
+               "docs/DECISIONS.md", "docs/DECISIONS-ARCHIVE.md",
+               "docs/ISSUES.md", "docs/VERIFICATION.md",
                "docs/VERIFICATION-RUNLOGS.md", "docs/REPO-JOURNAL.md")
 LEDGER_DIR = "docs/stage-reports/"
 
@@ -93,9 +99,20 @@ def _headings(path: Path) -> set[int]:
     return found
 
 
+def _decision_files() -> list[Path]:
+    """决策编号的定义处 = 活册 + 分册。2026-10-18 切册（**D-059**）把 D-001 … D-038 逐字搬进
+    `DECISIONS-ARCHIVE.md`，如果这里还只读活册，**全仓几百处引用早期编号的活文档会一起假红** ——
+    这条 glob 就是切册唯一一次被迫改到的判据（坏法见 `test_分册里的编号仍然算在场`）。"""
+    return sorted((ROOT / "docs").glob("DECISIONS*.md"))
+
+
 def _decision_numbers() -> set[int]:
-    text = (ROOT / "docs" / "DECISIONS.md").read_text(encoding="utf-8", errors="replace")
-    return {int(m) for m in re.findall(r"^## D-(\d+)", text, re.M)}
+    found: set[int] = set()
+    for path in _decision_files():
+        found.update(int(m) for m in re.findall(r"^## D-(\d+)",
+                                                path.read_text(encoding="utf-8", errors="replace"),
+                                                re.M))
+    return found
 
 
 def _issue_numbers() -> set[int]:
@@ -147,7 +164,7 @@ def check_pointers() -> list[str]:
                 for number in {int(x) for x in re.findall(r"(?<![\w-])D-(\d{3})(?![\w-])", line)}:
                     if number not in decisions:
                         problems.append(f"{rel}:{line_no} 引用 D-{number:03d}，"
-                                        f"而 `docs/DECISIONS.md` 里没有这条编号")
+                                        f"而 `docs/DECISIONS*.md`（活册 + 分册）里没有这条编号")
                 for number in {int(x) for x in re.findall(r"ISSUES I(\d+)", line)}:
                     if number not in issues:
                         problems.append(f"{rel}:{line_no} 引用 ISSUES I{number}，"
@@ -207,6 +224,32 @@ def test_文档里的决策编号都真实存在() -> None:
     assert _decision_numbers(), "docs/DECISIONS.md 一条编号都没解析出来，守卫自己坏了"
     if bad := _problems_containing("里没有这条编号"):
         raise AssertionError("\n".join(bad))
+
+
+def test_分册里的编号仍然算在场() -> None:
+    """切册不许把编号切成不存在（**ISSUES I86** 乙 的前置）。
+
+    坏法 2026-10-18 真注入过：把 `_decision_files()` 收回只读 `docs/DECISIONS.md` 一份 →
+    本条立刻红在「分册里的 38 条不被认」上，同时 `test_文档里的决策编号都真实存在` 也跟着红
+    （活文档里有几百处引用 D-0xx 早期编号）；改回 glob 两条一起绿。
+    """
+    files = _decision_files()
+    assert len(files) >= 2, (
+        f"决策定义处只有 {len(files)} 份（{[f.name for f in files]}）—— 分册被挪走或改名了，"
+        "早期编号会从定义处消失")
+    archived = {int(m) for m in re.findall(
+        r"^## D-(\d+)", (ROOT / "docs" / "DECISIONS-ARCHIVE.md")
+        .read_text(encoding="utf-8", errors="replace"), re.M)}
+    live = set()
+    for path in files:
+        if path.name == "DECISIONS-ARCHIVE.md":
+            continue
+        live.update(int(m) for m in re.findall(
+            r"^## D-(\d+)", path.read_text(encoding="utf-8", errors="replace"), re.M))
+    assert archived, "分册里一条 D 编号都没有 —— 那 `_decision_files` 的 glob 就是在空转"
+    missing = archived - _decision_numbers()
+    assert not missing, f"分册里的 {sorted(missing)} 不被认，活文档引用它们会假红"
+    assert not (archived & live), f"同一个编号出现在两册里（{sorted(archived & live)}）—— 切册切重了"
 
 
 def test_文档里的台账编号都真实存在() -> None:

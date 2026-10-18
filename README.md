@@ -103,11 +103,17 @@
 - [`docs/OCR.md`](docs/OCR.md) —— 扫描件识别的细节与预算
 
 **给开发者 / 想知道它凭什么可信的人**
-- [`docs/ISSUES.md`](docs/ISSUES.md) —— 已知问题台账，**逐条销账**，现数 71 条：
-  已关闭 46 / 有缓解 18 / 待处理 6 / 明确不做 1。待处理那 6 条每条都写着卡在哪一步、需要谁配合。
+- [`docs/ISSUES.md`](docs/ISSUES.md) —— 已知问题台账，**逐条销账**。状态四类
+  `OPEN` / `MITIGATED` / `CLOSED` / `WONTFIX`，每条的处置格写着卡在哪一步、需要谁配合。
+  **这里不复写条数**：那份表是唯一口径，抄一份数字到 README 就会漂（2026-10-18 发现本处旧数
+  停在 71 条而台账已有 88 条，见 **ISSUES I87** 同族）
 - [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块（§4.17 起）在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)
-- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) —— 按阶段记录真正做过并验证过的变更
-- [`docs/DECISIONS.md`](docs/DECISIONS.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) —— 走过的选择与还没走的路
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) —— 按阶段记录真正做过并验证过的变更；2026-10-18 以前的
+  轮次整批逐字在 [`docs/CHANGELOG-ARCHIVE.md`](docs/CHANGELOG-ARCHIVE.md)
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 走过的选择（`D-039` 起）；`D-001`–`D-038` 在
+  [`docs/DECISIONS-ARCHIVE.md`](docs/DECISIONS-ARCHIVE.md)。**两册合起来才是编号的完整定义处**，
+  文档里出现 `D-0xx` 时按这两册并集核（守卫 `tests/guards/test_doc_pointers.py`）
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) —— 还没走的路
 - [`docs/TESTING.md`](docs/TESTING.md) —— 这个项目的规矩：**每条断言都要先用"能骗过它的坏法"真注入一次，
   做不到就删掉这条断言**。所有"看起来对"的说法都必须变成一个会变红的测试。
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/DATABASE.md`](docs/DATABASE.md) ·
