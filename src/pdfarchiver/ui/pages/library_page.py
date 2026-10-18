@@ -215,7 +215,7 @@ class LibraryPage(QtWidgets.QWidget):
         self.ai_classify_btn = QtWidgets.QPushButton("🤖 AI 推荐分类")
         self.ai_classify_btn.setObjectName("searchBtn")
         self.ai_classify_btn.setEnabled(False)
-        self.ai_classify_btn.setToolTip("基于文档内容与分类语义中心的相似度推荐分类")
+        self.ai_classify_btn.setToolTip("按文件名与所在目录名推荐分类（不读文档正文）")
         self.ai_classify_btn.clicked.connect(self._on_ai_classify_clicked)
         self.right_panel.body.addWidget(self.ai_classify_btn)
 
@@ -340,7 +340,7 @@ class LibraryPage(QtWidgets.QWidget):
         elif len(self._current_docs) + len(docs) >= self._browse_total:
             self._browse_exhausted = True
         self._append_rows(docs)
-        self.status_label.setText(result.status_line())
+        self._set_status(result.status_line())
 
     def _append_rows(self, docs: list) -> None:
         if not docs:
@@ -399,17 +399,41 @@ class LibraryPage(QtWidgets.QWidget):
         # 这里**不在界面里拼句子** —— 格式化只有后端一个出口（`SearchResult.status_line()`，
         # 原先那句 `f"关键词搜索命中 {len(docs)} 份…"` 正是线框点名的自算数）。
         # 中栏表里那些行仍是按 `hit.doc.id` 去重的结果，但那是**列表本身**，不是"显示的数"。
-        self.status_label.setText(result.status_line())
+        self._set_status(result.status_line())
+
+    def _set_status(self, text: str, *, danger: bool = False) -> None:
+        """状态栏那一行的唯一出口：红字与常态由同一处切。
+
+        为什么要有这个出口：`_tint` 此前只被 `ai_result_label` 用过，状态栏从没被染红过，
+        四处 `setText` 各写各的 ⇒ 一旦某条失败把字染红，下一次成功的读数会**带着上一次的红色**
+        上屏（**ISSUES I84** ③ 要求失败可见，但没说不许把可见变成常驻）。
+        """
+        _tint(self.status_label, "danger" if danger else "muted")
+        self.status_label.setText(text)
 
     def _do_semantic_search(self, query: str) -> None:
         """语义搜索：基于向量相似度。"""
-        results = self.ctx.semantic_search.search(query, top_k=50)
+        try:
+            results = self.ctx.semantic_search.search(query, top_k=50)
+        except Exception as exc:
+            # **ISSUES I84** ③：模型不在场时服务层抛 `FileNotFoundError`（原文逐字在那条台账里），
+            # 而这里原先没有 `except` ⇒ 异常穿出 Qt 槽，屏幕上**什么都不发生**（表格停在上一状态），
+            # 原文只进 `crash.log`。落点与 AI 分类那条同一口径：染红 + 后端原文，界面不重述原因。
+            # 表也要清空：状态栏那一行是「表里这些行是什么」的唯一口径（**ISSUES I60**），
+            # 留着上一批行配一句失败 = 两个答案。
+            self._current_docs = []
+            self._populate_table([])
+            self._clear_hits()
+            self._set_status(f"语义搜索失败：{exc}", danger=True)
+            return
 
         if not results:
             self._current_docs = []
             self._populate_table([])
             self._clear_hits()
-            self.status_label.setText("语义搜索无结果（向量库为空或模型不可用）")
+            # ③ 落地之后「模型不可用」不再是"无结果"的一种原因（它现在带原文走红字那条路），
+            # 这句因此去掉那半截 —— 同一条规则：文案只报后端此刻真的知道的事。
+            self._set_status("语义搜索无结果（向量库里还没有向量）")
             return
 
         # 收集文档 ID（去重）
@@ -425,7 +449,7 @@ class LibraryPage(QtWidgets.QWidget):
         self._current_docs = docs
         self._populate_table(docs)
         self._show_semantic_hits(results)
-        self.status_label.setText(f"语义搜索命中 {len(docs)} 份文档（最高相似度 {results[0][2]:.3f}）")
+        self._set_status(f"语义搜索命中 {len(docs)} 份文档（最高相似度 {results[0][2]:.3f}）")
 
     # ---- 右栏：命中面板（**ISSUES I53** ②甲 / **D-052**）-----------------------
 
@@ -642,7 +666,10 @@ class LibraryPage(QtWidgets.QWidget):
             self.ai_classify_btn.setEnabled(True)
             return
         if not suggestions:
-            self.ai_result_label.setText("暂无向量数据，请先执行语义索引（或相似度不足阈值）")
+            # **ISSUES I84** ②：原先这句写「请先执行语义索引」，而产品里**没有**这个动作
+            # （`VectorStore.add*` 零产品调用方、`vector` 从不入队 —— **ISSUES I63** 丙/丁），
+            # 把人引向一个不存在的按钮比说错更费时间。只报后端此刻真的知道的那两件事。
+            self.ai_result_label.setText("暂无向量数据：向量库里还没有向量，或相似度低于阈值")
         else:
             lines = ["AI 推荐分类："]
             for s in suggestions:
