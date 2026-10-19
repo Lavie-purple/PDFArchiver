@@ -175,15 +175,20 @@ requirements/             # 分层依赖清单
 （服务层 `vector_service.py` 已接通产品写入方，**ISSUES I63** 丙/丁 · **D-061**，但 `ui/` 下还没有
 "建向量"按钮调 `request_vectors` —— GUI 里 `vector_status` 仍停在 `na` 直到该入口落地）、安装包与代码签名（只交付冻结目录，没交付安装器）。
 
-**顺带一条本轮现读的新坏法**（记在台账等勾选，不在本轮修）：`tests/guards/test_architecture.py` 的
-依赖方向表里有 `fileops` 与 `backup` 两行（第 37、38 行），而它扫的文件来自 `PKG.rglob("*.py")`，
-这两个目录下没有任何 `.py`，于是那两行**一个文件都扫不到、恒真** —— 形状与归并表「自检喂的好例子必须在生产可达」同一族：
-一条永远不会红的断言，在场与不在场没有区别。
+**这条坏法在下一轮（轮十三 2026-10-19）销账**：`tests/guards/test_architecture.py` 的方向表里
+曾有 `fileops` 与 `backup` 两行键，而 `PKG.rglob("*.py")` 在那两个只装 `.gitkeep` 的目录下
+一个 `.py` 都扫不出来 ⇒ 那两行**恒真**（形状与归并表「自检喂的好例子必须在生产可达」同族、
+是它的反向：判据本身不可达）。**ISSUES I94** 甲 已把这两行键与 `ui`/`db` 禁列里
+`pdfarchiver.fileops`、`pdfarchiver.backup` 那四个 import 位一并删掉（**"不许 import 一个不存在
+的包"不是保护，是空转**），同时给守卫加第 8 条 `check_direction_keys_reach_files`：
+方向表里的每一个键都必须**至少扫到一个 .py 文件**。坏法见 `tests/probes/p9_reverse_injection.py`
+Case 47（临时加一个 `madeup_layer` 假键，要求新那一档单独点名红）。归档/备份链路的实际方向
+约束由 `services` 那一行接管，`archive_service.py` 若真出现 `import pdfarchiver.ui`，仍会被抓住。
 
 ## 二 · 依赖方向（只能自上而下）
 
 ```
-ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, backup}
+ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, jobs}
                         ↓
                        db  →  config
 ```
@@ -192,9 +197,14 @@ ui  →  services  →  {fs, parsing, indexing, search, ocr, semantic, fileops, 
 - `ui` import `db.repositories`、直接写 SQL、直接调 PyMuPDF
 - `fs`/`parsing`/`indexing` import `ui`（回调用注入的协议，不是 Qt 信号）
 - `ocr`/`semantic` 被 `search` 硬依赖：语义模块必须可整个缺席
-- 任何层 import `fileops.execute`（只有 `services/archive_service` 能）
 
-守卫测试 `tests/guards/test_architecture.py` 用 AST 扫（不止 import：现 7 条 = 依赖方向 / SQL 只属于
+（旧版这里还有一条「任何层 import `fileops.execute`（只有 `services/archive_service` 能）」，
+在 **ISSUES I94** 甲 里删掉了：`pdfarchiver.fileops` 不是一个可 import 的包，"不许 import 一个
+不存在的模块"是一句永远不会兑现的承诺。归档层的实际方向约束现在由 `services` 那一行管辖，
+判据仍然可断言 —— `services` 不许 import `pdfarchiver.ui`。）
+
+守卫测试 `tests/guards/test_architecture.py` 用 AST 扫（不止 import：现 8 条 = 依赖方向 /
+方向表键的在场性 / SQL 只属于
 repositories / 不许静默吞异常 / 不许本机路径字面量 / 导航入口分组 / 语义层模型根单源 /
 **界面不许自己拼时间串** —— 时间显示的唯一出口是 `services/status_service.format_ts` / `format_day`，
 理由同 D-022 给日志定的那一条），违反即 RED。逐条的坏法读数在 `docs/TESTING.md` 四。

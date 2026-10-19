@@ -1,7 +1,8 @@
 """架构守卫（docs/ARCHITECTURE 二）。
 
-用 AST 扫，不靠人记。现 7 条：import 方向 / SQL 只属于 repositories / 不许静默吞异常 /
-不许本机路径字面量 / 导航入口分组 / 语义层模型根单源 / 界面不许自己拼时间串。
+用 AST 扫，不靠人记。现 8 条：import 方向 / 方向表键的在场性（**ISSUES I94** 甲）/
+SQL 只属于 repositories / 不许静默吞异常 / 不许本机路径字面量 / 导航入口分组 /
+语义层模型根单源 / 界面不许自己拼时间串。
 按 AGENTS.md「每写完一条断言先真注入一次」，每条都要能被一次真注入变红才算守卫；
 已做过的坏法记录在 docs/TESTING.md 的"反向注入"一节（阶段 1 那批起脚本化，
 `tests/probes/p9_reverse_injection.py`）。
@@ -21,21 +22,23 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 PKG = SRC / "pdfarchiver"
 
 # 模块前缀 → 禁止 import 的前缀。方向只有一个：ui → services → 能力层 → db → config。
+# 键必须是 `src/pdfarchiver/` 下真实存在、且至少含一个 .py 的目录 —— **ISSUES I94** 甲：
+# 曾有两行 `fileops` / `backup`，那两个包在 src 下只有一个零字节 .gitkeep，
+# PKG.rglob("*.py") 一个都扫不出来 ⇒ 那两行是恒真的"守卫"。
+# 由 `check_direction_keys_reach_files` 钉着，坏法见 p9 注入 I47（临时加一个不存在的层名当键）。
 FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
     "ui": ("pdfarchiver.db", "pdfarchiver.fs", "pdfarchiver.parsing", "pdfarchiver.indexing",
-           "pdfarchiver.search", "pdfarchiver.ocr", "pdfarchiver.semantic", "pdfarchiver.fileops",
-           "pdfarchiver.backup", "pdfarchiver.jobs", "pymupdf"),
+           "pdfarchiver.search", "pdfarchiver.ocr", "pdfarchiver.semantic",
+           "pdfarchiver.jobs", "pymupdf"),
     "services": ("pdfarchiver.ui",),
-    "db": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.ui", "pdfarchiver.fileops",
-           "pdfarchiver.ocr", "pdfarchiver.semantic", "pymupdf"),
+    "db": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.ocr",
+           "pdfarchiver.semantic", "pymupdf"),
     "fs": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),
     "parsing": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),
     "indexing": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),
     "search": ("pdfarchiver.ui", "pdfarchiver.semantic", "pymupdf"),
     "ocr": ("pdfarchiver.ui", "pdfarchiver.semantic"),
     "semantic": ("pdfarchiver.ui", "pdfarchiver.ocr"),
-    "fileops": ("pdfarchiver.ui", "pdfarchiver.services"),
-    "backup": ("pdfarchiver.ui", "pdfarchiver.services"),
     "jobs": ("pdfarchiver.ui", "pdfarchiver.services"),
     "config": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),
     "diagnostics": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),
@@ -118,6 +121,29 @@ def check_import_direction() -> list[str]:
                     problems.append(
                         f"{rel}:{lineno} · {layer} import 了 {name}；"
                         f"docs/ARCHITECTURE 二 规定依赖只能自上而下（{bad} 不许被 {layer} 依赖）")
+    return problems
+
+
+def check_direction_keys_reach_files() -> list[str]:
+    """**ISSUES I94** 甲：方向表的每个键都必须至少扫到一个 .py 文件。
+
+    恒真的守卫比没有守卫更糟 —— 它让「有牙」这件事被记在账上。旧版方向表里 `fileops`
+    与 `backup` 两行扫的是 `src/pdfarchiver/fileops/` 与 `src/pdfarchiver/backup/`，
+    这两个目录下各只有一个零字节 .gitkeep（不是可导入的包），PKG.rglob("*.py") 给不出
+    任何一个文件 ⇒ 那两行永远满足，`archive_service` 里如果真出现 `import pdfarchiver.ui`
+    本该由 `fileops` 那一行拦住 —— 它拦不住。这条断言就是让这种"空转规则"下次一加入
+    当场红。
+    """
+    problems: list[str] = []
+    layers_on_disk = {_layer_of(p) for p in _modules() if _layer_of(p)}
+    for key in FORBIDDEN_IMPORTS:
+        if key not in layers_on_disk:
+            problems.append(
+                f"FORBIDDEN_IMPORTS 里的键 `{key}` 在 src/pdfarchiver/{key}/ 下扫不到任何 .py 文件 —— "
+                "这一行是恒真的空守卫（**ISSUES I94** 甲：`fileops` 与 `backup` 是 SPEC 层名，"
+                "实际落点在 `services/archive_service.py` 与 `services/backup_service.py`，"
+                "受 `services` 那一行管辖。要保留方向表里的这条约束，必须把它写进真正承载 "
+                "代码所在的层，或删掉这一行）")
     return problems
 
 
@@ -262,7 +288,8 @@ def check_ui_time_formatting_single_exit() -> list[str]:
 
 
 def all_problems() -> list[str]:
-    return (check_import_direction() + check_sql_only_where_it_belongs()
+    return (check_import_direction() + check_direction_keys_reach_files()
+            + check_sql_only_where_it_belongs()
             + check_no_silent_swallow() + check_no_machine_local_path_literal()
             + check_nav_entries_grouped() + check_semantic_model_path_single_source()
             + check_ui_time_formatting_single_exit())
@@ -277,6 +304,17 @@ def test_架构守卫全绿() -> None:
 def test_界面不许自己拼时间串() -> None:
     """单独点名：第 7 条勾甲的落地判据。合进 `test_架构守卫全绿` 会让失败信息淹没在六条规则里。"""
     problems = check_ui_time_formatting_single_exit()
+    if problems:
+        raise ArchitectureError("\n".join(problems))
+
+
+def test_方向表每个键至少扫到一个文件() -> None:
+    """**ISSUES I94** 甲单独点名：空转的守卫比没有守卫更糟。
+
+    合进 `test_架构守卫全绿` 会让「新加了一层但代码还没落地」这种形状被淹没在七条规则里；
+    分出来才好用 —— p9 注入 I47 的坏法就是加一个假键，只有这一条能精确点名。
+    """
+    problems = check_direction_keys_reach_files()
     if problems:
         raise ArchitectureError("\n".join(problems))
 

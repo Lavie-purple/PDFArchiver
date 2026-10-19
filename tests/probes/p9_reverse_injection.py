@@ -268,6 +268,18 @@ CASES: list[Case] = [
          "tests/integration/test_scan_service.py::test_再扫一遍全是未变且不重复排索引",
          [Edit("src/pdfarchiver/services/scan_service.py",
                "    return fts_status in NEEDS_INDEX_STATUSES", "    return True")]),
+    # —— **ISSUES I94** 甲：方向表键的在场性 —————————————————————
+    # 归并表把「自检喂的好例子必须在生产可达」定成红（**ISSUES I92**），这条是它的
+    # 反向同族：**判据本身不可达**。往 FORBIDDEN_IMPORTS 里塞一个 src 下根本不存在的
+    # 层名当键，那一行的 check_import_direction 一个 .py 都扫不到，永远满足。
+    # 只有新增的 check_direction_keys_reach_files 会红，且必须精确点名。
+    Case("47", "方向表里塞一个 `src/pdfarchiver/` 下不存在的层名当键（空转的守卫）",
+         "tests/guards/test_architecture.py::test_方向表每个键至少扫到一个文件",
+         [Edit("tests/guards/test_architecture.py",
+               '    "diagnostics": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),\n}',
+               '    "diagnostics": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),\n'
+               '    "madeup_layer": ("pdfarchiver.ui",),  # 注入：src 下没有这个目录\n}'),
+          ]),
 ]
 
 
