@@ -157,6 +157,16 @@ class OperationRepository:
             "LIMIT ?", (limit,)).fetchall()
         return [FileOperation(**dict(r)) for r in rows]
 
+    def count_operations(self) -> int:
+        """库里到底有几条操作批次 —— S4 那句「共 N 条」的唯一出处（**ISSUES I76**）。
+
+        必须与 `list_operations` 的默认 `limit` 分开存在：屏上只报取回的条数会把"没列出来"
+        说成"不存在"，口径同 **ISSUES I51**。
+        """
+        row = self.engine.thread_connection().execute(
+            "SELECT count(*) FROM file_operations").fetchone()
+        return int(row[0])
+
     def list_items(self, op_id: int) -> list[OperationItem]:
         rows = self.engine.thread_connection().execute(
             "SELECT id, op_id, doc_id, kind, src_path, dst_path, state, reversible, "

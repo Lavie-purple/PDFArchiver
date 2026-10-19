@@ -27,7 +27,7 @@ from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.confirm import DangerSummary, confirm_dangerous
 from pdfarchiver.ui.format import format_bytes
 from pdfarchiver.ui.pages.status_page import unwired_lines
-from pdfarchiver.ui.table_layout import set_table_columns
+from pdfarchiver.ui.table_layout import loaded_line, set_table_columns
 
 # 「方式」列的行内短写与计数条的长写：同一种搬运的两种措辞，但**只有这一处定义**。
 # 线框 §S3 表格里画的就是短写（`同盘 rename` / `跨盘 c+v+d`），长写只在计数条出现一次。
@@ -102,6 +102,10 @@ class ArchivePage(QtWidgets.QWidget):
         doc_title = QtWidgets.QLabel("待归档文档（从文档库勾选）")
         doc_title.setObjectName("sectionTitle")
         layout.addWidget(doc_title)
+        self.loaded_note = QtWidgets.QLabel("还没取数 —— 按「加载文档库」取一批")
+        self.loaded_note.setObjectName("muted")
+        self.loaded_note.setWordWrap(True)
+        layout.addWidget(self.loaded_note)
         self.doc_table = QtWidgets.QTableWidget()
         self.doc_table.setColumnCount(4)
         self.doc_table.setHorizontalHeaderLabels(["选择", "文件名", "路径", "分类"])
@@ -242,8 +246,13 @@ class ArchivePage(QtWidgets.QWidget):
             self.target_root_input.setText(target)
 
     def _load_documents(self) -> None:
-        """从文档库加载候选文档。`itemChanged` 会因这次填充逐行触发，所以整段屏蔽信号。"""
-        docs = self.ctx.documents.list(limit=500)
+        """从文档库加载候选文档。`itemChanged` 会因这次填充逐行触发，所以整段屏蔽信号。
+
+        批次大小取仓储层默认值（`DocumentRepository.list` 的 `limit`），界面不定数；
+        「共 N 份」另取 `count()` —— 取回的条数不是库的条数（**ISSUES I76**，口径同 **I51**）。
+        """
+        docs = self.ctx.documents.list()
+        total = self.ctx.documents.count()
         self.doc_table.blockSignals(True)
         self.doc_table.setRowCount(len(docs))
         for row, doc in enumerate(docs):
@@ -265,6 +274,7 @@ class ArchivePage(QtWidgets.QWidget):
             cat_item.setToolTip(cat_str)
             self.doc_table.setItem(row, 3, cat_item)
         self.doc_table.blockSignals(False)
+        self.loaded_note.setText(loaded_line(total, len(docs), "份文档"))
         self._invalidate_preview()
 
     def _invalidate_preview(self, *_ignored: object) -> None:

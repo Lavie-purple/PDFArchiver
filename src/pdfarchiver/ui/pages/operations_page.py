@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.confirm import DangerSummary, confirm_dangerous
-from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
+from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, loaded_line, set_table_columns
 
 
 class OperationsPage(QtWidgets.QWidget):
@@ -29,6 +29,10 @@ class OperationsPage(QtWidgets.QWidget):
         op_title = QtWidgets.QLabel("操作批次")
         op_title.setObjectName("sectionTitle")
         layout.addWidget(op_title)
+        self.loaded_note = QtWidgets.QLabel("")
+        self.loaded_note.setObjectName("muted")
+        self.loaded_note.setWordWrap(True)
+        layout.addWidget(self.loaded_note)
         self.op_table = QtWidgets.QTableWidget()
         self.op_table.setColumnCount(6)
         self.op_table.setHorizontalHeaderLabels(["ID", "类型", "状态", "总数", "完成", "失败"])
@@ -75,8 +79,8 @@ class OperationsPage(QtWidgets.QWidget):
         self.reload()
 
     def reload(self) -> None:
-        """刷新操作批次列表。"""
-        ops = self.ctx.operations.list_operations(limit=100)
+        """刷新操作批次列表。批次大小取仓储层默认值，界面不定数（**ISSUES I76**）。"""
+        ops = self.ctx.operations.list_operations()
         self.op_table.setRowCount(len(ops))
         for row, op in enumerate(ops):
             self.op_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(op.id)))
@@ -87,6 +91,9 @@ class OperationsPage(QtWidgets.QWidget):
             self.op_table.setItem(row, 5, QtWidgets.QTableWidgetItem(str(op.items_failed)))
             # 存储 op_id
             self.op_table.item(row, 0).setData(QtCore.Qt.ItemDataRole.UserRole, op.id)
+        # 「共 N 条」必须数自库，不能是 `len(ops)` —— 后者是被 limit 截过的取回数（**ISSUES I76**）
+        self.loaded_note.setText(loaded_line(self.ctx.operations.count_operations(),
+                                             len(ops), "条操作批次"))
 
     def _on_op_selected(self) -> None:
         row = self.op_table.currentRow()

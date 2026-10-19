@@ -66,6 +66,14 @@ class ThemeColors:
     btn_text: str
     btn_hover: str
     btn_border: str
+    # 禁用态三件套。**为什么必须显式写出来**：QSS 一旦同时声明 `background-color` + `color`，
+    # Qt 就不再拿调色板的 Disabled 组画字，禁用态与可用态在屏幕上长得一模一样
+    # （实测两态直方图逐格相同，**ISSUES I74**）。字色这里不能复用 `text_secondary`：
+    # 浅色下 `#6c757d` 压在任何灰底上都不过 AA（压 `#f8f9fa` 只有 4.45:1），
+    # 所以浅色那档只能保持 `#495057`（压 `#e9ecef` 6.90:1），把"死掉"交给底色与描边承担。
+    btn_disabled_bg: str
+    btn_disabled_text: str
+    btn_disabled_border: str
 
     # 状态栏
     status_bg: str
@@ -115,6 +123,9 @@ LIGHT_THEME = ThemeColors(
     btn_text="#495057",
     btn_hover="#f1f3f5",
     btn_border="#dee2e6",
+    btn_disabled_bg="#e9ecef",
+    btn_disabled_text="#495057",
+    btn_disabled_border="#dee2e6",
     status_bg="#f8f9fa",
     # 状态栏是 12px 小字。原先这里复用 text_secondary 的 #6c757d：压白底 4.69:1 过 AA，
     # 但压在本主题的状态栏底 #f8f9fa 上只有 **4.45:1**（AA 要 4.5）—— 同一个灰在两个底上
@@ -160,6 +171,9 @@ DARK_THEME = ThemeColors(
     btn_text="#e2e8f0",
     btn_hover="#475569",
     btn_border="#475569",
+    btn_disabled_bg="#283548",
+    btn_disabled_text="#94a3b8",
+    btn_disabled_border="#334155",
     status_bg="#0f172a",
     status_text="#94a3b8",
     splitter_handle="#334155",
@@ -460,6 +474,27 @@ QPushButton#searchBtn:hover {{
 }}
 QPushButton#clearBtn {{
     color: {c.text_secondary};
+}}
+/* ===== 禁用态（**ISSUES I74**）=====
+   全项目 14 处 `setEnabled`，其中四处是**不可逆动作的门**（不输确认词 / 执行归档 /
+   恢复备份 / 开始判重）。不补下面这几条，它们在屏幕上与可用态逐格相同 ——
+   两态直方图实测相同这件事记在 **ISSUES I74** 的 证据 格里。 */
+QPushButton:disabled {{
+    background-color: {c.btn_disabled_bg};
+    color: {c.btn_disabled_text};
+    border: 1px solid {c.btn_disabled_border};
+}}
+/* 主按钮弱下去不退回普通灰，而是"褪色的蓝"：一眼看得出是那个蓝按钮死了，
+   而不是它变成了一个次要按钮。accent_text 压 accent_light 两主题分别 4.75 / 6.38。 */
+QPushButton#searchBtn:disabled {{
+    background-color: {c.accent_light};
+    color: {c.accent_text};
+    border: 1px solid {c.input_border};
+}}
+/* id 选择器的优先级高于状态词（CSS2 特异度 101 > 10）：不写这一条，上面那条
+   `QPushButton:disabled` 的 `color` 会被 `#clearBtn` 盖掉，禁用态字色还是压不住灰底的 #6c757d。 */
+QPushButton#clearBtn:disabled {{
+    color: {c.btn_disabled_text};
 }}
 
 /* ===== 复选框 ===== */

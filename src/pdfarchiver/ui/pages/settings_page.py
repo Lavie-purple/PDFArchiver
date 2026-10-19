@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.pages.status_page import StatusPage
@@ -81,6 +81,16 @@ class SettingsPage(QtWidgets.QWidget):
         splitter.addWidget(lower)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        # **ISSUES I75**：这两行只管"窗口变高时多出来的高度怎么分"，**不管初始分配** ——
+        # 实测 720 / 800 / 1409 三个窗高下上半区恒拿 36%，正是两栏 sizeHint 258/447 的比例。
+        # 初始分配由下面的 `_balance_split_by_content()` 在每次尺寸变化时按内容重算。
+        self._splitter = splitter
+        self._lower = lower
+        #: 用户亲手拖过分隔条之后不再自动改分配（否则他每次缩放窗口都被抢回去）
+        self._split_locked = False
+        #: 自己调 `setSizes` 也会触发 `splitterMoved`，用它把那次自转标出来
+        self._rebalancing = False
+        splitter.splitterMoved.connect(self._on_splitter_moved)
 
         main_lay = QtWidgets.QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -88,6 +98,47 @@ class SettingsPage(QtWidgets.QWidget):
 
         self.reload_status()
         self.reload_settings()
+
+    def _on_splitter_moved(self, *_args) -> None:
+        if not self._rebalancing:
+            self._split_locked = True
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._balance_split_by_content()
+
+    def _balance_split_by_content(self) -> None:
+        """上半区按**内容**要高，下半区按**能不能滚**让路（**ISSUES I75**）。
+
+        规则只有一条：下半区（三个分组、没有滚动条）先拿它想要的高；不够分时它朝自己的
+        `minimumSizeHint` 退，退出来的每一像素都给上半区（那张状态页带滚动条，看不完可以滚，
+        但被压到看不见的任务/故障读数等于没有 —— 正是这一屏存在的理由）。
+        所以**永远不出现"两栏比例固定、一边全是空白另一边是窄缝"**。
+        """
+        if self._split_locked:
+            return
+        avail = self._splitter.height() - self._splitter.handleWidth()
+        if avail <= 0:
+            return
+        view = self.status_page.view
+        line_h = view.fontMetrics().height()
+        if line_h <= 0:
+            return
+        # 上半区"一屏看全"要多高 = 行数 × 行高 + 这条链上的固定开销（标题/标签/边距/边框）
+        chrome = max(self.status_page.height() - view.viewport().height(), 0)
+        need_upper = view.document().blockCount() * line_h + chrome
+        need_lower = self._lower.sizeHint().height()
+        min_lower = self._lower.minimumSizeHint().height()
+        deficit = need_upper + need_lower - avail
+        lower_get = need_lower if deficit <= 0 else max(need_lower - deficit, min_lower)
+        upper_get = max(avail - lower_get, 0)
+        if self._splitter.sizes()[:2] == [upper_get, avail - upper_get]:
+            return
+        self._rebalancing = True
+        try:
+            self._splitter.setSizes([upper_get, avail - upper_get])
+        finally:
+            self._rebalancing = False
 
     def reload_status(self) -> None:
         """重渲染上半区 —— 就是让那张状态页自己重查一遍库，这里不留第二份查询。"""

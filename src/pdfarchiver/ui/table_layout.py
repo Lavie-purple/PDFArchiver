@@ -1,4 +1,7 @@
-"""文档表格的列宽口径 —— 八张表共用。
+"""表格的列宽与取数口径 —— 八张表共用。
+
+列宽见 `set_table_columns`；取数见 `loaded_line`（**ISSUES I76**：靠 `limit=` 封顶的表，
+屏上必须同时报「总数」与「已取回数」，两个数都取自后端字段）。
 
 原先八张表都只写了一句 `setStretchLastSection(True)`：Qt 于是把除最后一列以外的所有列
 留在默认 100px，把全部剩余宽度给最后一列。实测结果是文档库的「文件名」和「路径」各挤在
@@ -69,3 +72,19 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
     if stretch_col is not None:
         header.setSectionResizeMode(stretch_col, QtWidgets.QHeaderView.ResizeMode.Stretch)
 
+
+def loaded_line(total: int, loaded: int, unit: str) -> str:
+    """`limit=` 封顶的表格共用那一行两个数，口径与 **ISSUES I51** 同源（**ISSUES I76**）。
+
+    为什么必须有这一处：S3 / S5 / S4 三张表各写了一句陈述句标题（「可归档的文档」「重复文件组」
+    「操作记录」），取数却都带着仓储层的 `limit` —— 10,977 份的真库里第 501 份之后的文档在界面
+    上**不存在**，而屏上没有任何一处说这件事。这和 **ISSUES I51** 修前那句「共 1000 份文档」
+    （8,000 份的库）是同一个错觉，只是换了屏。
+
+    两个数都只许来自后端字段：`total` 是仓储层数出来的（`count()` / `dedup_summary()`），
+    `loaded` 是这一批真的取回来的行数（也就是表格刚写进去的行数）。界面自己算的任何数都不算。
+    """
+    if loaded >= total:
+        return f"共 {total} {unit}｜表格里 {loaded} {unit}"
+    return (f"共 {total} {unit}｜表格里已有 {loaded} {unit}"
+            f"，还有 {total - loaded} {unit}没在这里")

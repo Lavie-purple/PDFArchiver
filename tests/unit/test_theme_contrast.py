@@ -118,6 +118,51 @@ def state_rules_that_repaint(rules: dict[str, dict[str, str]]) -> list[tuple[str
     return out
 
 
+def effective_bg(selector: str, rules: dict[str, dict[str, str]]) -> str | None:
+    """最终落到这条规则上的**底色**：自身声明优先，否则按同一条继承顺序往上找。
+
+    与 `effective_text_color()` 成对，专门为了量 `QPushButton#clearBtn:disabled` 这种
+    **只声明字色**的禁用规则 —— 它的底来自 `QPushButton:disabled`，
+    `state_rules_that_repaint()` 看不见它（那条只扫"同一条规则里带了 `background-color`"的），
+    而它恰恰是 **ISSUES I74** 里最容易写错的一档：字色换了、底没换，配对就白配了。
+    """
+    for candidate in _bg_candidates(selector):
+        bg = _hex(rules.get(candidate, {}).get("background-color"))
+        if bg:
+            return bg
+    return None
+
+
+def _bg_candidates(selector: str) -> list[str]:
+    """求底色时要按顺序试的选择器。**比 `_cascade_chain()` 多一步**：
+    `QPushButton#clearBtn:disabled` 的底写在 `QPushButton:disabled` 上 —— 那条链只会剥尾部
+    状态词（回到 `QPushButton#clearBtn`，那里没有底），不会"去掉 id 但保留状态词"，
+    于是这条会去问 `QWidget` 拿一块屏上根本不在的底，量出一个**过了但错**的比值。
+    """
+    out: list[str] = [selector]
+    head, sep, tail = selector.partition("#")
+    if sep and ":" in tail:
+        out.append(f"{head}:{tail.split(':', 1)[1]}")
+    out.extend(c for c in _cascade_chain(selector) if c != selector)
+    return out
+
+
+def button_rules_that_own_the_palette(rules: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """按钮族里**自己接管了调色板**的规则（声明了 `background-color` 或 `color`），排除 `:disabled` 本身。
+
+    这就是 **ISSUES I74** 的机制面：只要一条规则显式写过这两样，Qt 就不再拿调色板的
+    Disabled 组画它 —— 禁用态必须由主题自己写出来，否则与可用态逐格相同。
+    """
+    out: dict[str, dict[str, str]] = {}
+    for selector, props in rules.items():
+        host = selector.split(":", 1)[0].strip()
+        if not host.startswith("QPushButton") or ":disabled" in selector:
+            continue
+        if _hex(props.get("background-color")) or _hex(props.get("color")):
+            out[selector] = props
+    return out
+
+
 def live_pairs(c: ThemeColors) -> list[tuple[str, str, str]]:
     """(前景, 背景, 说明) —— 只列**真的会上屏**的搭配。
 
@@ -190,3 +235,50 @@ def test_主按钮填充与accent文字色是两套值() -> None:
     assert DARK_THEME.accent != DARK_THEME.accent_text
     assert _ratio("#ffffff", LIGHT_THEME.btn_primary_bg) >= AA_FLOOR, (
         "主按钮上的白字是直接印在填充色上的，填充色不许为了『好看』调亮")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_接过调色板的按钮必须有disabled配对(theme: str) -> None:
+    """**ISSUES I74** 甲：凡自己接管了调色板的按钮规则，都要有自己的 `:disabled` 那一档。
+
+    判据打在「同一条规则声明了什么，`:disabled` 那一档就要有什么」上，**不是**打在
+    「主题里出现过 `:disabled` 字样」上 —— 后者随便插一条 `QScrollBar:disabled` 就能骗过去，
+    而屏上那四个危险动作的门仍然与可用态逐格相同（同 **ISSUES I92** 归并表那一族）。
+    """
+    rules = qss_rules(theme)
+    owned = button_rules_that_own_the_palette(rules)
+    assert len(owned) >= 4, f"{theme} 只认出 {len(owned)} 条按钮规则，守卫自己已经失效"
+    gaps = []
+    for selector in sorted(owned):
+        host = selector.split(":", 1)[0].strip()
+        disabled = rules.get(f"{host}:disabled", {})
+        for prop in ("background-color", "color"):
+            if _hex(owned[selector].get(prop)) and not _hex(disabled.get(prop)):
+                gaps.append(f"{host}:disabled 缺 {prop} —— {selector} 声明了它，"
+                            f"Qt 就不再拿调色板的 Disabled 组画这个控件")
+    assert not gaps, f"{theme} 主题有 {len(gaps)} 条按钮规则没有禁用态配对：\n  " + "\n  ".join(gaps)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_禁用态的字压在自己的禁用底上过AA(theme: str) -> None:
+    """`:disabled` 那一档自己也要过 AA，且量的是**级联之后真正落在屏上的那块底**。
+
+    与上一条合起来才完整：上一条管「有没有配对」，这一条管「配对是不是随便凑的」。
+    只声明字色不声明底的 `QPushButton#clearBtn:disabled` 必须走 `effective_bg()` ——
+    按「同一条规则里得有底」来扫会直接跳过它，而它屏上压的正是 `QPushButton:disabled` 那块灰。
+    """
+    rules = qss_rules(theme)
+    checked, failures = 0, []
+    for selector in sorted(rules):
+        if ":disabled" not in selector or not selector.split(":", 1)[0].startswith("QPushButton"):
+            continue
+        fg = _hex(rules[selector].get("color")) or effective_text_color(selector, rules)
+        bg = effective_bg(selector, rules)
+        if not fg or not bg:
+            failures.append(f"{selector} 求不出字色或底色（fg={fg}｜bg={bg}）")
+            continue
+        checked += 1
+        if _ratio(fg, bg) < AA_FLOOR:
+            failures.append(f"{selector}: {fg} on {bg} = {_ratio(fg, bg):.2f}:1")
+    assert checked >= 3, f"{theme} 只量到 {checked} 条禁用态按钮规则，守卫自己已经失效"
+    assert not failures, f"{theme} 禁用态有 {len(failures)} 条不过 AA：\n  " + "\n  ".join(failures)

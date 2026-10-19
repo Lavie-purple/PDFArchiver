@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_day
 from pdfarchiver.ui.format import format_bytes as _format_bytes
-from pdfarchiver.ui.table_layout import set_table_columns, CELL_PADDING_WIDTH
+from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, loaded_line, set_table_columns
 
 log = logging.getLogger("pdfarchiver.ui.dedup")
 
@@ -117,6 +117,13 @@ class DedupPage(QWidget):
 
         summary_group.setLayout(summary_layout)
         parent_layout.addWidget(summary_group)
+
+        # 表头之前那条汇总说的是"库里有多少组"，这一行说的是"表格里有多少组" ——
+        # 两个数分开摆，取满 `limit` 时才不会把"没列出来"说成"不存在"（**ISSUES I76**）
+        self.loaded_note = QLabel("")
+        self.loaded_note.setWordWrap(True)
+        self.loaded_note.setObjectName("muted")
+        parent_layout.addWidget(self.loaded_note)
 
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -230,6 +237,10 @@ class DedupPage(QWidget):
         """② 段：汇总读数 + 硬链接排除注语。"""
         summary = self.ctx.documents.dedup_summary()
         group_count = summary["group_count"]
+        # 留给下面的 `_reload_groups` 用：**重复组数只许有这一条 SQL**（`dedup_summary`），
+        # 再造一个 `count_duplicate_groups` 就是同一个概念第二个口径（AGENTS.md「禁止核心
+        # 概念有多个口径」）。`reload()` 里两段按顺序跑，取数只有一次。
+        self._group_total = group_count
         excess_count = summary["excess_count"]
         reclaimable = summary["reclaimable_bytes"]
 
@@ -245,8 +256,8 @@ class DedupPage(QWidget):
             self.lbl_hardlink_note.setText("无硬链接重复（所有副本均可回收）")
 
     def _reload_groups(self) -> None:
-        """② 段：重复组表。"""
-        groups = self.ctx.documents.duplicate_groups(limit=500)
+        """② 段：重复组表。组数上限取仓储层默认值，界面不定数（**ISSUES I76**）。"""
+        groups = self.ctx.documents.duplicate_groups()
         self.table.setRowCount(len(groups))
 
         for i, g in enumerate(groups):
@@ -264,6 +275,8 @@ class DedupPage(QWidget):
             self.table.setItem(i, 3, path_item)
 
             self.table.setItem(i, 4, QTableWidgetItem(status_text))
+
+        self.loaded_note.setText(loaded_line(self._group_total, len(groups), "组重复"))
 
     def _render_group_info(self, sha256: str) -> tuple[str, str]:
         """组内路径摘要（带行内注语）+ 状态摘要。"""
