@@ -50,6 +50,7 @@ from pdfarchiver.services.default_catalog import SeedResult, seed_default_catego
 from pdfarchiver.services.dedup_service import DedupService
 from pdfarchiver.services.index_service import IndexService
 from pdfarchiver.services.ocr_service import OcrService
+from pdfarchiver.services.vector_service import VectorService
 from pdfarchiver.services.patrol import Patrol
 from pdfarchiver.services.scan_service import ScanService
 from pdfarchiver.services.session_service import SessionService
@@ -128,6 +129,7 @@ class AppContext:
     semantic_search: SemanticSearchService
     ai_classify: AIClassifyService
     ocr: OcrService
+    vector: VectorService
     archive: ArchiveService
     dedup: DedupService
     backup: BackupService
@@ -150,7 +152,8 @@ class AppContext:
             return self.queue
         self.queue = WorkQueue(self.jobs,
                                {"scan": self.scan.handle, "index": self.indexer.handle,
-                                "ocr": self.ocr.handle, "archive": self.archive.handle,
+                                "ocr": self.ocr.handle, "vector": self.vector.handle,
+                                "archive": self.archive.handle,
                                 "dedup": self.dedup.handle},
                                engine=self.engine, threads=int(self.settings["worker_threads"]))
         recovered = self.queue.recover()
@@ -272,6 +275,9 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     ocr_engine = OcrEngine()
     ocr = OcrService(documents, texts, jobs, ocr_engine,
                      OcrBudget(app_settings, int(settings["ocr_daily_page_budget"])))
+    # 向量写路径（**ISSUES I63** 丙 + 丁）：构造不加载模型 —— embedding 的 ONNX session 是
+    # 首次 embed 才 `_ensure_session`，与 OCR 的"到首次识别才加载"同一条冷启动纪律。
+    vector = VectorService(documents, texts, jobs, embedding, vector_store)
     # 只在启动时读一次发行包元数据（微秒级），**不 import onnxruntime** —— 那一下是 1s 量级，
     # 冷启动门禁 G1（≤1.5s）就是被它顶掉的（docs/ISSUES）。真正的加载发生在首次识别的 ensure() 里。
     try:
@@ -310,6 +316,6 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       app_settings=app_settings, status=status, session=session,
                       scan=scan, indexer=indexer, search=search,
                       semantic_search=semantic_search, ai_classify=ai_classify,
-                      ocr=ocr, archive=archive,
+                      ocr=ocr, vector=vector, archive=archive,
                       dedup=dedup, backup=backup, patrol=patrol, events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

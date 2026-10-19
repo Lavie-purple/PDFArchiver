@@ -474,6 +474,20 @@ class DocumentRepository:
             conn.execute("UPDATE documents SET fts_status=?, last_error=?, updated_at=? WHERE id=?",
                          (status, error, now_ts(), doc_id))
 
+    def set_vector_status(self, doc_id: int, status: str, *,
+                          error: str | None = None) -> None:
+        """`vector_status` 的唯一写入口（**ISSUES I63** 丙：以前只有 `Document` 默认值 `na` 落库，
+        这一列是读数不是判定）。合法取值只有 `db/models.py` 的 `VECTOR_STATUSES`，
+        状态机由 `services/vector_service.py` 判，这一层只负责"一次写完不留半个"。
+
+        `error=None` 与 `set_fts_status` 同口径：成功路径把 `last_error` 清空，
+        免得上一条失败原文赖在这一行里被界面当成当前状态读出来。
+        """
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"更新向量状态失败 doc_id={doc_id}"):
+            conn.execute("UPDATE documents SET vector_status=?, last_error=?, updated_at=? WHERE id=?",
+                         (status, error, now_ts(), doc_id))
+
     def invalidate_index(self, doc_id: int) -> None:
         """内容变了但路径没变：把状态打回 stale/pending，**等重新索引**。
         只改状态、不删正文 —— 删正文是索引任务自己的事（先删后写在一个事务里）。"""
@@ -481,6 +495,19 @@ class DocumentRepository:
         with self.engine.transaction(conn, on_error=f"索引失效标记失败 doc_id={doc_id}"):
             conn.execute(
                 "UPDATE documents SET fts_status='stale', text_status='pending', updated_at=? WHERE id=?",
+                (now_ts(), doc_id))
+
+    def invalidate_vector(self, doc_id: int) -> None:
+        """正文重索引进来之后，旧向量就过期了（页内容变了、页没了）。把 `vector_status`
+        打回 `stale`，**不删向量** —— 删与重写是向量任务自己的事（与 `invalidate_index` 同一条规矩）。
+
+        为什么不顺手删：删向量是 GPU/磁盘写，把它压在"正文变了"这个高频动作上，等于让每次
+        重索引都付一次向量重算的代价；判 `stale` 让向量任务下次按需重跑，成本留在显式触发那一侧。
+        """
+        conn = self.engine.thread_connection()
+        with self.engine.transaction(conn, on_error=f"向量失效标记失败 doc_id={doc_id}"):
+            conn.execute(
+                "UPDATE documents SET vector_status='stale', updated_at=? WHERE id=?",
                 (now_ts(), doc_id))
 
     def set_error(self, doc_id: int, message: str) -> None:
