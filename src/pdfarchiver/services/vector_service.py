@@ -22,7 +22,7 @@ p12 C7「向量状态取值都在口径内」恒绿，但那个"在口径内"只
    整页交给模型（模型自己按 `MAX_LENGTH` 截断），不给一页造多个向量 —— 存储侧的
    `vector_meta(doc_id, page_no)` 就是按页唯一键设计的。
 4. **失败一律留 `vector_status='failed'` + 原文，绝不伪装成功**（AGENTS.md 三级降级 / 不许伪装成功）。
-   模型没装（`FileNotFoundError`）是这一层最常撞的失败：真库 `%LOCALAPPDATA%\PdfArchiver\models`
+   模型没装（`FileNotFoundError`）是这一层最常撞的失败：真库 `%LOCALAPPDATA%/PdfArchiver/models`
    今天就不存在。这种失败当场写 `failed` 并把 `FileNotFoundError` 原文进 `last_error`，
    而不是停在 `na` 让人以为"还没跑" —— "跑不了"和"没跑"是两个状态，界面上要能分开说。
 5. **重嵌前先删旧向量**（`delete_by_doc`）：这是 `VectorStore.delete_by_doc` 在产品里的调用方。

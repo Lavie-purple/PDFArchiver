@@ -1,4 +1,4 @@
-"""P7 路径与文件身份探针：SPEC 4.3 要求的路径规范化、大小写、重叠目录、长路径、跨盘唯一性。
+r"""P7 路径与文件身份探针：SPEC 4.3 要求的路径规范化、大小写、重叠目录、长路径、跨盘唯一性。
 
 这一层是整个索引正确性的地基：如果同一文件在不同监测根下产生两条主记录，
 后续的分类、全文索引、归档、去重全部会错。必须在写库之前用真实文件系统验证。
@@ -311,7 +311,7 @@ def main() -> int:
         ("大小写变体再插入也被 COLLATE NOCASE 唯一索引拒绝", rep["overlapping_roots"]["b_case_variant_rejected"] is True),
         ("长路径 (>260) 的真实结果已被记录（成不成都要写清）", rep["long_path"]["over_260"] and "plain_api_created" in rep["long_path"]),
         ("系统是否开启长路径支持已从注册表实测读出（不靠假设）", rep["long_path_registry"]["queried"] is True),
-        ("开启长路径后，深路径确实能用普通 API 建立并读取（决定要不要到处加 \\?\ 前缀）",
+        ("开启长路径后，深路径确实能用普通 API 建立并读取（决定要不要到处加 \\?\\ 前缀）",
          rep["long_path"]["plain_api_created"] is True),
         ("同内容不同路径：哈希相同但保持两条独立记录（不许自动合并）",
          rep["same_content"]["hash_equal"] and rep["same_content"]["identity_keys_distinct"]),
