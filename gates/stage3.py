@@ -22,12 +22,16 @@
 - 三种检索层级无模型依赖：已满足（架构断言守着）
 - 界面侧（S1 / S2 / S8 等）线框已逐屏确认并落地，判定在 `gates/final.py` 的 regression 与
   guards 段，本门禁不重复判
-- **SPEC 阶段 3 有两条没做到，本门禁不判**（写在 `docs/stage-reports/阶段3-交付报告.md`，
+- **SPEC 阶段 3 有一条没做到，本门禁不判**（写在 `docs/stage-reports/阶段3-交付报告.md`，
   别把这一场的绿读成"阶段 3 全达标"）：
   ① 智能集合是名字壳 —— 建集合时 `query` 恒为 `{}`，`CollectionRepository.update_query`
-  零调用方，选中集合不改变库视图的筛选；
-  ② 文档↔分类/标签在产品里没有写路径 —— `link_category` / `link_tag` / `unlink_tag`
-  的调用方只有测试文件，界面与服务一处都没有
+  零调用方，选中集合不改变库视图的筛选（**ISSUES I78** 乙，未做）。
+  原来并在这里的第 ② 条「文档↔分类/标签在产品里没有写路径」**已销账**（**ISSUES I78** 甲，
+  2026-10-19）：S1 表格底下那排「归入分类 / 加标签 / 移除标签」写 `link_categories` /
+  `link_tags` / `unlink_tags`，S8 右键写 `reparent_category` / `merge_categories`
+  并在删除前调 `docs_in_subtree`。判定在 `tests/integration/test_catalog_writes_ui.py`
+  （19 条，坏法见 p9 注入 I50–I69），本门禁不重复判；
+  仍零调用方的是 `merge_tags`（标签合并的入口没在那份线框里，未记为已交付）
 """
 from __future__ import annotations
 

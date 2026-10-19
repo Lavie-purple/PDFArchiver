@@ -30,6 +30,13 @@
 表格底下那一颗「送去识别」（**ISSUES I67** 甲，2026-10-19）是产品里 `request_ocr` 的
 **第一个调用点**：此前 OCR 只能由 `gates/stage5.py` 与测试点名，S7 只有三个读数。
 
+同一排那三颗「归入分类 / 加标签 / 移除标签」（**ISSUES I78** 甲，2026-10-19）是产品里
+`link_categories / link_tags / unlink_tags` 的调用点：建控件的整段理由与它的四条约定在
+`ui/catalog_links.py`，本文件只负责递给它两样东西 —— 表格里点名了哪几份、状态栏那一句怎么写。
+
+每一格里写什么、详情那一段怎么排版，在 `ui/library_rows.py`（同一份文档的"可截断列"与
+"整段文本"两种显示由那一处出，两档不会各说各话）。
+
 数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`。
 """
 from __future__ import annotations
@@ -37,8 +44,9 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
-from pdfarchiver.services.status_service import format_ts
-from pdfarchiver.ui.format import format_bytes as _format_size
+from pdfarchiver.ui.catalog_links import CatalogLinkBar
+from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
+                                         detail_lines, write_document_rows)
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 from pdfarchiver.ui.tier import (LEFT_COLUMN_WIDTH, RIGHT_COLUMN_WIDTH,
                                  FloatablePanel, sync_tier)
@@ -57,13 +65,6 @@ def _tint(label: QtWidgets.QLabel, role: str) -> None:
 # 命中面板每一行挂的两样数据：跳转要用的 doc_id 与页码（`None` = 这一条没有页码）。
 _HIT_DOC_ROLE = QtCore.Qt.ItemDataRole.UserRole
 _HIT_PAGE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
-
-
-def _mtime_text(doc) -> str:
-    """修改时间的显示。没有 mtime 时留空，**不进 `format_ts`** —— 它把 `None` 显示成"从未"，
-    而对一份文件的修改时刻来说"从未"是错的读法（那是"不知道"，不是"从来没有"）。
-    """
-    return format_ts(doc.mtime_ns // 1_000_000_000) if doc.mtime_ns else ""
 
 
 class LibraryPage(QtWidgets.QWidget):
@@ -132,8 +133,10 @@ class LibraryPage(QtWidgets.QWidget):
 
         # 文档表格
         self.doc_table = QtWidgets.QTableWidget()
-        self.doc_table.setColumnCount(5)
-        self.doc_table.setHorizontalHeaderLabels(["文件名", "路径", "大小", "修改时间", "分类"])
+        # 五列的列名与顺序在 `ui/library_rows.py` 的 `HEADERS`（那一模块负责往这几格里写什么），
+        # 列数由它算，不写两个 5。
+        self.doc_table.setColumnCount(len(HEADERS))
+        self.doc_table.setHorizontalHeaderLabels(list(HEADERS))
         # 定宽按实测内容反算（13px 字体）再**加上单元格内边距**：
         # 大小最宽读数 `1023.9 MB`（9 字符，MB/GB 档在 1024 进位，到不了 10 字符）、
         # 修改时间 `2026-10-16 16:11:00Z`（定宽 20 字符，走 `status_service.format_ts`，
@@ -157,7 +160,10 @@ class LibraryPage(QtWidgets.QWidget):
                            3: 140 + CELL_PADDING_WIDTH,
                            4: 88 + CELL_PADDING_WIDTH})
         self.doc_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.doc_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        # **ISSUES I78** 甲（2026-10-19）改多选：「批量打标签」在 SPEC 阶段 3 里写的是"一批文档"，
+        # 单选的话一次只能归一份，那条验收仍然做不到。Ctrl/Shift 与 `SelectRows` 同一形状，
+        # 而"当前行"（`currentRow`）的语义不变 —— 「送去识别」与详情面板照旧认当前那一行。
+        self.doc_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.doc_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.doc_table.setAlternatingRowColors(True)
         self.doc_table.itemSelectionChanged.connect(self._on_doc_selected)
@@ -182,6 +188,13 @@ class LibraryPage(QtWidgets.QWidget):
         self.ocr_btn.setToolTip("把当前这一份排进识别队列（按页幂等，版本没变的页不再推理）")
         self.ocr_btn.clicked.connect(self._on_ocr_requested)
         ocr_row.addWidget(self.ocr_btn)
+        # 同一排右边是三颗写入按钮（**ISSUES I78** 甲）：它只认"表格里点名了哪几份"和
+        # "状态栏那一句怎么写"，两者都由这一页递进去 —— 按钮自己从不查库、不数条数。
+        self.link_bar = CatalogLinkBar(self.ctx,
+                                       selected_ids=self._selected_doc_ids,
+                                       set_status=self._set_status,
+                                       on_written=self._after_link_written)
+        ocr_row.addWidget(self.link_bar)
         ocr_row.addStretch(1)
         center_lay.addLayout(ocr_row)
 
@@ -541,7 +554,7 @@ class LibraryPage(QtWidgets.QWidget):
 
     def _select_doc_row(self, doc_id: int) -> None:
         for row in range(self.doc_table.rowCount()):
-            item = self.doc_table.item(row, 0)
+            item = self.doc_table.item(row, DOC_ID_COLUMN)
             if item is not None and item.data(QtCore.Qt.ItemDataRole.UserRole) == doc_id:
                 self.doc_table.selectRow(row)
                 return
@@ -583,42 +596,19 @@ class LibraryPage(QtWidgets.QWidget):
         self._write_rows(0, docs)
 
     def _write_rows(self, start: int, docs: list[Document]) -> None:
-        """把一批文档写进表格的连续几行。
+        """把一批文档写进表格的连续几行 —— 每格写什么在 `ui/library_rows.py`。
 
-        分类那一列是**一条查询取回整批**（`categories_by_doc_ids`），不是逐行取 ——
-        修前每行调一次 `categories_of`，1,000 行就是 1,000 条 SQL（**ISSUES I51** 实测）。
+        `catalog` 在**调用时**从 `self.ctx` 取而不是构造时存好：`test_一批行的分类只走一条查询`
+        就是靠在这里换掉 `categories_by_doc_ids` 来数 SQL 条数的（**ISSUES I51** 的坏法对照）。
         """
-        cats_by_doc = self.ctx.catalog.categories_by_doc_ids([doc.id for doc in docs])
-        for row, doc in enumerate(docs, start=start):
-            # 文件名
-            name_item = QtWidgets.QTableWidgetItem(doc.name)
-            name_item.setData(QtCore.Qt.ItemDataRole.UserRole, doc.id)
-            name_item.setToolTip(doc.name)
-            self.doc_table.setItem(row, 0, name_item)
-
-            # 路径：定宽装不下整条绝对路径，靠悬停回读（与 S5 判重表同一口径）
-            path_item = QtWidgets.QTableWidgetItem(doc.path)
-            path_item.setToolTip(doc.path)
-            self.doc_table.setItem(row, 1, path_item)
-
-            # 大小
-            self.doc_table.setItem(row, 2, QtWidgets.QTableWidgetItem(_format_size(doc.size_bytes)))
-
-            # 修改时间
-            self.doc_table.setItem(row, 3, QtWidgets.QTableWidgetItem(_mtime_text(doc)))
-
-            # 分类（查询关联）：至多三个用户自定义名，长度没有上限（DDL 只对
-            # (parent_id, name) 建唯一索引，不约束长度），所以按可截断列处理，
-            # 与「路径」同一口径 —— 截断了必须能悬停读回全文。
-            cat_str = ", ".join(c.name for c in cats_by_doc.get(doc.id, [])[:3])
-            cat_item = QtWidgets.QTableWidgetItem(cat_str)
-            cat_item.setToolTip(cat_str)
-            self.doc_table.setItem(row, 4, cat_item)
+        write_document_rows(self.doc_table, docs, start, self.ctx.catalog)
 
     def _get_categories_for_doc(self, doc_id: int) -> list:
         return self.ctx.catalog.categories_of(doc_id)
 
     def _on_doc_selected(self) -> None:
+        # 三颗写入按钮认的是"点名了几份"（多选），详情与「送去识别」认的是"当前行"（单选语义不变）。
+        self.link_bar.refresh_enabled()
         row = self.doc_table.currentRow()
         if row < 0:
             self.detail_view.clear()
@@ -627,7 +617,7 @@ class LibraryPage(QtWidgets.QWidget):
             self.ai_result_label.setText("")
             self._selected_doc_id = None
             return
-        item = self.doc_table.item(row, 0)
+        item = self.doc_table.item(row, DOC_ID_COLUMN)
         if not item:
             return
         doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -635,38 +625,59 @@ class LibraryPage(QtWidgets.QWidget):
         self.ai_classify_btn.setEnabled(True)
         self.ocr_btn.setEnabled(True)
         self.ai_result_label.setText("")
+        if self._render_detail(doc_id):
+            # 详情是"选中这一行之后才有的内容"，窄档它藏在浮层里（这一栏的下半部），所以选中即唤出。
+            self.right_panel.open_overlay()
+
+    def _selected_doc_ids(self) -> list[int]:
+        """表格里现在点名了哪几份 —— 三颗写入按钮的点名对象（**ISSUES I78** 甲）。
+
+        id 取第一列的 `UserRole`（`_write_rows` 挂上去的那份）。`SelectRows` + `ExtendedSelection`
+        下同一行有五个 item 被选中，所以按**行号**取、按 doc_id 去重；用 set 而不是 `not in list`，
+        免得选中上千行时变成 O(n²)（AGENTS.md 明令禁止）。
+        """
+        rows = {index.row() for index in self.doc_table.selectionModel().selectedIndexes()}
+        seen: set[int] = set()
+        ids: list[int] = []
+        for row in sorted(rows):
+            item = self.doc_table.item(row, DOC_ID_COLUMN)
+            if item is None:
+                continue
+            doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if doc_id is not None and int(doc_id) not in seen:
+                seen.add(int(doc_id))
+                ids.append(int(doc_id))
+        return ids
+
+    def _after_link_written(self, doc_ids: list[int]) -> None:
+        """归入 / 打标 / 摘标之后：只重画被点名的那几行的「分类」列，再重画当前那份的详情。
+
+        不整表重取，也不走 `reload()`：浏览态下 `_current_docs` 可以有上千行，把它们全部塞进
+        一次 `categories_by_doc_ids` 会撞 `MAX_BULK_IDS`（**ISSUES I51** 那一条纪律在这儿同样成立），
+        而 `reload()` 更是把用户筛的那一列整片换掉、选中态也没了 —— 一次写入不该有这种副作用。
+        """
+        held = self.ctx.catalog.categories_by_doc_ids(doc_ids)
+        targets = set(doc_ids)
+        for row in range(self.doc_table.rowCount()):
+            item = self.doc_table.item(row, DOC_ID_COLUMN)
+            if item is None:
+                continue
+            doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if doc_id in targets:
+                self.doc_table.setItem(row, CATEGORY_COLUMN, category_cell(held.get(doc_id, [])))
+        if self._selected_doc_id is not None:
+            self._render_detail(self._selected_doc_id)
+
+    def _render_detail(self, doc_id: int) -> bool:
+        """把一份文档的详情画进右栏下半部；库里已经没有这一份时返回 False（什么都不画）。"""
         doc = self.ctx.documents.get(doc_id)
         if not doc:
-            return
+            return False
 
         cats = self._get_categories_for_doc(doc_id)
         tags = self._get_tags_for_doc(doc_id)
-
-        lines = [
-            f"文件名：{doc.name}",
-            f"扩展名：{doc.ext}",
-            f"路径：{doc.path or '(未知)'}",
-            f"大小：{_format_size(doc.size_bytes)}",
-            f"修改时间：{_mtime_text(doc)}",
-            f"SHA256: {doc.sha256 or '(未计算)'}",
-            "",
-            f"页数：{doc.page_count or '(未知)'}",
-            f"正文覆盖率：{doc.text_bearing_rate:.1%}" if doc.text_bearing_rate else "正文覆盖率：(未知)",
-            "",
-            f"分类：{', '.join(c.name for c in cats) or '(无)'}",
-            f"标签：{', '.join(t.name for t in tags) or '(无)'}",
-            "",
-            f"解析状态：{doc.parse_status}",
-            f"正文状态：{doc.text_status}",
-            f"OCR 状态：{doc.ocr_status}",
-            f"索引状态：{doc.fts_status}",
-        ]
-        if doc.last_error:
-            lines.append(f"最后错误：{doc.last_error}")
-
-        self.detail_view.setPlainText("\n".join(lines))
-        # 详情是"选中这一行之后才有的内容"，窄档它藏在浮层里（这一栏的下半部），所以选中即唤出。
-        self.right_panel.open_overlay()
+        self.detail_view.setPlainText("\n".join(detail_lines(doc, cats, tags)))
+        return True
 
     def _get_tags_for_doc(self, doc_id: int) -> list:
         return self.ctx.catalog.tags_of(doc_id)

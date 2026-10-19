@@ -236,7 +236,7 @@ def test_request_ocr在产品侧有调用点了() -> None:
     """**ISSUES I67** 记的就是「调用方全在 `gates/` 与 `tests/`，`src/` 里零调用点」。
     这条把反过来的事实钉住：`src/` 里必须真的有一个产品调用点，而且**只有 S1 那一颗按钮**
     —— 乙案（批量面板）落地时它应当出现在同一张表里，而不是变成第二个口径。
-    哪天把那颗按钮拆了而没接上别的入口，本条就是会红的那一处（坏法见 p9 Case 49）。"""
+    哪天把那颗按钮拆了而没接上别的入口，本条就是会红的那一处（坏法见 p9 注入 I49）。"""
     src = Path(__file__).resolve().parents[2] / "src"
     callers = sorted({path.relative_to(src).as_posix()
                       for path in src.rglob("*.py")

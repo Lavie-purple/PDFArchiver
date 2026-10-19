@@ -7,8 +7,10 @@ AGENTS.md 的规矩是「每写完一条断言，先用能骗过它的坏法真�
   注入后变红      ⇒  这条断言有约束力
 
 跑法：python tests/probes/p9_reverse_injection.py
-末行 VERDICT: ALL GREEN 表示 49 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2，
-47 是 **ISSUES I94** 的守卫在场性，48–49 是 **ISSUES I67** 甲 那颗「送去识别」的两侧）。
+末行 VERDICT: ALL GREEN 表示 69 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2，
+47 是 **ISSUES I94** 的守卫在场性，48–49 是 **ISSUES I67** 甲 那颗「送去识别」的两侧，
+50–69 是 **ISSUES I78** 甲：S1 那排「归入 / 加标签 / 移除标签」与 S8 右键菜单，
+`tests/integration/test_catalog_writes_ui.py` 里 19 条断言一条不落）。
 `node` 可以用空格分隔多个测试节点，要求它们**全部**变红；空格在这里不是测试名的一部分。
 
 两件事先说清，免得结论被误读：
@@ -296,6 +298,147 @@ CASES: list[Case] = [
                "            request = self.ctx.ocr.request_ocr([self._selected_doc_id])",
                "            from pdfarchiver.services.ocr_service import OcrRequest\n"
                "            request = OcrRequest(named=1, queueable=1, enqueued=1)  # 注入：自己数")]),
+    # —— **ISSUES I78** 甲：S1 那排「归入 / 加标签 / 移除标签」+ S8 右键菜单（2026-10-19 轮十四 B）——
+    # 这一批每条对应 `tests/integration/test_catalog_writes_ui.py` 里的一条断言，一条不落。
+    # 注：I50 想注的那一行（建按钮时的 `setEnabled(False)`）**删掉不会变红** —— `__init__` 末尾
+    # 还有一句 `refresh_enabled()` 把三颗按钮按住。真正承重的是那个判据本身，所以两条各注一侧。
+    Case("50", "可用性判据恒真：没有点名对象三颗按钮也亮着",
+         "tests/integration/test_catalog_writes_ui.py::test_没有选中任何行时三颗按钮都是死的",
+         [Edit("src/pdfarchiver/ui/catalog_links.py",
+               "        on = bool(self._selected_ids())",
+               "        on = True  # 注入：常驻可点")]),
+    Case("51", "可用性判据恒假：点名了也不亮（入口等于没有）",
+         "tests/integration/test_catalog_writes_ui.py::test_选中一行后三颗一起亮起来",
+         [Edit("src/pdfarchiver/ui/catalog_links.py",
+               "        on = bool(self._selected_ids())",
+               "        on = False  # 注入：永远灰着")]),
+    Case("52", "回执那句由界面自己拼（第二个口径，**ISSUES I60** 同族）",
+         "tests/integration/test_catalog_writes_ui.py::test_状态条那句逐字就是后端回执",
+         [Edit("src/pdfarchiver/ui/catalog_links.py",
+               "        self._set_status(receipt.describe())",
+               '        self._set_status(f"已归入 {len(ids)} 份")  # 注入：界面自己数')]),
+    Case("53", "按钮在、菜单在，就是不写库（六条写方法回到零调用点）",
+         "tests/integration/test_catalog_writes_ui.py::test_多选三份归入一个分类表里正好三行而再点一次还是三行 "
+         "tests/integration/test_catalog_writes_ui.py::test_六条写方法在产品侧各有调用点了",
+         [Edit("src/pdfarchiver/ui/catalog_links.py",
+               '        self._write(self.ctx.catalog.link_categories, action.data(), "归入分类失败")',
+               "        pass  # 注入：按下去只刷新状态条，不写库")]),
+    Case("54", "写失败时把后端原文吞掉，只留一句「失败了」",
+         "tests/integration/test_catalog_writes_ui.py::test_归入失败时屏幕上留的是后端原文",
+         [Edit("src/pdfarchiver/ui/catalog_links.py",
+               '            self._set_status(f"{fail_note}：{exc}", danger=True)',
+               '            self._set_status(f"{fail_note}（详情见日志）", danger=True)  # 注入：不给原文')]),
+    Case("55", "归入不做判重：已在的再插一次",
+         "tests/integration/test_catalog_writes_ui.py::test_多选三份归入一个分类表里正好三行而再点一次还是三行",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               '        with self.engine.transaction(conn, on_error=f"批量归入分类 {category_id} 失败"):\n'
+               "            have = {row[\"doc_id\"] for row in conn.execute(\n"
+               '                f"SELECT doc_id FROM document_categories WHERE category_id=? '
+               'AND doc_id IN ({marks})",\n'
+               "                (category_id, *ids))}",
+               '        with self.engine.transaction(conn, on_error=f"批量归入分类 {category_id} 失败"):\n'
+               "            have = set()  # 注入：不查已有关联")]),
+    Case("56", "把「归入」做成互斥：先清掉这几份的全部归入",
+         "tests/integration/test_catalog_writes_ui.py::test_归入第二个分类时第一个分类的关联一条不动",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               '        with self.engine.transaction(conn, on_error=f"批量归入分类 {category_id} 失败"):\n'
+               "            have = {row[\"doc_id\"] for row in conn.execute(\n"
+               '                f"SELECT doc_id FROM document_categories WHERE category_id=? '
+               'AND doc_id IN ({marks})",\n'
+               "                (category_id, *ids))}",
+               '        with self.engine.transaction(conn, on_error=f"批量归入分类 {category_id} 失败"):\n'
+               '            conn.execute(f"DELETE FROM document_categories WHERE doc_id IN ({marks})", ids)\n'
+               "            have = set()  # 注入：改成「只归这一个分类」")]),
+    Case("57", "摘标签时把这几份的标签一次摘光",
+         "tests/integration/test_catalog_writes_ui.py::test_移除标签只摘那一个而别的标签与分类都不动",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               '                conn.execute(f"DELETE FROM document_tags WHERE tag_id=? AND doc_id IN ({gone})",\n'
+               "                             (tag_id, *sorted(have)))",
+               '                conn.execute(f"DELETE FROM document_tags WHERE doc_id IN ({gone})",\n'
+               "                             tuple(sorted(have)))  # 注入：不分标签")]),
+    Case("58", "打标签不做判重：已有的再插一次",
+         "tests/integration/test_catalog_writes_ui.py::test_打标签移除再打同一份标签只有一行",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               '        with self.engine.transaction(conn, on_error=f"批量加标签 {tag_id} 失败"):\n'
+               "            have = {row[\"doc_id\"] for row in conn.execute(\n"
+               '                f"SELECT doc_id FROM document_tags WHERE tag_id=? AND doc_id IN ({marks})",\n'
+               "                (tag_id, *ids))}",
+               '        with self.engine.transaction(conn, on_error=f"批量加标签 {tag_id} 失败"):\n'
+               "            have = set()  # 注入：不查已有标签")]),
+    Case("59", "写完逐行取分类（一行一条 SQL，**ISSUES I51** 那一类）",
+         "tests/integration/test_catalog_writes_ui.py::test_归入之后分类列当场改而一批只走一条查询",
+         [Edit("src/pdfarchiver/ui/pages/library_page.py",
+               "        held = self.ctx.catalog.categories_by_doc_ids(doc_ids)",
+               "        held = {doc_id: self.ctx.catalog.categories_of(doc_id) for doc_id in doc_ids}"
+               "  # 注入：逐行取")]),
+    Case("60", "挪整枝只改点名的那一行，子孙的 name_path 留在旧父亲名下",
+         "tests/integration/test_catalog_writes_ui.py::test_改父类之后子孙的name_path整片跟随",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               '            conn.execute("UPDATE categories SET parent_id=?, name_path=?, updated_at=? '
+               'WHERE id=?",\n'
+               "                         (new_parent_id, new_path, ts, category_id))\n"
+               '            self._repath_subtree(conn, category_id, old["name_path"], new_path, ts)',
+               '            conn.execute("UPDATE categories SET parent_id=?, name_path=?, updated_at=? '
+               'WHERE id=?",\n'
+               "                         (new_parent_id, new_path, ts, category_id))\n"
+               "            # 注入：不重排子孙")]),
+    Case("61", "合并不改文档指向，只把源分类删掉（关联被删没了）",
+         "tests/integration/test_catalog_writes_ui.py::test_合并分类后源整枝的文档指向目标而源行归零",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               "            conn.execute(\n"
+               '                f"UPDATE OR IGNORE document_categories SET category_id=? '
+               'WHERE category_id IN ({marks})",\n'
+               "                (target_id, *subtree))",
+               "            # 注入：跳过「改指目标」这一步")]),
+    Case("62", "删除不检查类下有无文件，直接删（CASCADE 抹掉归入）",
+         "tests/integration/test_catalog_writes_ui.py::test_名下还有文件时删除被拒并给出清单",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               "        if docs:",
+               "        if False:  # 注入：前置检查读空")]),
+    Case("63", "前置检查读反：空枝也一律拒绝删除",
+         "tests/integration/test_catalog_writes_ui.py::test_空枝才删得掉而子枝一起消失",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               "        if docs:",
+               "        if True:  # 注入：恒拒")]),
+    Case("64", "拒了但不说：仓储层的原文被界面咽下去",
+         "tests/integration/test_catalog_writes_ui.py::test_把父亲挪到自己的子下面被拒而树一根不动",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               '        except Exception as exc:\n'
+               '            QtWidgets.QMessageBox.critical(self, "改父类失败", str(exc))',
+               "        except Exception:  # 注入：这一拒不上屏\n"
+               "            pass")]),
+    Case("65", "右键菜单少一项「改父类…」（那个动作没有入口）",
+         "tests/integration/test_catalog_writes_ui.py::test_右键菜单上就那四项而选中跟着右键走",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               '            ("改父类…", self.reparent_category),\n',
+               "")]),
+    Case("66", "改父类的候选清单里把自己也放上",
+         "tests/integration/test_catalog_writes_ui.py::test_自己不出现在改父类的候选清单里",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               "                    if c.id != exclude_id]",
+               "                    ]  # 注入：不排除自己")]),
+    Case("67", "「放到最外层」的哨兵 id 直接当父分类传给仓储层",
+         "tests/integration/test_catalog_writes_ui.py::test_放到最外层之后前缀不再带父名",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               "            self.ctx.catalog.reparent_category(cat_id, "
+               "None if target_id == ROOT_TARGET else target_id)",
+               "            self.ctx.catalog.reparent_category(cat_id, target_id)  # 注入：哨兵不换算")]),
+    Case("68", "空白处右键也弹菜单，落在第一枝上（作用于没点名的分类）",
+         "tests/integration/test_catalog_writes_ui.py::test_右键空白处不开菜单",
+         [Edit("src/pdfarchiver/ui/pages/categories_page.py",
+               "        item = self.category_tree.itemAt(pos)\n"
+               "        if item is None:\n"
+               "            return",
+               "        item = self.category_tree.itemAt(pos) or self.category_tree.topLevelItem(0)\n"
+               "        # 注入：落空就借第一枝")]),
+    # I58 第一次跑是 **GREEN**（`have` 置空在这条走不到：每轮都先摘再打，从来没有重复插）。
+    # 按 AGENTS.md「不会变红的断言直接删或重写」，改的是断言而不是坏法：第一轮加一次**连着点**，
+    # 并钉住那句「新增 0 条」；这一条 I69 补上"点了摘不掉"那一侧。
+    Case("69", "摘标签那一步不执行：点了「移除标签」但一行都没删",
+         "tests/integration/test_catalog_writes_ui.py::test_打标签移除再打同一份标签只有一行",
+         [Edit("src/pdfarchiver/db/repositories/catalog.py",
+               "            if have:",
+               "            if False:  # 注入：DELETE 那条永不执行")]),
 ]
 
 
