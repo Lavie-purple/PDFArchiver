@@ -34,6 +34,11 @@ DECISIONS 剩 66 行、`test_job_queue.py` 剩 34 行，三处都只能靠人记
 喂进一个「距线 50 行」的假读数必须点名它，喂「距线 150 行」必须不点名
 （这一档不判红，只提前一轮把线显出来 —— 判红的仍然是上面那两条）。
 
+**第四档：拆过的文件上单独钉的自线（**ISSUES I96** 甲，2026-10-20）**。第三档解决"没人记得去看"，
+它仍然不判红，而 I96 记的正是这个形状：`library_page.py` 686 → 795 的一路，红线只在越线那一刻响。
+所以拆完之后给它钉一条 **700**，判据读真文件现数、越过就红（`TIGHT_LIMITS`，见那两个函数）。
+钉在拆完的位置而不是"再留 100 行余量" —— 那一屏再长出第五件事本来就该先拆，不该先量还剩几行。
+
 跑法：
     python -m pytest tests/guards/test_file_size.py -q
     python tests/guards/test_file_size.py      # 独立跑，末行 VERDICT
@@ -49,6 +54,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PY_LIMIT = 800
 MD_LIMIT = 1_200
 WARN_REMAINING = 100        # **[约定]** 一轮整改的写入量，见模块 docstring 第三档
+
+# **第四档：拆过的文件上单独钉的自线（**ISSUES I96** 甲，2026-10-20）**。
+# 前三档对 `library_page.py` 那一路 686 → 795 的行为是：临近只打印、越线才红，而收尾只跑
+# `--only guards` 的人读到的是 `ALL GREEN`。拆完之后把线钉在拆完的位置上 —— 下一轮再往 S1
+# 那一屏里塞第五件事，红的是这条 700，不是那条谁都不会去碰的 800。
+# 名单要跟着文件走：文件不在了还留在名单里，`check_tight_caps` 一样红给你看。
+TIGHT_LIMITS: dict[str, int] = {
+    "src/pdfarchiver/ui/pages/library_page.py": 700,
+}
 
 # 从仓库根走，所以必须显式剪掉这几类：第三方虚拟环境、构建产物、运行时日志、
 # 本机一次性探针（`SKIP_DIRS` 里每一条都对应一次真注入验证，见模块 docstring）。
@@ -87,6 +101,27 @@ def _lines(path: Path) -> int:
     return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
 
 
+def check_tight_caps() -> list[str]:
+    """第四档：`TIGHT_LIMITS` 里那份文件自己的线（**ISSUES I96** 甲）。
+
+    判据读的是**真文件现数**，不是喂进来的合成分布 —— 这正是 I96 抱怨 `test_临近线的那份必须被点名`
+    的地方：那条喂假读数，证明的是点名逻辑本身，真实余量再小也不会让 pytest 变红。
+    """
+    problems: list[str] = []
+    for rel, cap in sorted(TIGHT_LIMITS.items()):
+        path = ROOT / rel
+        if not path.is_file():
+            problems.append(f"{rel} 已经不在仓库里了，却还留在 `TIGHT_LIMITS` 名单上 —— "
+                            "拆完再改名/合并时名单要跟着文件走，名单里的空键是永真的假守卫")
+            continue
+        count = _lines(path)
+        if count > cap:
+            problems.append(
+                f"{rel} 有 {count} 行，超过给它单独钉的 {cap} 行自线（**ISSUES I96** 甲）—— "
+                f"通用红线 {PY_LIMIT} 比它松：继续按主题拆，**不许抬这条自线**")
+    return problems
+
+
 def check_oversized_files() -> list[str]:
     problems: list[str] = []
     for path in sorted(_py_files()):
@@ -103,12 +138,18 @@ def check_oversized_files() -> list[str]:
                 f"{path.relative_to(ROOT).as_posix()} 有 {count} 行，超过台账的 {MD_LIMIT} 行 —— "
                 "台账按**阶段/小节**切册，不许按行数硬砍一条决定（口径见 "
                 "`docs/REPO-JOURNAL.md` R-010）")
+    problems += check_tight_caps()
     return problems
 
 
+def _limit_for(path: Path, default: int) -> int:
+    """这份文件适用的那条线：单独钉过的自线优先于它那一档的通用红线。"""
+    return TIGHT_LIMITS.get(path.relative_to(ROOT).as_posix(), default)
+
+
 def _managed() -> list[tuple[Path, int]]:
-    """受这条线管的全部文件，配上各自适用的红线。"""
-    return ([(p, PY_LIMIT) for p in sorted(_py_files())]
+    """受这条线管的全部文件，配上各自适用的红线（自线算进 `PY_LIMIT` 那一档）。"""
+    return ([(p, _limit_for(p, PY_LIMIT)) for p in sorted(_py_files())]
             + [(p, MD_LIMIT) for p in sorted(_md_files())])
 
 
@@ -124,8 +165,9 @@ def check_headroom(counts: dict[str, int] | None = None) -> list[str]:
         count = counts[rel] if counts is not None and rel in counts else _lines(path)
         remaining = limit - count
         if 0 <= remaining <= WARN_REMAINING:
-            kind = "`.py`" if limit == PY_LIMIT else "台账"
-            out.append(f"{rel} 现在 {count} 行，距 {kind} 红线 {limit} 只剩 {remaining} 行 —— "
+            kind = "台账" if rel.endswith(".md") else "`.py`"
+            note = "（单独钉的自线）" if limit not in (PY_LIMIT, MD_LIMIT) else ""
+            out.append(f"{rel} 现在 {count} 行，距 {kind} 红线 {limit}{note} 只剩 {remaining} 行 —— "
                        "下一轮写入就会越线：台账按 **D-059** 整批切册、`.py` 按主题拆，"
                        "**不许改阈值**")
     return out
@@ -133,6 +175,19 @@ def check_headroom(counts: dict[str, int] | None = None) -> list[str]:
 
 def test_没有文件越过长度线() -> None:
     problems = check_oversized_files()
+    if problems:
+        raise AssertionError("\n".join(problems))
+
+
+def test_拆过的那份不许再长回一屏() -> None:
+    """第四档的 pytest 侧：`TIGHT_LIMITS` 里那份文件回到拆分前的形状就必须红。
+
+    坏法注入（2026-10-20 真做过，脚本 `.probe_work/i96_tight_cap_injection.py`）：临时副本里
+    把 `library_page.py` 补到 701 行 ⇒ 这一条红且点名的是那份文件与那条 700；补到正好 700 行 ⇒ 绿
+    （边界值不红）；把 `TIGHT_LIMITS` 清空再跑同一份 701 行的文件 ⇒ **放行**，
+    证明红的是这条自线而不是通用 800 那档。名单里放一个不存在的文件名也必须红。
+    """
+    problems = check_tight_caps()
     if problems:
         raise AssertionError("\n".join(problems))
 

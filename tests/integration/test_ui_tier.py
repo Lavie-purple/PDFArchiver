@@ -27,7 +27,7 @@ from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.db.repositories.documents import DocFilter
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
-from pdfarchiver.ui import tier
+from pdfarchiver.ui import library_hits, tier
 from pdfarchiver.ui.main_window import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -217,7 +217,7 @@ def test_尺寸阈值只有_tier_里那一份() -> None:
     和 `ui/table_layout.py` 正常导入的常量一起报成"自己的一份"（实测假红过一次）。
     阈值漂掉的后果不在 CI 里，在用户把窗口拖到 1024 的那一刻 —— 正是不该靠人记的那类。
     """
-    for module in (library_page, categories_page):
+    for module in (library_page, library_hits, categories_page):
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
         own = [target.id
                for node in tree.body if isinstance(node, ast.Assign)
@@ -383,8 +383,8 @@ def test_浅扫自报要出现在状态栏标签上(window, ctx, qapp, monkeypat
 # 键盘入口、跳到 S2 的那条链、以及越界页码的读法。判据数字来自本轮探针
 # `.probe_work/i53_geometry_probe.py`（log 同目录）。
 
-_DOC_ROLE = library_page._HIT_DOC_ROLE
-_PAGE_ROLE = library_page._HIT_PAGE_ROLE
+_DOC_ROLE = library_hits._HIT_DOC_ROLE
+_PAGE_ROLE = library_hits._HIT_PAGE_ROLE
 _PAGE_IN_TEXT = re.compile(r"第 \d+ 页")
 
 
