@@ -41,6 +41,11 @@ PAGE_TIMEOUT_MS = {"DmlExecutionProvider": 30_000, "CPUExecutionProvider": 165_0
 # 每日页预算的默认值。用户可在 settings.json 覆盖（`ocr_daily_page_budget`），代码不替用户改。
 DEFAULT_DAILY_PAGE_BUDGET = 6000
 
+# 单页耗时的实测区间（三次独立运行、同一份真语料样本，出处台账 **ISSUES I1** 与
+# `docs/ROADMAP.md` 的 G13 行）。批量点名面板那句「预计」代价用它 —— 区间是读数不是承诺，
+# 所以两端都要上屏，只报一个数就是伪装成准确。
+PAGE_MS_RANGE = (1_985, 5_780)
+
 
 def page_timeout_ms(provider: str | None) -> int:
     """认不出的 provider 用最宽的那档 —— 没测过它有多快，就没资格掐它。"""

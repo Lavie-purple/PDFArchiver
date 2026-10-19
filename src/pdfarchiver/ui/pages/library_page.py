@@ -27,8 +27,8 @@
 线框 §S1 甲 那一句「只渲染视口内 ~25 行；滚到底再取下一批 50 条」就是这一段的规格。
 批次大小不在本文件里定数 —— 它是检索层 `Criteria.limit` 的默认值，写两处就有第二个口径。
 
-表格底下那一颗「送去识别」（**ISSUES I67** 甲，2026-10-19）是产品里 `request_ocr` 的
-**第一个调用点**：此前 OCR 只能由 `gates/stage5.py` 与测试点名，S7 只有三个读数。
+表格底下那一颗「送去识别」（**ISSUES I67** 甲先乙后）是产品里 `request_ocr` 的**第一个调用点**；
+此前 OCR 只能由 `gates/stage5.py` 与测试点名，选中多份时先由 `ui/ocr_batch_panel.py` 把账摆上屏。
 
 同一排那三颗「归入分类 / 加标签 / 移除标签」（**ISSUES I78** 甲，2026-10-19）是产品里
 `link_categories / link_tags / unlink_tags` 的调用点：建控件的整段理由与它的四条约定在
@@ -56,6 +56,7 @@ from pdfarchiver.ui.catalog_links import CatalogLinkBar
 from pdfarchiver.ui.collection_bar import FilterBar
 from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
                                          detail_lines, write_document_rows)
+from pdfarchiver.ui.ocr_batch_panel import OcrBatchPanel
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 from pdfarchiver.ui.tier import (LEFT_COLUMN_WIDTH, RIGHT_COLUMN_WIDTH,
                                  FloatablePanel, sync_tier)
@@ -74,6 +75,10 @@ def _tint(label: QtWidgets.QLabel, role: str) -> None:
 # 命中面板每一行挂的两样数据：跳转要用的 doc_id 与页码（`None` = 这一条没有页码）。
 _HIT_DOC_ROLE = QtCore.Qt.ItemDataRole.UserRole
 _HIT_PAGE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+
+#: 那颗 OCR 按钮的基础文案。选中两份以上时后面跟「（选中 N 份）」（**ISSUES I67** 乙），
+#: 所以写它的时候只有一处，读它的时候也只有一处 —— 两处各写一份就会有一天对不上。
+OCR_BTN_TEXT = "送去识别"
 
 
 class LibraryPage(QtWidgets.QWidget):
@@ -196,10 +201,11 @@ class LibraryPage(QtWidgets.QWidget):
         # 点名，S7 只有 O1/O2/O3 三个读数，界面上没有任何一处能把一份扫描件排进队列。
         # 建来是禁用的：没有当前行就没有点名的对象（与 `ai_classify_btn` 同一形状）。
         ocr_row = QtWidgets.QHBoxLayout()
-        self.ocr_btn = QtWidgets.QPushButton("送去识别")
+        self.ocr_btn = QtWidgets.QPushButton(OCR_BTN_TEXT)
         self.ocr_btn.setObjectName("searchBtn")
         self.ocr_btn.setEnabled(False)
-        self.ocr_btn.setToolTip("把当前这一份排进识别队列（按页幂等，版本没变的页不再推理）")
+        self.ocr_btn.setToolTip("把选中的份排进识别队列（按页幂等，版本没变的页不再推理）"
+                                "；选中多份时先展开面板算账，确认后才排队")
         self.ocr_btn.clicked.connect(self._on_ocr_requested)
         ocr_row.addWidget(self.ocr_btn)
         # 同一排右边是三颗写入按钮（**ISSUES I78** 甲）：它只认"表格里点名了哪几份"和
@@ -211,6 +217,12 @@ class LibraryPage(QtWidgets.QWidget):
         ocr_row.addWidget(self.link_bar)
         ocr_row.addStretch(1)
         center_lay.addLayout(ocr_row)
+
+        # 同一颗按钮在**选中多份**时展开的批次面板（**ISSUES I67** 乙 · 2026-10-19 勾「甲先乙后」，
+        # 线框 §I67-yi）：多份点名要先看清"该跑几份、哪几份不跑、为什么不跑、今日预算够不够"，
+        # 而单份不必看这份账 —— 按下去直接排队就是甲案那条老路。建来是隐藏的，不看时不占屏幕。
+        self.ocr_panel = OcrBatchPanel(self.ctx, set_status=self._set_status)
+        center_lay.addWidget(self.ocr_panel)
 
         # 状态栏
         self.status_label = QtWidgets.QLabel("共 0 份文档")
@@ -645,8 +657,12 @@ class LibraryPage(QtWidgets.QWidget):
         return self.ctx.catalog.categories_of(doc_id)
 
     def _on_doc_selected(self) -> None:
-        # 三颗写入按钮认的是"点名了几份"（多选），详情与「送去识别」认的是"当前行"（单选语义不变）。
+        # 「送去识别」与三颗写入按钮认的都是"点名了几份"（多选），详情面板仍认"当前行"（单选语义不变）。
         self.link_bar.refresh_enabled()
+        # 换选中就收起批次面板：那份账算的是**刚才那一批**，留着它等于让人对着过期名单按「排队」。
+        self.ocr_panel.close_panel()
+        named = len(self._selected_doc_ids())
+        self.ocr_btn.setText(OCR_BTN_TEXT if named < 2 else f"{OCR_BTN_TEXT}（选中 {named} 份）")
         row = self.doc_table.currentRow()
         if row < 0:
             self.detail_view.clear()
@@ -721,13 +737,17 @@ class LibraryPage(QtWidgets.QWidget):
         return self.ctx.catalog.tags_of(doc_id)
 
     def _on_ocr_requested(self) -> None:
-        """「送去识别」（**ISSUES I67** 甲）：把当前行排进队列，回执**原样**上屏。
+        """「送去识别」：一份直接排队（**I67** 甲），两份以上先展开批次面板（**I67** 乙）。
 
-        份数与跳过理由只有后端一个出口（`OcrRequest.describe()` 与 `SKIP_LABELS`），
+        份数与跳过理由只有后端一个出口（`OcrRequest.describe()` / `OcrPlan.describe()` 与 `SKIP_LABELS`），
         界面不许自己数第六类理由（**ISSUES I67** 销账判定②／**ISSUES I60** 同一条纪律）。
         新增 0 条时染红：「按了但没进队列」必须在屏幕上看得见（销账判定①③）。
         排队失败的落点与语义搜索那条同一口径（**ISSUES I84** ③）：染红 + 后端原文，界面不重述原因。
         """
+        named = self._selected_doc_ids()
+        if len(named) > 1:
+            self.ocr_panel.open_for(named)
+            return
         if self._selected_doc_id is None:
             return
         try:

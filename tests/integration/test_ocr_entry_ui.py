@@ -234,12 +234,13 @@ def test_排队失败时屏幕上留的是后端原文(window, ctx, root, make_s
 
 def test_request_ocr在产品侧有调用点了() -> None:
     """**ISSUES I67** 记的就是「调用方全在 `gates/` 与 `tests/`，`src/` 里零调用点」。
-    这条把反过来的事实钉住：`src/` 里必须真的有一个产品调用点，而且**只有 S1 那一颗按钮**
-    —— 乙案（批量面板）落地时它应当出现在同一张表里，而不是变成第二个口径。
-    哪天把那颗按钮拆了而没接上别的入口，本条就是会红的那一处（坏法见 p9 注入 I49）。"""
+    这条把反过来的事实钉住：`src/` 里必须真的**只有 S1 那两处**（甲案那颗按钮 + 乙案面板里的
+    「排队」），而不是长成第三个各自算一遍份数的入口。哪天把按钮拆了而没接上别的入口，
+    本条就是会红的那一处（坏法见 p9 注入 I49）。"""
     src = Path(__file__).resolve().parents[2] / "src"
     callers = sorted({path.relative_to(src).as_posix()
                       for path in src.rglob("*.py")
                       if ".request_ocr(" in path.read_text(encoding="utf-8")})
-    assert callers == ["pdfarchiver/ui/pages/library_page.py"], (
+    assert callers == ["pdfarchiver/ui/ocr_batch_panel.py",
+                       "pdfarchiver/ui/pages/library_page.py"], (
         f"产品里 `request_ocr` 的调用点现在是：{callers}")

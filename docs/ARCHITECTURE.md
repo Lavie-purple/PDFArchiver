@@ -78,7 +78,8 @@ src/pdfarchiver/
     scan_service.py★      #   scan 任务体 + 单条事件对账（快路）；唯一写 documents 文件事实的地方
     index_service.py★     #   index 任务体；四条口径见文件头（sha256 短路 / fts_status 不写 running）
     ocr_service.py★       #   ocr 任务体：入场券（ocr_ready）→ 页级幂等待办 → 逐页识别 → 按页落库带版本 →
-                          #   进同一张 FTS；回执分四类（点名/该跑/新增/为什么没进，D-031）；限量在这里判停（D-028）
+                          #   进同一张 FTS；回执分四类（点名/该跑/新增/为什么没进，D-031）；限量在这里判停（D-028）；
+                          #   `plan_ocr()` 是同一条 `_split()` 的预览档（一行任务也不写），S1 面板与排队回执因此同数
     vector_service.py★    #   vector 任务体（**ISSUES I63** 丙+丁 / **D-061**）：`request_vectors(doc_ids)` 是"用户点名建
                           #   向量"的唯一入口（沿用 OCR Q3=甲 的显式点名，不做全库自动）；入场券 = `text_status ∈
                           #   TEXT_SEARCHABLE`；重嵌前先 `delete_by_doc` 清旧；模型没装写 `failed`+原文、绝不伪装 `done`；
@@ -115,6 +116,10 @@ src/pdfarchiver/
     export_dialog.py★     #   S8 右键「导出此分类清单…」的弹层（**ISSUES I78** 丙）：列标签与格式档从服务层读、
                           #   屏幕上那个份数就是产物行数（同一个 `DocFilter`）、隐私列勾下先确认一次、
                           #   没有目录或一列没勾时「导出」是死的；目录存在与否只由服务层判
+    ocr_batch_panel.py★   #   S1「送去识别」选中多份时就地展开的批量点名面板（**ISSUES I67** 乙）：那三句账
+                          #   逐字来自 `plan_ocr()` 的 `describe()/cost_line()/budget_note()`，每类跳过理由一行、
+                          #   展开到份名（`SkippedReason.name_preview()`）；「排队」走 `request_ocr()`（与预览同一条
+                          #   `_split()`），「取消 / 换选中」收起且不留过期名单；账算不出来时不展开假面板，屏上给后端原文
     theme.py★             #   浅色/暗色两套令牌 + QSS 装配；占位色这类只能走 QPalette 的属性见 **ISSUES I50**
     format.py★            #   界面文本格式化；时间串一律来自 `status_service.format_ts`（守卫第 7 条）
     tier.py★              #   1024 档降级（D-039/D-040）
@@ -134,11 +139,14 @@ tests/
                           # 交付链新增：p12★ 一致性仪表坏法、p13★ 长跑采样、p14★ FTS 仪表验牙、
                           #   p15★ 归档界面与磁盘链路 36 条坏法、p16★ 文档指针坏法、p17★ handler 形状坏法、
                           #   p18★ 不可逆源文件坏法、p19★ 组合内存压测、p20★ 监测根改名/删除自愈
-                          #   轮十四新增：p21★ 智能集合 24 条坏法、p22★ 分类清单导出 25 条坏法
+                          #   轮十四新增：p21★ 智能集合 24 条坏法、p22★ 分类清单导出 25 条坏法、
+                          #   p23★ 批量点名面板 23 条坏法（U 读数 + B/P 接线与同源 + C/R/G + N/X/F/K/W）
   unit/★                  # 纯逻辑，无 UI、无真实文件；阶段 5 新增 ocr_engine 18 / ocr_idempotency 22 / ocr_limits 6
+                          #   轮十四 E 新增 ocr_plan_reads 5（面板要上屏的那几句读数，源头各说什么）
   integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
                           # 阶段 2 新增：扫描 34 / 队列 29（含三种"停"各一条）/ 索引 23 / 检索 20 / 状态 16 / 监听接线 10
                           # 阶段 5 新增：ocr_service 33 / ocr_budget 8 / ocr_real_engine 4（真推理，装了可选层才跑）
+                          # 轮十四 E 新增：ocr_batch_panel_ui 16（面板上屏的账 = 排队后的账，含地板档几何）
                           # 阶段 3/4/6 新增：界面几何与布局 / 归档磁盘安全 / 备份恢复端到端 / 向量与语义层
   guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
                           #   本机路径字面量 / 导航分组（AST）/ 语义层模型根单源 / 界面不许自己拼时间串、

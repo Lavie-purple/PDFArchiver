@@ -48,7 +48,7 @@ from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.indexing.normalize import normalize_page_text
 from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure
-from pdfarchiver.ocr.budget import OcrBudget, page_timeout_ms
+from pdfarchiver.ocr.budget import PAGE_MS_RANGE, OcrBudget, page_timeout_ms
 from pdfarchiver.ocr.engine import OcrEngine, OcrPage
 from pdfarchiver.parsing.classify import MIN_CHARS_PER_BEARING_PAGE, OCR_DONE, OCR_NA, \
     OCR_PARTIAL, OCR_PENDING, ocr_is_current, ocr_ready
@@ -156,6 +156,80 @@ class OcrRequest:
         return out
 
 
+#: 面板上那一行"展开"之后列几个文件名。再多就只是滚动条，不是信息（判定②要的是"指得到是哪几份"）。
+NAME_PREVIEW_LIMIT = 12
+
+
+@dataclass(frozen=True)
+class SkippedDoc:
+    """被跳过的某一份：id 给机器，名字给人看。"""
+
+    doc_id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class SkippedReason:
+    """一类跳过理由连同它底下那几份 —— **ISSUES I67** 销账判定②要求的形状：每一类都能指到具体是哪几份。"""
+
+    reason: str
+    docs: tuple[SkippedDoc, ...]
+
+    def label(self) -> str:
+        return f"{SKIP_LABELS[self.reason]}（{len(self.docs)} 份）"
+
+    def name_preview(self, limit: int = NAME_PREVIEW_LIMIT) -> str:
+        shown = "、".join(doc.name for doc in self.docs[:limit])
+        left = len(self.docs) - limit
+        return shown + (f"（还有 {left} 份没列出）" if left > 0 else "")
+
+
+@dataclass(frozen=True)
+class OcrPlan:
+    """一次批量点名**还没写队列之前**的账：这一批会跑几份、哪几份不跑、为什么不跑、要烧多少页。
+
+    与 `OcrRequest` 的差别只有"不 enqueue"这一件：份数与理由走的是同一个 `_split`，
+    所以面板上那句「该跑 7 份」与按下「排队」之后回执里那句「该跑 7 份」不会有一天不一样。
+    线框 §I67-yi 那句「估算归服务层算，界面重算就是两个口径」在这里落地。
+    """
+
+    named: int
+    queueable: tuple[int, ...]
+    skipped: tuple[SkippedReason, ...]
+    pages_queueable: int
+    budget_remaining: int
+
+    @property
+    def skipped_count(self) -> int:
+        return self.named - len(self.queueable)
+
+    def describe(self) -> str:
+        out = f"点名 {self.named} 份｜该跑 {len(self.queueable)} 份｜不跑 {self.skipped_count} 份"
+        for item in self.skipped:
+            out += f"｜{SKIP_LABELS[item.reason]} {len(item.docs)} 份"
+        return out
+
+    def cost_line(self) -> str:
+        """代价那句。页数是**主记录口径**（`documents.page_count` 合计），不等于要推理的页数 ——
+        已经有原生文字层的页不必 OCR，所以这句是上限而不是承诺，措辞里必须带着这件事。"""
+        if not self.pages_queueable:
+            return "这一批没有该跑的份，不烧页"
+        lo, hi = PAGE_MS_RANGE
+        return (f"这一批该跑的那几份主记录共 {self.pages_queueable:,} 页"
+                f"（按主记录页数算，待推理的页可能更少）｜单页实测 {lo:,}–{hi:,}ms｜"
+                f"预计 {self.pages_queueable * lo / 60_000:.1f}–"
+                f"{self.pages_queueable * hi / 60_000:.1f} 分钟")
+
+    def budget_note(self) -> str:
+        """今日预算够不够跑完这一批。不够时必须上屏 —— 别让人对着一条永远不动的队列猜（**I67** ③）。"""
+        if self.budget_remaining <= 0:
+            return "今天的页预算已经用满：按下「排队」一条也不会进队列，明日自动恢复"
+        if self.pages_queueable > self.budget_remaining:
+            return ("今日预算不够跑完这一批：跑满即停，剩下的明天自动回到待办"
+                    "（预算是资源闸门，强制也不绕）")
+        return "今日预算够跑完这一批"
+
+
 class OcrService:
     """`kind='ocr'` 任务的处理体，也是"用户点名重识别"的唯一入口。
 
@@ -183,28 +257,65 @@ class OcrService:
         ids = sorted({int(i) for i in doc_ids})
         if not ids:
             return OcrRequest(named=0, queueable=0, enqueued=0)
-        if self.budget.exhausted():
+        budget_hit = self.budget.exhausted()
+        docs = self.documents.by_ids(ids)
+        queueable, skipped = self._split(ids, docs, force, budget_hit=budget_hit)
+        enqueued = self.jobs.enqueue_many("ocr", queueable)
+        request = OcrRequest(named=len(ids), queueable=len(queueable), enqueued=enqueued,
+                             skipped=skipped)
+        if budget_hit:
+            log.warning("OCR 排队被每日页预算挡住：%s｜%s", self.budget.describe(), request.describe())
+        else:
+            log.info("OCR 排队：%s｜%s", request.describe(),
+                     "; ".join(f"{r}={v}" for r, v in sorted(skipped.items())) or "无跳过")
+        return request
+
+    def plan_ocr(self, doc_ids: list[int] | tuple[int, ...], *,
+                 force: bool = False) -> OcrPlan:
+        """批量点名面板（**ISSUES I67** 乙）要的那份账：算清哪几份该跑、哪几份不跑、为什么不跑。
+
+        与 `request_ocr` 唯一的差别是**不写队列**，判据走的是同一个 `_split`。
+        界面要想知道"该跑几份"只有这一条路：它自己判 `ocr_ready`、自己比版本号，
+        就是第二个口径 —— 那两份数迟早会跟真排队的那份漂开（线框 §I67-yi 第三条硬条件）。
+        代价：每份要读两三次库（`_is_current` 那条），是 O(点名份数) 的一次遍历，
+        与真排队时服务层本来就做的那一遍同一量级。
+        """
+        ids = sorted({int(i) for i in doc_ids})
+        remaining = self.budget.remaining()
+        if not ids:
+            return OcrPlan(named=0, queueable=(), skipped=(), pages_queueable=0,
+                           budget_remaining=remaining)
+        docs = self.documents.by_ids(ids)
+        queueable, skipped = self._split(ids, docs, force, budget_hit=remaining <= 0)
+        items = tuple(
+            SkippedReason(
+                reason,
+                tuple(SkippedDoc(doc_id, docs[doc_id].name if doc_id in docs else "（主记录不在了）")
+                      for doc_id in sorted(skipped_ids)))
+            for reason, skipped_ids in sorted(skipped.items()))
+        return OcrPlan(named=len(ids), queueable=tuple(queueable), skipped=items,
+                       pages_queueable=sum(int(docs[i].page_count or 0) for i in queueable),
+                       budget_remaining=remaining)
+
+    def _split(self, ids: list[int], docs: dict[int, Document], force: bool, *,
+               budget_hit: bool) -> tuple[list[int], dict[str, list[int]]]:
+        """把点名的一串 id 分成「该跑」与「按理由归类的不跑」—— `request_ocr` 与 `plan_ocr` 共用这一条。
+
+        两处各写一遍，"面板上说的"与"排队之后的回执"就是两个口径，那是 **ISSUES I60** 那一族。
+        """
+        if budget_hit:
             # 预算是资源闸门，不是幂等短路，所以 `force` 也不绕它：能绕开限额的限额等于没有限额。
             # 要今天就跑完，改 `settings.json` 的 `ocr_daily_page_budget`（并重启），别改代码。
-            request = OcrRequest(named=len(ids), queueable=0, enqueued=0, skipped={SKIP_BUDGET: ids})
-            log.warning("OCR 排队被每日页预算挡住：%s｜%s", self.budget.describe(), request.describe())
-            return request
-        docs = self.documents.by_ids(ids)
+            return [], {SKIP_BUDGET: list(ids)}
         queueable: list[int] = []
         skipped: dict[str, list[int]] = {}
         for doc_id in ids:
-            doc = docs.get(doc_id)
-            reason = self._why_skipped(doc, force)
+            reason = self._why_skipped(docs.get(doc_id), force)
             if reason is None:
                 queueable.append(doc_id)
             else:
                 skipped.setdefault(reason, []).append(doc_id)
-        enqueued = self.jobs.enqueue_many("ocr", queueable)
-        request = OcrRequest(named=len(ids), queueable=len(queueable), enqueued=enqueued,
-                             skipped=skipped)
-        log.info("OCR 排队：%s｜%s", request.describe(),
-                 "; ".join(f"{r}={v}" for r, v in sorted(skipped.items())) or "无跳过")
-        return request
+        return queueable, skipped
 
     def _why_skipped(self, doc: Document | None, force: bool) -> str | None:
         """点名的一份能不能进队列；能进返回 None，不能进返回理由常量。"""

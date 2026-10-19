@@ -178,8 +178,10 @@ CASES: list[Case] = [
     # —— 每日页预算与单页超时（G13 作废重定的两件）——————————————————
     Case("32", "排队那道预算闸门去掉：用满了照样往里排",
          f"{SVCB}::test_预算用满后点名一条都不排且回执说清原因",
+         # 轮十四 E 把这段判据抽成了 `OcrService._split(..., budget_hit=…)`（预览与排队共用一条），
+         # 锚点跟着搬进 `_split`；锚点里带注释那一行是为了避开 `request_ocr` 里同名的 `if budget_hit:`。
          [Edit(OCR_SERVICE,
-               '        if self.budget.exhausted():\n'
+               '        if budget_hit:\n'
                '            # 预算是资源闸门，不是幂等短路，所以 `force` 也不绕它：能绕开限额的限额等于没有限额。',
                '        if False:\n'
                '            # 预算是资源闸门，不是幂等短路，所以 `force` 也不绕它：能绕开限额的限额等于没有限额。')]),
