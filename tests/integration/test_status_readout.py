@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6 import QtCore
+from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.ui.nav import NAV_ITEMS
 from pdfarchiver.ui.pages.settings_page import SettingsPage
@@ -186,3 +186,55 @@ def test_S3_的未接线说明只许与来源同生同灭(window, ctx, qapp, mon
         f"屏上那句不是从唯一来源拼出来的：{text!r}")
     assert not any(w in text for w in FAKE_OUTCOME_CLAIMS), f"未接线说明里承诺了后果：{text!r}"
 
+
+def test_S7上半区按内容给高不冻在两栏sizeHint的比例(window, ctx, qapp) -> None:
+    """**ISSUES I75**：S7 上半区那条窄缝（48 行只看得见 12–14 行）不能是"比例分配"的结果。
+
+    判据按**最小窗高 720**（D-039 那档地板）反算，不是随手取的分数：
+    改前 offscreen 实测（`.probe_work/i75_split_needs.py`）两栏 sizeHint 258 / 447 = 36.6%，
+    而窗口 720 / 800 / 1409 三档上半区**恒为 36%**（`sizes=[247,428] / [276,479] / [499,865]`），
+    可见行数 12 / 14 / 31（48 行的 25% / 29% / 64%）。按内容分配之后同一档实测 18 / 24 / 48 行
+    （37.5% / 50% / 100%），所以这里钉两档：**地板档 ≥ 内容行数的三分之一**、
+    **最大化档 1409 一屏看全**（那正是用户会做的动作，也是原报障里"最大化也不解决"那半句）。
+    """
+    block = _status_block(window, qapp)
+    view = block.view
+    lh = view.fontMetrics().height()
+    blocks = view.document().blockCount()
+    assert lh > 0 and blocks > 0, "读数框没内容就量不出比例，这条断言会假绿"
+
+    for win_h, floor in ((720, blocks // 3), (1409, blocks)):
+        window.resize(1280, win_h)
+        _settle(qapp)
+        splitter = window._pages["monitor"].findChild(QtWidgets.QSplitter)
+        assert splitter is not None, "S7 取不到那个竖排 QSplitter"
+        visible = view.viewport().height() // lh
+        assert visible >= floor, (
+            f"窗口高 {win_h}：上半区视口只装得下 {visible}/{blocks} 行（要求 ≥ {floor}）"
+            f"，sizes={splitter.sizes()}")
+
+
+def test_S7用户拖过分隔条之后缩放窗口不许抢回分配(window, ctx, qapp) -> None:
+    """按内容分配是**初始**政策，不是"永远赢过用户" —— 拖过的比例必须留住（**ISSUES I75**）。
+
+    这条是上一条的配对：`setSizes` 自己也会发 `splitterMoved`，所以"用户拖过"这一判据
+    必须能被程序自己触发（这里用 `moveSplitter`，等价于拖到那个位置），否则锁根本没接上。
+    """
+    block = _status_block(window, qapp)
+    page = window._pages["monitor"]
+    splitter = page.findChild(QtWidgets.QSplitter)
+
+    window.resize(1280, 720)
+    _settle(qapp)
+    before = splitter.sizes()[0]           # 按内容分配给上半区的那一档（实测 322）
+    splitter.moveSplitter(120, 1)          # 往 120px 拖 —— Qt 会夹到上半区的最小高 138
+    _settle(qapp)
+    dragged = splitter.sizes()[0]
+    assert dragged < before, f"分隔条没被真的挪动：{before} → {splitter.sizes()}"
+
+    window.resize(1280, 1409)
+    _settle(qapp)
+    sizes = splitter.sizes()
+    assert sizes[0] < sizes[1], (
+        f"用户刚把上半区压到 {dragged}px，放大窗口就被抢回 {sizes[0]}px —— 分配政策赢了用户")
+    assert page._split_locked is True, "锁没生效：resize 之后还会继续自动重算"

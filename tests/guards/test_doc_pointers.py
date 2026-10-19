@@ -9,7 +9,7 @@
   当时是 §十一 —— 指针直接空指；
 - **ISSUES I34** 整条就是「交付文档引用不存在的测试名」。
 
-守卫查四类指针（口径都取自被引用文件自己的定义处，不另立第二份）：
+守卫查六类指针（口径都取自被引用文件自己的定义处，不另立第二份）：
 
 1. `D-\\d{3}` → 必须在 `docs/DECISIONS*.md`（活册 + 2026-10-18 切出的 `DECISIONS-ARCHIVE.md`）
    有 `## D-0xx` 标题（这两份合起来是定义处，不反过来查自己）；
@@ -21,14 +21,27 @@
    「那一轮当时由哪条断言钉住」，把历史条目改成今天的样子就是销毁证据；
    今天已经不在场的名字由 `ledger_stale_test_names()` 逐条数出来（不判红），
    当场记在 **ISSUES I70**。
+5. 反引号里的 `*.py` 文件名 → 必须在 `src/`／`gates/`／`tests/`／`packaging/`／`scripts/`
+   或仓库根顶层真有一个同名文件（2026-10-18 加，**ISSUES I82** 乙：`docs/ARCHITECTURE.md`
+   的模块树里有 9 条这样的文件线，而 `src/` 下从来没有过这些文件）。
+   模板占位符（`NNNN_slug.py`、`stageN.py`）与 `.probe_work/` 走白名单，理由写在两个常量的注释里；
+   台账类文档同样**只数不判红**（`ledger_stale_py_names()` → `PY_STALE_CAP`），
+   因为「I82 这一行」本身就是靠列出九个不存在的名字存在的。
+6. 「本机不存在 / 未安装 / 没建过」这类**现在时的本机状态**句子 → 同一行必须带
+   `YYYY-MM-DD` 读数日期（2026-10-18 加，**ISSUES I87** 丙：阶段 0 那句「默认数据根在本机不存在」
+   在真语料首扫之后就成了假话，而它同时躺在门禁打印、TESTING、ROADMAP、VERIFICATION 与交付报告里）。
 
 **这条守卫查不出什么**（**ISSUES I35** 自己就记过这个局限，写在这里免得下轮把它当全能守卫）：
 「存在但指错」—— 编号在场、说的却是另一件事。它能拦住的是**空指**，也就是最不可能被读出来
 的那一类。第 3 项也只认「文件名 + §」挨在一起的写法，句子里承前省略文件名的裸 `§N` 不在范围内。
+第 5 档另有两处**故意留的松**，都在注释里：裸名（`engine.py`）只认「有同名文件」，不认它在哪个层 ——
+要卡层就得写全路径，而模块树天生写裸名；带 `/` 的写法按**段后缀**匹配，所以
+`ui/pages/library_page.py` 算在场（它就是 `src/pdfarchiver/ui/pages/library_page.py`）。
 
-坏法注入（要求"红且点名"）见 `tests/probes/p16_doc_pointers_injection.py`：四档各造一处空指
-（编造 D 编号 / 编造 ISSUES 编号 / 编造节号 / 引用一个不存在的测试名），逐条要求红在**对应那一条**
-断言上，且台账旧名计数那条不许跟着红（证明豁免不是把守卫放空）。
+坏法注入（要求"红且点名"）见 `tests/probes/p16_doc_pointers_injection.py`：六档各造一处空指
+（编造 D 编号 / 编造 ISSUES 编号 / 编造节号 / 引用一个不存在的测试名 / 引用一个不存在的 `*.py` /
+写一句不带日期的本机状态），逐条要求红在**对应那一条**断言上，且台账旧名与旧文件名那两条计数
+不许跟着红（证明豁免不是把守卫放空）。
 
 跑法：
     .venv/Scripts/python.exe -m pytest tests/guards/test_doc_pointers.py -q
@@ -66,6 +79,43 @@ LEDGER_DIR = "docs/stage-reports/"
 #: 那一刻，「台账引用不存在的断言」就退回 **ISSUES I34** 之前的人肉状态。
 #: 要抬高它，必须同时做两件事：给新出现的那条追注继任者，并在 I70 那一行写下为什么会多。
 LEDGER_STALE_CAP = 6
+
+# ───────────────────────────── 第 5 档：反引号里的 `*.py` 也是断言（**ISSUES I82** 乙）─────────────────────────────
+
+#: `.py` 文件名的定义处 = 这四个代码目录 + `scripts/` + **仓库根本身的顶层 `.py`**
+#: （`main.py` 是入口，`docs/INSTALL.md` 教人跑它；把它算成空指就等于让守卫教人改一个对的文件）。
+#: 文档里的模块树、门禁说明、修复步骤
+#: 凡是写「某某.py」的，断言的都是这些目录里有一个真文件；指向别处（如 `docs/` 下的示例）
+#: 的句子不在本档范围，那种引用由第 3 档（节号）或直接由人核。
+PY_DIRS = ("src", "gates", "tests", "packaging", "scripts")
+
+#: 白名单前缀：`.probe_work/` 里的一次性探针**不归这一档管**。
+#: 理由不是"放过它们"，而是**分工不同**：本档问的是"这个名字在不在产品的代码树里"，
+#: 而"交付文档的证据不许指向收尾会删的临时文件"是另一条规则（**ISSUES I33 / I34**），
+#: 那批 2026-10-18 已经逐条改指常驻探针 `tests/probes/p14_fts_instrument.py` 与台账行。
+#: 台账里的 `.probe_work/` 引用（现数 19 个名字，16 个还在盘上）走"只数不判红"，见
+#: `ledger_stale_py_names()`。
+PY_EXEMPT_PREFIX = (".probe_work/",)
+
+#: 模板占位符不是"某个文件在场"的断言，是"某个文件长这样"的说明（迁移与门禁的命名规则）。
+PY_TEMPLATES = ("NNNN_slug.py", "stageN.py")
+
+#: 台账类文档里「今天已经不存在的 `.py` 名字」允许的条数（同 `LEDGER_STALE_CAP` 的形状）。
+#: 28 = 2026-10-18 现数（本文件末行打印的那一条；+1 来自 I77 甲的 `i77_badway.py`）。
+#: 这个数看着大，大头是三类**本来就该留着的**：
+#: `docs/ISSUES.md:95` 一条就占了 12 处 —— 那是 **ISSUES I82** 自己在逐条点名「哪 9 个文件名不存在」，
+#: 把这些名字改成今天的样子等于把这条台账的物证删掉；其余是随轮次删掉的一次性探针
+#: （`index_write_probe.py`、`ocr_accuracy.py` 等）与被改名的测试文件。
+#: 抬高它同样必须逐条写明为什么（哪一轮把哪个文件改名/删掉了，继任者是谁）。
+PY_STALE_CAP = 28
+
+#: 第 6 档：现在时的**机器状态**断言必须带读数日期（**ISSUES I87** 丙）。
+#: 「本机不存在 / 未安装 / 没建过」这类句子说的是**这台机器今天什么样**，不是产品逻辑；
+#: 阶段 0 那句「默认数据根在本机不存在」在真语料首扫之后就成了假话，而它同时躺在门禁打印、
+#: TESTING、ROADMAP、VERIFICATION 与交付报告里（五个落点，见 I87）。
+#: 只认「本机」+ 现在时否定的**紧挨**形状，避免把产品行为描述（"配置文件不存在时…"）误判进来。
+MACHINE_STATE = re.compile(r"本机[^。；\n]{0,28}?(不存在|不在场|未安装|没装|没建过)")
+DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _cn_to_int(text: str) -> int | None:
@@ -139,6 +189,61 @@ def _is_ledger(rel: str) -> bool:
     return rel in LEDGER_DOCS or rel.startswith(LEDGER_DIR)
 
 
+def _py_inventory() -> tuple[set[str], set[str]]:
+    """`PY_DIRS` 里所有 `.py` 的两种口径：仓内相对路径（posix）与裸文件名。
+
+    两种都要，因为文档里两种写法都有：模块树写裸名（`queue.py`），修复步骤写全路径
+    （`tests/guards/test_migrations.py`），而讲 `src/` 内部时写的是**包根以下的半路径**
+    （`ui/pages/library_page.py` = `src/pdfarchiver/ui/pages/library_page.py`）。
+    半路径靠**按段后缀**匹配（见 `check_pointers` 第 5 档），不靠裸名 —— 否则 `db/engine.py`
+    会被 `ocr/engine.py` 这种同裸名不同层的路径蒙过去。
+    `__pycache__` 必须排掉 —— 它里面有
+    `0001_initial.cpython-311.py` 这类**同名不同物**的东西，混进来会让"名字在场"这条判据变松。
+    """
+    paths: set[str] = set()
+    names: set[str] = set()
+    tops = [ROOT / top for top in PY_DIRS] + [ROOT]      # 顶层只取 ROOT/*.py，不递归
+    for base in tops:
+        if not base.is_dir():
+            continue
+        pattern = "*.py" if base == ROOT else "**/*.py"
+        for path in base.glob(pattern):
+            if "__pycache__" in path.parts or ".venv" in path.parts:
+                continue
+            paths.add(path.relative_to(ROOT).as_posix())
+            names.add(path.name)
+    return paths, names
+
+
+def _py_present(quoted: str, py_paths: set[str], py_names: set[str]) -> bool:
+    """`quoted` 这个写法在代码树里有没有对应的真文件（第 5 档的判据本体）。"""
+    if quoted in py_paths:
+        return True
+    if "/" in quoted:
+        return any(p.endswith("/" + quoted) for p in py_paths)
+    return quoted in py_names
+
+
+def _quoted_py(line: str) -> list[str]:
+    """这一行里被反引号整体包住、且**整段就是一个 py 路径**的引用。
+
+    整段 fullmatch 而不是 search：模块树里那句 `` `fileops/{plan,journal,execute,undo}.py` ``
+    是一条"这几个名字都不存在"的说明，把它拆开逐段判会误伤，而它本来也不该被当断言。
+    """
+    found = []
+    for span in re.findall(r"`([^`]*)`", line):
+        text = span.strip()
+        if text.startswith("./"):
+            text = text[2:]              # 只去相对前缀；lstrip("./") 会把 `.probe_work/` 的点也吃掉
+        text = text.replace("\\", "/")
+        if not re.fullmatch(r"[\w.\u4e00-\u9fff/-]+\.py", text):
+            continue
+        if text.split("/")[-1] in PY_TEMPLATES:      # 按裸名滤：`gates/stageN.py` 也是模板写法
+            continue
+        found.append(text)
+    return found
+
+
 def _resolve_md(name: str) -> Path | None:
     """按文件名在仓里找那份 md（引用只写文件名，不写目录，所以这里必须支持递归找）。"""
     candidates = [p for p in ROOT.rglob(name) if p.is_file()]
@@ -154,6 +259,7 @@ def check_pointers() -> list[str]:
     functions = _test_functions()
     modules = _test_modules()
     heading_cache: dict[str, set[int]] = {}
+    py_paths, py_names = _py_inventory()
     problems: list[str] = []
 
     for path in _doc_files():
@@ -185,11 +291,24 @@ def check_pointers() -> list[str]:
                         f"{rel}:{line_no} 引用 {name} §{raw}，而该文件现有节号 "
                         f"{sorted(heading_cache[key])}")
             if _is_ledger(rel):
-                continue          # 测试名那一档对带日期的记录不生效，理由见 `LEDGER_DOCS`
+                continue          # 第 4、5、6 档对带日期的记录不生效，理由见 `LEDGER_DOCS` 的注释
             for quoted in re.findall(r"`(test_[\w]+)`", line):
                 if quoted not in functions and quoted not in modules:
                     problems.append(f"{rel}:{line_no} 引用 `{quoted}`，而 `tests/` 里既没有这个 "
                                     f"`def test_` 名字也没有同名模块文件")
+            for quoted in _quoted_py(line):
+                if any(quoted.startswith(p) for p in PY_EXEMPT_PREFIX):
+                    continue
+                if _py_present(quoted, py_paths, py_names):
+                    continue
+                problems.append(f"{rel}:{line_no} 引用 `{quoted}`，而 "
+                                f"{'/'.join(PY_DIRS)} 这四个代码目录与仓库根顶层"
+                                f"没有任何同名文件"
+                                f"（**ISSUES I82**：文档里的 `*.py` 文件名也是断言）")
+            if MACHINE_STATE.search(line) and not DATED.search(line):
+                problems.append(f"{rel}:{line_no} 「{MACHINE_STATE.search(line).group(0)}」是一句"
+                                f"**现在时**的本机状态断言，却没带读数日期（**ISSUES I87** 丙："
+                                f"这类句子会随这台机器变样，必须写明哪天量的）")
     return problems
 
 
@@ -211,6 +330,30 @@ def ledger_stale_test_names() -> list[str]:
             for quoted in set(re.findall(r"`(test_[\w]+)`", line)):
                 if quoted not in functions and quoted not in modules:
                     found.append(f"{rel}:{line_no} {quoted}")
+    return sorted(set(found))
+
+
+def ledger_stale_py_names() -> list[str]:
+    """台账类文档里「今天已经不存在」的 `.py` 名字，逐条数出来给 **ISSUES I82** 对账用。
+
+    与 `ledger_stale_test_names()` 同一条理由：那些行写的是「那一轮当时动过哪个文件」，
+    而台账里最典型的一条就是 I82 自己 —— 它存在的意义就是列出九个不存在的名字。
+    所以这里**只数不判红**，但数字必须上屏（**ISSUES I34**：没人数的账等于没账）。
+    """
+    py_paths, py_names = _py_inventory()
+    found: list[str] = []
+    for path in _doc_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if not _is_ledger(rel):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for quoted in set(_quoted_py(line)):
+                if any(quoted.startswith(p) for p in PY_EXEMPT_PREFIX):
+                    continue
+                if _py_present(quoted, py_paths, py_names):
+                    continue
+                found.append(f"{rel}:{line_no} {quoted}")
     return sorted(set(found))
 
 
@@ -268,6 +411,22 @@ def test_活文档里引用的测试名都还在场() -> None:
         raise AssertionError("\n".join(bad))
 
 
+def test_活文档里引用的文件名都还在场() -> None:
+    """第 5 档（**ISSUES I82** 乙）：反引号里的 `*.py` 也是断言，不是排版。"""
+    if bad := _problems_containing("没有任何同名文件"):
+        raise AssertionError("\n".join(bad))
+
+
+def test_本机状态断言带读数日期() -> None:
+    """第 6 档（**ISSUES I87** 丙）：「本机不存在 / 未安装」这类现在时句子必须带日期。
+
+    这条只管活文档：台账里同一句话是**那一轮的读数**，本身就在带日期的格子里，
+    把它改成今天的样子就是 I87 要防的那种「抄成常量」。
+    """
+    if bad := _problems_containing("本机状态断言"):
+        raise AssertionError("\n".join(bad))
+
+
 def test_台账旧名不超过上限() -> None:
     """台账里的过期名字**可以存在**（改历史记录就是销毁证据），但**不许无声增长**。
 
@@ -280,18 +439,37 @@ def test_台账旧名不超过上限() -> None:
         + "\n".join(stale))
 
 
+def test_台账旧文件名不超过上限() -> None:
+    """第 5 档的台账半边（**ISSUES I82** 乙）：豁免 ≠ 没人看。
+
+    上限 = 现数 27，其中 12 处是 `docs/ISSUES.md:95` 那条 **I82 自己在逐条点名**「哪 9 个文件名
+    不存在」—— 把那行改成今天的样子就是销毁证据。所以这条判红的唯一路径是：**新一轮又让一个
+    文档里的文件名失去了对应物**，而没在 I82 那一行写下它去哪了。
+    """
+    stale = ledger_stale_py_names()
+    assert len(stale) <= PY_STALE_CAP, (
+        f"台账旧文件名 {len(stale)} 处 > 上限 {PY_STALE_CAP} 处。多出来的是这些：\n"
+        + "\n".join(stale))
+
+
 if __name__ == "__main__":
     found = check_pointers()
     stale = ledger_stale_test_names()
+    stale_py = ledger_stale_py_names()
     if len(stale) > LEDGER_STALE_CAP:
         found.append(f"台账旧名 {len(stale)} 处 > 上限 {LEDGER_STALE_CAP} 处"
                      f"（**ISSUES I70** 丙）：新多出来的是这些 → {'；'.join(stale)}")
+    if len(stale_py) > PY_STALE_CAP:
+        found.append(f"台账旧文件名 {len(stale_py)} 处 > 上限 {PY_STALE_CAP} 处"
+                     f"（**ISSUES I82** 乙）：新多出来的是这些 → {'；'.join(stale_py)}")
     for item in found:
         print("  RED  " + item)
     for item in stale:
         print("  台账旧名  " + item)
     print(f"扫了 {len(_doc_files())} 份 md、{len(_decision_numbers())} 条决策编号、"
-          f"{len(_issue_numbers())} 条台账编号、{len(_test_functions())} 个测试函数")
+          f"{len(_issue_numbers())} 条台账编号、{len(_test_functions())} 个测试函数、"
+          f"{len(_py_inventory()[0])} 个真实 .py")
     print(f"台账类文档里今天已不存在的测试名（不判红，逐条记在 **ISSUES I70**）：{len(stale)} 处")
+    print(f"台账类文档里今天已不存在的 .py 名字（不判红，逐条记在 **ISSUES I82**）：{len(stale_py)} 处")
     print("VERDICT: " + ("ALL GREEN" if not found else f"RED（{len(found)} 处空指）"))
     sys.exit(0 if not found else 1)

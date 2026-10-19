@@ -1,16 +1,44 @@
-"""语义搜索服务测试。"""
+"""语义搜索服务测试。
+
+2026-10-18 之前这个文件有三条在**默认跑法下恒 SKIP**（**ISSUES I83**）：`_model_available()`
+查的是 `ctx.paths.models_dir`，而模型只躺在 `.probe_work/models/` 里 —— 同目录的
+`test_embedding_service.py` 会自己 `copytree` 进临时根，这个文件不拷，于是「查询文本 →
+embedding → `VectorStore.search()` → 命中」这条**串起来的**路一条断言都没跑过，
+而 skip 不进门禁的 `passed/failed` 计数，绿灯里看不见它今天没跑。
+现在补同款拷贝 fixture，三条真跑；本机没有模型时仍然如实 SKIP（不是静默 SKIP：
+`-rs` 数得出来，而全场 skip 总数记在 **ISSUES I83** 那一行）。
+"""
+import shutil
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from pdfarchiver.db.models import Document
+from pdfarchiver.semantic.embedding import EmbeddingService
 from pdfarchiver.semantic.search_service import SemanticSearchService
 from pdfarchiver.semantic.vector_store import VectorStore
 
+#: 一次性模型的源（`.probe_work/models/` 是 gitignored 的本机证据根，不是产品依赖）。
+MODEL_SOURCE = Path(".probe_work/models") / EmbeddingService.MODEL_NAME
+
 
 def _model_available(ctx) -> bool:
-    """检查模型文件是否存在。"""
-    model_path = ctx.paths.models_dir / "bge-small-zh-v1.5" / "onnx" / "model_int8.onnx"
-    return model_path.exists()
+    """检查模型文件是否存在 —— 路径只从 `EmbeddingService` 那三个常量拼（**ISSUES I37**：
+    模型根不许有第二处字面量，测试自己拼一份就是第二个口径）。"""
+    return (ctx.paths.models_dir / EmbeddingService.MODEL_NAME
+            / EmbeddingService.MODEL_FILE).exists()
+
+
+def _install_model(ctx) -> None:
+    """把模型从 `.probe_work/models/` 拷进本场的临时根，和 `test_embedding_service.py` 同一口径。"""
+    if not MODEL_SOURCE.is_dir():
+        return
+    dst = ctx.paths.models_dir / EmbeddingService.MODEL_NAME
+    if dst.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(MODEL_SOURCE, dst)
 
 
 def _make_doc(ctx, path_key: str, name: str, sha256: str, device_id: int, file_id: int, page_count: int) -> int:
@@ -48,7 +76,8 @@ def _make_doc(ctx, path_key: str, name: str, sha256: str, device_id: int, file_i
 
 @pytest.fixture
 def search_service(ctx) -> SemanticSearchService:
-    """用测试上下文的数据根。"""
+    """用测试上下文的数据根，并把模型先拷进去（**ISSUES I83** 甲：不拷就是三条恒 SKIP）。"""
+    _install_model(ctx)
     return SemanticSearchService(ctx.paths.root)
 
 

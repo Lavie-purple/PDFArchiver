@@ -4,12 +4,16 @@
     .venv/Scripts/python.exe tests/probes/p16_doc_pointers_injection.py            # 全跑
     .venv/Scripts/python.exe tests/probes/p16_doc_pointers_injection.py P1 P4 ...   # 只跑指定 id
 
-五条坏法各往文档里插一句"引用一个不存在的东西"，跑守卫对应的那一条断言，要求：
-1. 必须红；2. 红的必须是**对应那一条**断言（点名），不是五条一起红、也不是随便一条崩了。
+十一条坏法各往文档里插一句"引用一个不存在的东西"，跑守卫对应的那一条断言，要求：
+1. 必须红；2. 红的必须是**对应那一条**断言（点名），不是全部一起红、也不是随便一条崩了。
 P5 是**反向对照**：往台账类文档（`docs/CHANGELOG.md`）里插一个不存在的测试名，守卫的「活文档」
 那一条必须**仍绿** —— 这条证明"台账豁免"是刻意划出来的边界，不是守卫整体放空。
 P6 是同一处注入的**另一半**（**ISSUES I70** 丙）：台账豁免不等于没人管 —— 同一条注入必须把
 「台账旧名不超过上限」那条判红，否则那条断言就是个摆设。
+P7/P8 是 2026-10-18 新加的两档：**`*.py` 文件名**（**ISSUES I82** 乙）与**不带日期的本机状态句**
+（**ISSUES I87** 丙）。P9/P10 是 P7 的台账对照与上限，形状与 P5/P6 完全一样；
+P11 是 P8 的对照：同一句话**带上读数日期就必须放行** —— 否则这条规则会退化成
+"文档里不许出现「本机」两个字"，而那是另一种假绿（把判据做宽到什么都抓）。
 跑完立即按原字节还原；改动只落在工作区，不提交。
 
 锚点按工作区的行尾匹配（本仓索引全是 LF，但 `core.autocrlf=true` 且没有 `.gitattributes`，
@@ -32,26 +36,40 @@ T_ISS = GUARD + "test_文档里的台账编号都真实存在"
 T_SEC = GUARD + "test_文档里的节号指针都落得下去"
 T_TEST = GUARD + "test_活文档里引用的测试名都还在场"
 T_CAP = GUARD + "test_台账旧名不超过上限"
+T_PY = GUARD + "test_活文档里引用的文件名都还在场"
+T_MACHINE = GUARD + "test_本机状态断言带读数日期"
+T_PYCAP = GUARD + "test_台账旧文件名不超过上限"
 
 USAGE = "docs/USAGE.md"
 CHANGELOG = "docs/CHANGELOG.md"
 ANCHOR = "## 九、性能与量级的真实边界"
 LEDGER_ANCHOR = "# 变更日志"
 
-# (id, 说明, 文件, 锚点, 注入内容, 该被点名的测试 node id)
-MUTATIONS: list[tuple[str, str, str, str, str, list[str]]] = [
+# (id, 说明, 文件, 锚点, 注入内容, 该被点名的测试 node id, 反向对照该盯的那条)
+MUTATIONS: list[tuple[str, str, str, str, str, list[str], list[str]]] = [
     ("P1", "引用一条不存在的决策编号", USAGE, ANCHOR,
-     ANCHOR + "\n\n坏法锚：这条的口径见 D-999。\n", [T_DEC]),
+     ANCHOR + "\n\n坏法锚：这条的口径见 D-999。\n", [T_DEC], []),
     ("P2", "引用一条不存在的台账编号", USAGE, ANCHOR,
-     ANCHOR + "\n\n坏法锚：与 ISSUES I999 同族。\n", [T_ISS]),
+     ANCHOR + "\n\n坏法锚：与 ISSUES I999 同族。\n", [T_ISS], []),
     ("P3", "引用一个不存在的节号", USAGE, ANCHOR,
-     ANCHOR + "\n\n坏法锚：详见 `docs/USAGE.md` §九十九。\n", [T_SEC]),
+     ANCHOR + "\n\n坏法锚：详见 `docs/USAGE.md` §九十九。\n", [T_SEC], []),
     ("P4", "引用一个不存在的测试名", USAGE, ANCHOR,
-     ANCHOR + "\n\n坏法锚：由 `test_这条根本不存在啊` 钉住。\n", [T_TEST]),
+     ANCHOR + "\n\n坏法锚：由 `test_这条根本不存在啊` 钉住。\n", [T_TEST], []),
     ("P5", "台账类文档里的旧测试名不判红（反向对照）", CHANGELOG, LEDGER_ANCHOR,
-     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", []),
+     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", [], [T_TEST]),
     ("P6", "同一条注入必须顶破台账旧名的上限（**ISSUES I70** 丙）", CHANGELOG, LEDGER_ANCHOR,
-     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", [T_CAP]),
+     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `test_这条根本不存在啊` 钉住。\n", [T_CAP], []),
+    ("P7", "引用一个不存在的 `*.py` 文件名（**ISSUES I82** 乙）", USAGE, ANCHOR,
+     ANCHOR + "\n\n坏法锚：这一段由 `services/这条根本不存在啊.py` 钉住。\n", [T_PY], []),
+    ("P8", "写一句不带日期的本机状态断言（**ISSUES I87** 丙）", USAGE, ANCHOR,
+     ANCHOR + "\n\n坏法锚：这套东西在本机不存在，所以没法现场核。\n", [T_MACHINE], []),
+    ("P9", "台账类文档里的旧文件名不判红（反向对照）", CHANGELOG, LEDGER_ANCHOR,
+     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `services/这条根本不存在啊.py` 钉住。\n", [], [T_PY]),
+    ("P10", "同一条注入必须顶破台账旧文件名的上限（**ISSUES I82** 乙）",
+     CHANGELOG, LEDGER_ANCHOR,
+     LEDGER_ANCHOR + "\n\n坏法锚：当时由 `services/这条根本不存在啊.py` 钉住。\n", [T_PYCAP], []),
+    ("P11", "带日期的本机状态句不能被判红（反向对照：规则只管「没写日期」）", USAGE, ANCHOR,
+     ANCHOR + "\n\n坏法锚：2026-10-18 现读，这个包在本机不存在。\n", [], [T_MACHINE]),
 ]
 
 
@@ -75,7 +93,9 @@ def main() -> int:
     wanted = set(sys.argv[1:])
     selected = [m for m in MUTATIONS if not wanted or m[0] in wanted]
 
-    all_nodes = sorted({n for m in selected for n in m[5]}) or [T_DEC, T_ISS, T_SEC, T_TEST, T_CAP]
+    all_nodes = sorted({n for m in selected for n in m[5] + m[6]}) or [T_DEC, T_ISS, T_SEC,
+                                                                       T_TEST, T_CAP, T_PY,
+                                                                       T_MACHINE, T_PYCAP]
     code, out = run_nodes(all_nodes)
     if code != 0:
         print("!! 基线就没绿，先修守卫再谈注入：\n" + out[-4000:])
@@ -83,7 +103,7 @@ def main() -> int:
     print(f"基线 {len(all_nodes)} 条全绿\n")
 
     survivors, misattributed, broken_control, skipped = [], [], [], []
-    for mid, desc, rel, anchor, injected, nodes in selected:
+    for mid, desc, rel, anchor, injected, nodes, control in selected:
         path = REPO / rel
         raw = path.read_bytes()
         anchor_b, new_b = anchor.encode("utf-8"), injected.encode("utf-8")
@@ -98,9 +118,9 @@ def main() -> int:
             path.write_bytes(raw.replace(anchor_b, new_b, 1))
             for pyc in _pyc_files(rel):
                 pyc.unlink(missing_ok=True)
-            # 反向对照只验"台账豁免"这一件事：注入的是台账，所以只许跑「活文档」那一条。
-            # 混进上限那条会稳定误报"对照破了"——同一条注入本来就该顶破上限（那正是 P6）。
-            code, out = run_nodes(nodes or [T_TEST])
+            # 反向对照只验"台账豁免 / 带日期就放行"这一件事：注入的那一档必须仍绿，
+            # 混进上限那条会稳定误报"对照破了"——同一条注入本来就该顶破上限（那正是 P6/P10）。
+            code, out = run_nodes(nodes or control)
         finally:
             path.write_bytes(raw)
             for pyc in _pyc_files(rel):
@@ -109,9 +129,9 @@ def main() -> int:
                   if ln.startswith("FAILED ")]
         if not nodes:      # 反向对照：注入之后必须**仍然全绿**
             if code == 0:
-                print(f"{mid:4} 对照成立  {desc}  ← 台账豁免边界在事")
+                print(f"{mid:4} 对照成立  {desc}  ← 该放行的没被误杀")
             else:
-                print(f"{mid:4} 对照破了（台账豁免没起作用，注入也判红）：{desc}\n" + out[-1500:])
+                print(f"{mid:4} 对照破了（该放行的被判红了）：{desc}\n" + out[-1500:])
                 broken_control.append(mid)
         elif code == 0:
             print(f"{mid:4} 绿!! 坏法没被抓住：{desc}")

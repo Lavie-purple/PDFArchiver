@@ -175,6 +175,17 @@ def doc_count(data_root: Path) -> int:
     return scalar(data_root, "SELECT count(*) FROM documents")
 
 
+def open_index_or_ocr_jobs(data_root: Path) -> int:
+    """库里还挂在 pending/running 的 index/ocr 任务条数 —— 只有降到 0 才代表解析器
+    已经交回 PDF 文件句柄，`shutil.rmtree(corpus)` 才不会被 WinError 32 拦住。
+    delete 那一场在 doc_count 到位但索引还在跑的时候 rmtree 会删一半文件卡一半，
+    后面所有延迟读数作废（**ISSUES I5** 的真机复跑现场实测）。scan 不在此列：
+    scan 只读目录、不 open PDF。"""
+    return scalar(data_root,
+                  "SELECT count(*) FROM processing_jobs "
+                  "WHERE kind IN ('index','ocr') AND state IN ('pending','running')")
+
+
 # ───────────────────────────── 判据 ─────────────────────────────
 
 def n1_op_landed(case: str, disk: dict[str, object]) -> Row:
@@ -369,17 +380,23 @@ def run_case(case: str, work: Path, keep: bool) -> tuple[list[Row], dict[str, ob
                                  "clock_seconds": b.clock, "observe_seconds": b.observe,
                                  "basis": b.basis, "app_started_at": started_wall}
     try:
-        # 先让这一场有一个"已知的干净起点"：排一次扫描，等它把 N 份收进库并排空
+        # 先让这一场有一个"已知的干净起点"：排一次扫描，等它把 N 份收进库并排空。
+        # doc_count 到位只说明 scan worker 登记了主记录，index worker 还在逐份 open PDF
+        # 解析正文 —— Windows 上解析器持有的句柄会让后续 `shutil.rmtree(corpus)` 卡在
+        # WinError 32（本轮真机复跑现场），因此必须再等 index/ocr 队列落到 0 才动手。
         enq = enqueue_scan(data_root)
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < 180 and proc.poll() is None:
-            if doc_count(data_root) >= DOCS_PER_ROOT:
+            if (doc_count(data_root) >= DOCS_PER_ROOT
+                    and open_index_or_ocr_jobs(data_root) == 0):
                 break
             time.sleep(1.0)
         docs_before = doc_count(data_root)
+        backlog = open_index_or_ocr_jobs(data_root)
         log(f"  起点：排进 scan {enq} 条｜库里主记录 {docs_before}/{DOCS_PER_ROOT}｜"
-            f"耗时 {time.perf_counter() - t0:.1f}s")
+            f"index/ocr 未排空 {backlog} 条｜耗时 {time.perf_counter() - t0:.1f}s")
         detail["docs_before"] = docs_before
+        detail["start_backlog"] = backlog
 
         # ── 动手：这一场唯一的磁盘操作，t0 之后应用只能靠慢路发现 ──
         op_t0 = time.time()
