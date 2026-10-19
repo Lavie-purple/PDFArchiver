@@ -2,7 +2,17 @@
 
 左栏：分类树（支持增删改名 + 右键改父类/合并）
 中栏：标签列表（支持增删改名；`merge_tags` 在产品里仍无入口 —— 记在 **ISSUES I78** 销账那行）
-右栏：智能集合（支持增删改查；保存筛选条件那一半是 **ISSUES I78** 乙）
+右栏：智能集合（**ISSUES I78** 乙，2026-10-19 补齐"保存筛选条件"那一半）——
+每一行写着它此刻命中几份（数由 `documents.count_matching` 出，与回放那张表同一个 WHERE），
+**双击 = 把那条集合存的条件灌回 S1 顶栏并立即回放**。
+
+右栏为什么没有「新建」这颗按钮：修前它存的是 `query={}` —— 一条集合等于"全库"，回放它只是
+重新显示全部文档，一个改变不了任何读数的入口（**ISSUES I11** 那一类）。存的动作只有一处：
+S1 那排 chips 旁边的「存为智能集合」（条件就在那里产生，`ui/collection_bar.py`）。
+这一栏留下「复制为新」，它复制的是**已经有条件**的那条。
+
+双击而不是单击：这一栏的三颗按钮都读"当前选中那一行"，单击已经是"点名"了；
+把回放挂在单击上，用户每次点选都会跳走一屏。
 
 **1024 档必须收起左栏的树侧栏** —— 这条是 **D-039** 尺寸段点名的界面断言
 （「不是"到时候看"」），落地方式是 S1 那一份 `ui/tier.py`：树整块变成 420px 浮层，
@@ -13,13 +23,15 @@
 在界面上不存在，而 §S8 定案写着分类树"支持增删改名**移动**"。右键上那颗「删除（先检查类下
 有无文件）」也跟着这一定案：删之前先查整枝，有文件就拒绝并给出清单（§S8 定案的第二条后果）。
 
-数据全部来自 `AppContext.catalog` 和 `AppContext.collections` 的真查询。
+数据全部来自 `AppContext.catalog` 与 `AppContext.collection`（集合的三个读数——命中数、
+可用性、存/覆盖——都只有服务层给得出，这一页不再直取 `collections` 仓储）。
 """
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.services.collection_service import CollectionEntry
 from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 
 #: 「放到最外层」在下拉清单里的那一行的载荷。分类 id 由 sqlite 自增、从 1 起，
@@ -34,6 +46,10 @@ DELETE_PREVIEW_ROWS = 12
 
 class CategoriesPage(QtWidgets.QWidget):
     """S8：三栏常驻；窄档按 D-039 收起分类树。"""
+
+    #: 双击一条集合 → 外壳把 S1 换到这一屏并回放这份条件（载荷是 `CollectionEntry` 整条，
+    #: 与 `LibraryPage.open_in_reader` 同一做法：页面不知道外壳的存在，外壳也不懂集合）。
+    play_requested = QtCore.Signal(object)
 
     def __init__(self, ctx: AppContext, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -97,16 +113,18 @@ class CategoriesPage(QtWidgets.QWidget):
         coll_title.setObjectName("sectionTitle")
         right_lay.addWidget(coll_title)
         self.collection_list = QtWidgets.QListWidget()
+        self.collection_list.itemDoubleClicked.connect(self._on_collection_activated)
         right_lay.addWidget(self.collection_list, 1)
         coll_btns = QtWidgets.QHBoxLayout()
-        self.add_coll_btn = QtWidgets.QPushButton("新建")
-        self.add_coll_btn.clicked.connect(self.add_collection)
         self.rename_coll_btn = QtWidgets.QPushButton("改名")
         self.rename_coll_btn.clicked.connect(self.rename_collection)
-        self.delete_coll_btn = QtWidgets.QPushButton("删除")
+        self.copy_coll_btn = QtWidgets.QPushButton("复制为新")
+        self.copy_coll_btn.clicked.connect(self.copy_collection)
+        self.delete_coll_btn = QtWidgets.QPushButton("删除（不动文档）")
+        self.delete_coll_btn.setToolTip("只删这一行保存的查询；文档与它们的分类/标签关联一条不动（SPEC 3.3.5）")
         self.delete_coll_btn.clicked.connect(self.delete_collection)
-        coll_btns.addWidget(self.add_coll_btn)
         coll_btns.addWidget(self.rename_coll_btn)
+        coll_btns.addWidget(self.copy_coll_btn)
         coll_btns.addWidget(self.delete_coll_btn)
         right_lay.addLayout(coll_btns)
         splitter.addWidget(right)
@@ -156,9 +174,17 @@ class CategoriesPage(QtWidgets.QWidget):
             self.tag_list.addItem(tag.name)
 
     def _reload_collections(self) -> None:
+        """整列重查：每一行带着**它自己那条** `CollectionEntry`（不是行号）。
+
+        行号当句柄会错位在"列表刚重排过"那一刻 —— 三颗按钮与双击都读"当前那一行"，
+        而 `entries()` 每次都重新查库，所以把条目本身塞进 `UserRole`，读的时候直接取，
+        不靠"第几行等于第几条"这个临时前提。上屏那句由 `label()` 出（**ISSUES I60**）。
+        """
         self.collection_list.clear()
-        for coll in self.ctx.collections.list():
-            self.collection_list.addItem(coll.name)
+        for entry in self.ctx.collection.entries():
+            item = QtWidgets.QListWidgetItem(entry.label())
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, entry)
+            self.collection_list.addItem(item)
 
     # ---- 右键菜单（**ISSUES I78** 甲：改父类 / 合并 的唯一入口）----
 
@@ -371,45 +397,70 @@ class CategoriesPage(QtWidgets.QWidget):
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "删除标签失败", str(exc))
 
-    def add_collection(self) -> None:
-        name, ok = QtWidgets.QInputDialog.getText(self, "新建智能集合", "集合名:")
-        if ok and name.strip():
-            try:
-                # 默认查询条件：空查询（匹配所有文档）
-                self.ctx.collections.add(name.strip(), query={})
-                self._reload_collections()
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(self, "新建集合失败", str(exc))
+    # ---- 智能集合（**ISSUES I78** 乙：这一栏只改名 / 复制 / 删除，存的条件在 S1 产生）----
+
+    def _current_collection(self, action: str) -> CollectionEntry | None:
+        """当前那一行存的条目；没选中就回一句提示并返回 None。
+
+        改名 / 复制 / 删除 / 双击回放 四件事都只在"选中了某一行"时才有意义，同一条前置检查
+        只写这一处（与 `_current_category_id` 同一条纪律，AGENTS.md「禁止同类问题逐个打补丁」）。
+        """
+        item = self.collection_list.currentItem()
+        if item is None:
+            QtWidgets.QMessageBox.information(self, action, f"请先选择一个集合再{action}")
+            return None
+        entry = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        return entry if isinstance(entry, CollectionEntry) else None
+
+    def _on_collection_activated(self, item: QtWidgets.QListWidgetItem) -> None:
+        """双击一行 → 让外壳切到 S1 并回放这条集合存的条件。
+
+        无条件为假的那条（旧版「新建」留下的 `query={}`）照旧发信号：S1 会把它显示成
+        「无筛选条件」那一句，而不是在这儿拦下来 —— 拦在页面上就等于"点了没反应"。
+        """
+        entry = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(entry, CollectionEntry):
+            self.play_requested.emit(entry)
 
     def rename_collection(self) -> None:
-        selected = self.collection_list.currentRow()
-        if selected < 0:
-            QtWidgets.QMessageBox.information(self, "改名集合", "请先选择一个集合")
+        entry = self._current_collection("改名")
+        if entry is None:
             return
-        colls = self.ctx.collections.list()
-        coll = colls[selected]
-        new_name, ok = QtWidgets.QInputDialog.getText(self, "改名集合", "新名称:")
+        new_name, ok = QtWidgets.QInputDialog.getText(self, "改名集合", "新名称:", text=entry.name)
         if ok and new_name.strip():
             try:
-                self.ctx.collections.rename(coll.id, new_name.strip())
+                self.ctx.collection.rename(entry.id, new_name.strip())
                 self._reload_collections()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "改名集合失败", str(exc))
 
-    def delete_collection(self) -> None:
-        selected = self.collection_list.currentRow()
-        if selected < 0:
-            QtWidgets.QMessageBox.information(self, "删除集合", "请先选择一个集合")
+    def copy_collection(self) -> None:
+        """把这一条存的条件原样复制成一条新集合（名字必须现取 —— 重名由仓储层拒）。"""
+        entry = self._current_collection("复制为新")
+        if entry is None:
             return
-        colls = self.ctx.collections.list()
-        coll = colls[selected]
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "复制为新集合", "新集合名:", text=f"{entry.name} 的副本")
+        if not ok or not new_name.strip():
+            return
+        try:
+            self.ctx.collection.copy_as_new(entry.id, new_name.strip())
+            self._reload_collections()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "复制为新失败", str(exc))
+
+    def delete_collection(self) -> None:
+        entry = self._current_collection("删除")
+        if entry is None:
+            return
         reply = QtWidgets.QMessageBox.question(
             self, "删除集合",
-            f"确定要删除智能集合「{coll.name}」吗？",
+            f"确定要删除智能集合「{entry.name}」吗？\n\n只删这一行保存的查询，"
+            "文档和它们的分类/标签关联一条不动。",
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             try:
-                self.ctx.collections.delete(coll.id)
+                self.ctx.collection.delete(entry.id)
                 self._reload_collections()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "删除集合失败", str(exc))

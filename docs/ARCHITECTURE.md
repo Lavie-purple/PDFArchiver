@@ -96,10 +96,18 @@ src/pdfarchiver/
                           #   `tests/integration/test_backup_restore_e2e.py` 那条端到端走的是引擎 + 仓储，
                           #   这个服务本身目前没有断言钉（挂在 **ISSUES I80** 的 D4 上）
     dedup_service.py      # 判重（阶段 4 S5）：分组口径与逐条比对。同样没有直接断言，见上面那条同款诚实边界
+    collection_service.py★ #  【**ISSUES I78** 乙】智能集合的口径层：存之前把条件读回一次（`Criteria.from_query`
+                          #   是唯一能判"这份 dict 生不生效"的人）、命中数由 SQL 数（与回放同一个 WHERE）、
+                          #   空条件当场拒；`CollectionEntry.label()` 是那一行的唯一上屏出口
   ui/                     # UI 层，只用 services/，不 import db.repositories
     nav.py★               #   导航注册表，按 SPEC 条款号登记；阶段 1 唯一的"界面知识"
     main_window.py★       #   外壳：左导航 + 右堆叠页 + 状态栏；关窗真关连接并留对账行
     table_layout.py★      #   列宽口径的唯一出处（内容宽 + 实测 23px 内边距；八张表都走它，**ISSUES I54**）
+    catalog_links.py★     #   S1 表格底下那排「归入分类 / 加标签 / 移除标签」（**ISSUES I78** 甲）：
+                          #   目标清单就地展开、id 只走 `QAction.setData`、回执那句由仓储层给
+    library_rows.py★      #   S1 中栏那张表的行与右栏详情怎么从一份文档摊出来（**ISSUES I78** 甲拆出）
+    collection_bar.py★    #   S1 顶栏那一排筛选 chips + 「存为智能集合 / 覆盖此集合」（**ISSUES I78** 乙）：
+                          #   界面状态就是那份能直接进 `query_json` 的 dict，不 import `Criteria`
     theme.py★             #   浅色/暗色两套令牌 + QSS 装配；占位色这类只能走 QPalette 的属性见 **ISSUES I50**
     format.py★            #   界面文本格式化；时间串一律来自 `status_service.format_ts`（守卫第 7 条）
     tier.py★              #   1024 档降级（D-039/D-040）

@@ -23,7 +23,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from pdfarchiver.db.models import Document
 from pdfarchiver.db.repositories.documents import DocFilter, DocumentRepository, SORTS
@@ -78,6 +79,24 @@ BODY_SOURCE_LABELS = {
 }
 
 
+#: 智能集合要存的那批筛选字段 —— 逐条沿用 `docs/UI-WIREFRAMES.md` §S1 乙 那张表
+#: （线框 `docs/wireframes/2026-10-19-round14-i67-i78.html` §I78-yi 点名「字段沿用」）。
+#: `text` / `in_fields` / `sort` / `limit` / `offset` **故意不在内**：集合存的是"筛选条件"，
+#: 检索词与分页排序是"这一次怎么看"，把后者存进集合等于把一次查询的偶然状态固化成永久条件
+#: —— 回放时用户会看到自己上次滚到第几页。
+#: 这份清单同时就是 `collections.query_json` 的键集合，所以 `ui/collection_bar.py` 里那份
+#: 条件文案表（`CONDITIONS`）必须与它同一批字段；漂移由
+#: `test_筛选条这张表与集合能存的字段同一批` 钉住（界面无从 import 本模块，只能这样对）。
+QUERY_FIELDS: tuple[str, ...] = (
+    "category_ids", "tag_ids", "tag_match_all", "root_key",
+    "modified_from", "modified_to", "fts_status",
+    "min_pages", "min_size_bytes", "missing_only",
+)
+_TUPLE_FIELDS = frozenset({"category_ids", "tag_ids"})
+_BOOL_FIELDS = frozenset({"tag_match_all", "missing_only"})
+_TEXT_FIELDS = frozenset({"root_key", "fts_status"})
+
+
 @dataclass(frozen=True)
 class Criteria:
     """一次检索的完整输入。字段类型全是内置值 —— UI 层不许 import `db`，
@@ -124,6 +143,56 @@ class Criteria:
             raise ValueError(f"偏移不能为负，收到 {self.offset}")
         if self.missing_only and self.include_missing:
             raise ValueError("missing_only（只看缺失）与 include_missing（包含缺失）含义相反，不能同时要")
+
+    def to_query(self) -> dict[str, object]:
+        """筛选条件 → 可以直接 `json.dumps` 的字典（智能集合的 `query_json` 存的就是这份东西）。
+
+        tuple 落成 list 是 JSON 的形状，读回来由 `from_query` 还原成 tuple，所以往返两端
+        看到的仍是同一个 `Criteria`（线框 §I78-yi 硬断言 (b)）。
+        """
+        query: dict[str, object] = {}
+        for name in QUERY_FIELDS:
+            value = getattr(self, name)
+            query[name] = list(value) if isinstance(value, tuple) else value
+        return query
+
+    @classmethod
+    def from_query(cls, query: Mapping[str, object]) -> "Criteria":
+        """`query_json` 反序列化回 `Criteria` —— 与 `to_query` 共用上面那一份字段表，没有第二种格式。
+
+        认不出的键**当场拒**：这里出现一个不在 `QUERY_FIELDS` 里的键，要么是有人手写过集合，
+        要么格式已经变了；咽下去的结果是"存了一条根本不生效的条件"—— 屏幕上那句条件写着
+        筛过，库里一条 WHERE 都没有（**ISSUES I11**「界面不许伪装」在数据侧的版本）。
+        """
+        unknown = sorted(set(query) - set(QUERY_FIELDS))
+        if unknown:
+            raise ValueError(f"查询条件里有不认识的键 {unknown}；能存的只有 {list(QUERY_FIELDS)}")
+        fields: dict[str, object] = {}
+        for name in QUERY_FIELDS:
+            value = query.get(name)
+            if value is None:
+                continue          # 缺键与显式 null 都是"这一条不设条件"，落回 dataclass 的默认值
+            if name in _TUPLE_FIELDS:
+                if not isinstance(value, (list, tuple)):
+                    raise ValueError(f"{name} 要是一串分类/标签 id，收到 {value!r}")
+                fields[name] = tuple(int(item) for item in value)
+            elif name in _BOOL_FIELDS:
+                fields[name] = bool(value)
+            elif name in _TEXT_FIELDS:
+                fields[name] = str(value)
+            else:
+                fields[name] = int(value)     # 时间秒 / 页数 / 字节数
+        return cls(**fields)      # type: ignore[arg-type]
+
+    def browse_page(self, offset: int = 0) -> "Criteria":
+        """把一条筛选条件变成"库里那一列"的第 N 批。
+
+        三个强制项都是浏览的形状而不是检索的形状：没有查询词、按名字序（批与批之间不重
+        不漏要靠它，见 `browse_documents`）、磁盘上已经不存在的文档也照样是库里的一条记录。
+        `missing_only` 与 `include_missing` 含义相反，所以只看缺失时后者必须关（`validate` 钉着）。
+        """
+        return replace(self, text="", sort="name", offset=offset,
+                       include_missing=not self.missing_only)
 
 
 @dataclass(frozen=True)
@@ -332,13 +401,28 @@ class SearchService:
         return self._truncate([Hit(doc=d, field=name, snippet=snippet_for(source(d), needle),
                                    page_no=None, score=0.0) for d in docs])
 
-    def search_text(self, query: str, limit: int = 100) -> SearchResult:
-        """便捷入口：UI 不需要自己构造 Criteria。"""
-        return self.search(Criteria(text=query, limit=limit))
+    def search_in(self, query: Mapping[str, object], text: str,
+                  limit: int = 100) -> SearchResult:
+        """在**已选定的筛选条件**里搜查询词（**ISSUES I78** 乙 逼出来的这一条）。
 
-    def browse_documents(self, *, category_id: int | None = None, offset: int = 0,
-                         total: int | None = None) -> SearchResult:
+        它替掉了原先的 `search_text(query, limit)`：那条造出的 `Criteria` 一条筛选都不带，
+        有了 S1 那排 chips 之后就会变成"屏幕上写着「分类 = 合同」、结果里出来别的分类"——
+        界面宣称它在筛，其实没筛（**ISSUES I11** 那一类）。`query` 传 `{}` 就是它原来的行为，
+        所以这是一次改名加一个参数，不是一条新能力。
+
+        条件与检索词在这里合成**一个** `Criteria`，四条通道于是仍然共用
+        `documents.where_for_filter` 编译出的那一份 WHERE（本模块开头第 1 条规矩）。
+        """
+        return self.search(replace(Criteria.from_query(query), text=text, limit=limit))
+
+    def browse_documents(self, *, query: Mapping[str, object] | None = None,
+                         offset: int = 0, total: int | None = None) -> SearchResult:
         """浏览库里那一列（没有查询词）—— 与 `search_text` 并列的便捷入口，同样不让 UI 自己造 Criteria。
+
+        `query` 就是智能集合存的那份筛选条件（**ISSUES I78** 乙）：点分类树筛一类，与
+        回放一个集合，走的是同一个 `Criteria.from_query` 与同一条 SQL。原先这里是一个
+        `category_id=` 关键字参数 —— 那样"按分类筛"与"按集合存的那组条件筛"会变成两套入口、
+        两套 WHERE，而线框 §I78-yi 要的正是"读写同源"（同一份格式，与 I55 ③ 模板同一条做法）。
 
         分页单位是一批 `DEFAULT_PAGE_SIZE` 行（§S1 甲 线框那句「滚到底再取下一批 50 条」），
         排序走 `SORTS["name"]` 这**一个**口径（`d.name COLLATE NOCASE, d.id`）：批与批之间
@@ -348,9 +432,8 @@ class SearchService:
         `total` 是**第一批**返回的那个 `matching_documents`，第二批起带上它就不必每批重数全表
         （见 `search()` 的 `known_total`）；库里在这期间增删了文档，下一次 `reload()` 会重新数。
         """
-        return self.search(Criteria(
-            text="", category_ids=() if category_id is None else (category_id,),
-            sort="name", offset=offset, include_missing=True), known_total=total)
+        return self.search(Criteria.from_query(query or {}).browse_page(offset),
+                           known_total=total)
 
     def _browse(self, filters: DocFilter, criteria: Criteria) -> list[Hit]:
         sort = "name" if criteria.sort == "relevance" else criteria.sort

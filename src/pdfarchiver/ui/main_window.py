@@ -112,6 +112,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._select_by_page_id("reader")
         self._pages["reader"].open_document(doc_id, page_no=page_no)
 
+    def _play_collection(self, entry) -> None:
+        """S8 双击一条智能集合 → 切到 S1 并回放它存的那份条件（**ISSUES I78** 乙）。
+
+        条件本身由 `FilterBar.apply_query` 灌进顶栏的 chips，所以这一屏显示的排就是那条集合
+        存的排 —— 不在这里另拼一份 WHERE，也不在这儿数命中（那个数在 S8 那一行上，同一份
+        `CollectionEntry` 带过来的）。
+        """
+        self._select_by_page_id("library")
+        self._pages["library"].apply_saved(entry)
+
     # ---- 构建 ----
 
     def _build_menus(self) -> None:
@@ -155,7 +165,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if item.page_id == "monitor":
             return SettingsPage(self.ctx, cold_start_seconds=self._cold_start)
         if item.page_id == "categories":
-            return CategoriesPage(self.ctx)
+            page = CategoriesPage(self.ctx)
+            # S8 右栏双击一条集合 → 由外壳切到 S1 回放（同一个做法：页面只发信号，不认识外壳）。
+            page.play_requested.connect(self._play_collection)
+            return page
         if item.page_id == "library":
             page = LibraryPage(self.ctx)
             # 命中面板的「跳到该页」与表格双击都发这个信号；接收方在这里，页面不必知道外壳的存在。

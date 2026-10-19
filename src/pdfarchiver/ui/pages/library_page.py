@@ -34,17 +34,26 @@
 `link_categories / link_tags / unlink_tags` 的调用点：建控件的整段理由与它的四条约定在
 `ui/catalog_links.py`，本文件只负责递给它两样东西 —— 表格里点名了哪几份、状态栏那一句怎么写。
 
+搜索框底下那一排 chips（**ISSUES I78** 乙，2026-10-19，`ui/collection_bar.py`）是这一页
+**筛选条件的唯一现场**：原先这里只有一个 `_selected_category_id`，屏幕上看不见"现在到底筛了
+什么"，也没有任何地方能留下一组条件。现在点分类树改的是同一份 dict，取数走
+`ctx.search.browse_documents(query=…)` 一条路，S8 点开一条集合也只是把那份 dict 换上来
+（`apply_saved`）—— 分类浏览、条件筛选、集合回放三件事共用同一条 WHERE，不存在第二套入口。
+
 每一格里写什么、详情那一段怎么排版，在 `ui/library_rows.py`（同一份文档的"可截断列"与
 "整段文本"两种显示由那一处出，两档不会各说各话）。
 
-数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`。
+数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`、
+`AppContext.collection`（存/覆盖集合与数命中都走它，这一页不碰 `collections` 仓储）。
 """
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.services.collection_service import CollectionEntry
 from pdfarchiver.ui.catalog_links import CatalogLinkBar
+from pdfarchiver.ui.collection_bar import FilterBar
 from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
                                          detail_lines, write_document_rows)
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
@@ -130,6 +139,11 @@ class LibraryPage(QtWidgets.QWidget):
         self.clear_btn.clicked.connect(self._clear_search)
         search_lay.addWidget(self.clear_btn)
         center_lay.addLayout(search_lay)
+
+        # 筛选条（**ISSUES I78** 乙）：chips 就是这一页的筛选状态，取数只认它递下来的那份 dict。
+        self.filter_bar = FilterBar(self.ctx, on_query_changed=self._apply_query,
+                                   set_status=self._set_status)
+        center_lay.addWidget(self.filter_bar)
 
         # 文档表格
         self.doc_table = QtWidgets.QTableWidget()
@@ -267,7 +281,7 @@ class LibraryPage(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.splitter)
 
-        self._selected_category_id: int | None = None
+        self._query: dict = {}
         self._current_docs: list = []
         self._selected_doc_id: int | None = None
         # —— 浏览分页（**ISSUES I51**）——
@@ -319,23 +333,40 @@ class LibraryPage(QtWidgets.QWidget):
             items_by_path[cat.name_path] = item
         self.category_tree.expandAll()
 
-    def _on_category_clicked(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
-        self._filter_by_category(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
-
-    def _filter_by_category(self, category_id: int) -> None:
-        """宽档点树、窄档点浮层里的树，都收敛到这一个入口 —— 两档共用同一筛选口径。"""
-        self._load_documents_by_category(category_id)
-
     def _load_all_documents(self) -> None:
-        self._selected_category_id = None
-        # 浏览模式没有"当前查询"，右栏就不该留着上一次查询的命中（挂着是过期读数）。
+        """分类树那颗「显示全部」：只去掉「分类」这一条，其余 chips 留着（tooltip 写的就是它）。"""
+        self.filter_bar.drop_field("category_ids")
+
+    def _load_documents_by_category(self, category_id: int) -> None:
+        """宽档点树、窄档点浮层里的树，都收敛到这一个入口 —— 两档共用同一筛选口径。
+
+        它换掉的只有「分类」这一条：其余条件（比如「索引状态 = 待索引」）是用户自己加的，
+        点一下树就把它们清空等于替用户做了他没做的决定。
+        """
+        self.filter_bar.set_field("category_ids", [category_id])
+
+    # ---- 筛选条（**ISSUES I78** 乙）：条件只有一份 dict ----
+
+    def _apply_query(self, query: dict) -> None:
+        """筛选条递下来的新条件：存下来，然后重新起一次浏览会话。
+
+        右栏那些命中是**上一次查询**的，换了筛选口径还挂着就是过期读数（与 **ISSUES I53** ②甲
+        那条"命中面板只对当前查询负责"同一条纪律）。
+        """
+        self._query = query
         self._start_browse()
         self._clear_hits()
 
-    def _load_documents_by_category(self, category_id: int) -> None:
-        self._selected_category_id = category_id
-        self._start_browse()
-        self._clear_hits()   # 列表换成这一类的文档了，右栏留着上一次查询的命中就是过期读数
+    def apply_saved(self, entry: CollectionEntry) -> None:
+        """S8 双击一条集合 → 外壳把这条递到这里（**ISSUES I78** 乙 硬断言 (a)(d)）。
+
+        载荷是整个 `CollectionEntry` 而不是 `query` dict：那条集合叫什么、此刻命中几份，
+        与"它筛的是什么"是同一条读数的三格，分成三个参数传就会在某一格上开始各说各话。
+        """
+        self.filter_bar.apply_query(entry.query, saved=entry)
+
+    def _on_category_clicked(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+        self._load_documents_by_category(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
 
     # ---- 浏览：一批一批取（**ISSUES I51**）------------------------------------
 
@@ -362,7 +393,7 @@ class LibraryPage(QtWidgets.QWidget):
         # 叫后端跳过 `count_matching`、然后状态栏说「共 0 份文档」。第二批起才带上第一批
         # 那个读数 —— 每批重数一遍全表是 O(行数²)，见 `SearchService.search` 的 `known_total`。
         result = self.ctx.search.browse_documents(
-            category_id=self._selected_category_id, offset=len(self._current_docs),
+            query=self._query, offset=len(self._current_docs),
             total=self._browse_total or None)
         self._browse_total = result.matching_documents
         docs = [hit.doc for hit in result.hits]
@@ -401,7 +432,7 @@ class LibraryPage(QtWidgets.QWidget):
     def _do_search(self) -> None:
         query = self.search_input.text().strip()
         if not query:
-            self._load_all_documents()
+            self._apply_query(self._query)
             return
 
         if self.semantic_toggle.isChecked():
@@ -412,8 +443,8 @@ class LibraryPage(QtWidgets.QWidget):
             self._do_keyword_search(query)
 
     def _do_keyword_search(self, query: str) -> None:
-        """关键词检索：四通道（文件名/路径/元数据/正文）。"""
-        result = self.ctx.search.search_text(query, limit=100)
+        """关键词检索：四通道（文件名/路径/元数据/正文），**并且就在当前那排 chips 的条件里搜**。"""
+        result = self.ctx.search.search_in(self._query, query, limit=100)
 
         seen_ids: set[int] = set()
         docs: list[Document] = []
@@ -480,7 +511,12 @@ class LibraryPage(QtWidgets.QWidget):
         self._current_docs = docs
         self._populate_table(docs)
         self._show_semantic_hits(results)
-        self._set_status(f"语义搜索命中 {len(docs)} 份文档（最高相似度 {results[0][2]:.3f}）")
+        # 语义那条通道读的是向量库，它**不看**上面那排 chips（向量检索没有带筛选的路径，
+        # 阶段 6 的实现里 `SemanticSearchService.search` 只有一个 top_k）。屏幕上明明挂着
+        # 「分类 = 合同」却给出全库的相近文档，就是 **ISSUES I11** 那一类"界面宣称它会做它不做的事"，
+        # 所以这里把它不说清楚不行：条件还在，只是这一条通道不认。
+        note = ("｜⚠ 语义通道不看上面那排筛选条件" if self._query else "")
+        self._set_status(f"语义搜索命中 {len(docs)} 份文档（最高相似度 {results[0][2]:.3f}）{note}")
 
     # ---- 右栏：命中面板（**ISSUES I53** ②甲 / **D-052**）-----------------------
 
@@ -576,11 +612,13 @@ class LibraryPage(QtWidgets.QWidget):
             self.open_in_reader.emit((int(doc_id), None))
 
     def _clear_search(self) -> None:
+        """搜索行那颗「清除」只管**查询词**：清掉之后中栏回到当前条件下那一列。
+
+        它不动 chips —— 清掉查询词与撤掉筛选条件是两件事，后者是 chips 上那枚 × 和「清除全部」，
+        一处按钮干两件事的话，用户下一次不敢按。
+        """
         self.search_input.clear()
-        if self._selected_category_id is not None:
-            self._load_documents_by_category(self._selected_category_id)
-        else:
-            self._load_all_documents()
+        self._apply_query(self._query)
 
     def _populate_table(self, docs: list[Document]) -> None:
         """一次性灌一张**有上限**的命中表（关键词 ≤100 行 / 语义 ≤50 行，上限都在调用方那里）。
@@ -727,9 +765,11 @@ class LibraryPage(QtWidgets.QWidget):
         self.ai_classify_btn.setEnabled(True)
 
     def reload(self) -> None:
-        """刷新数据。"""
+        """刷新数据：分类字典重取（S8 可能改过名、新建过），chips 的文案跟着重画。
+
+        条件本身一条不动 —— 「刷新」不该把用户筛好的那排 chips 抹掉，那样中栏会突然变成全库，
+        而屏幕上没有一个字解释为什么。
+        """
         self._reload_categories()
-        if self._selected_category_id is not None:
-            self._load_documents_by_category(self._selected_category_id)
-        else:
-            self._load_all_documents()
+        self.filter_bar.refresh()
+        self._apply_query(self._query)

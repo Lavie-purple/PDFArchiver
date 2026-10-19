@@ -30,7 +30,14 @@ class CollectionRepository:
         self.engine = engine
 
     def add(self, name: str, query: dict, note: str | None = None) -> Collection:
-        """新建智能集合。query 必须是可 JSON 序列化的字典。"""
+        """新建智能集合。query 必须是可 JSON 序列化的字典。
+
+        `updated_at` 必须一起写：那一列是 `NOT NULL`（0001 建表时就这么定的），而这一句此前
+        只写 `created_at` —— 于是**每一次新建集合都以 `sqlite3.IntegrityError` 失败**。
+        「产品里从来没有人存过一条集合」原来有两层：界面产生不出条件，仓储层这一插就崩。
+        轮十四 C 的第一条测试（`tests/integration/test_saved_search_ui.py`，坏法在
+        `tests/probes/p21_saved_search_injection.py` 的 h1）当场把它撞红。
+        """
         name = name.strip()
         if not name:
             raise DatabaseError("集合名不能为空", ValueError("空集合名"))
@@ -39,8 +46,9 @@ class CollectionRepository:
         ts = now_ts()
         with self.engine.transaction(conn, on_error=f"新建集合 {name} 失败"):
             cur = conn.execute(
-                "INSERT INTO collections(name, query_json, note, created_at) VALUES(?,?,?,?)",
-                (name, query_json, note, ts))
+                "INSERT INTO collections(name, query_json, note, created_at, updated_at)"
+                " VALUES(?,?,?,?,?)",
+                (name, query_json, note, ts, ts))
         return Collection(id=cur.lastrowid, name=name, query_json=query_json, note=note, created_at=ts)
 
     def list(self) -> list[Collection]:
@@ -63,7 +71,8 @@ class CollectionRepository:
             raise DatabaseError("集合名不能为空", ValueError("空集合名"))
         conn = self.engine.thread_connection()
         with self.engine.transaction(conn, on_error=f"改名集合 {collection_id} 失败"):
-            conn.execute("UPDATE collections SET name=? WHERE id=?", (new_name, collection_id))
+            conn.execute("UPDATE collections SET name=?, updated_at=? WHERE id=?",
+                         (new_name, now_ts(), collection_id))
         return self.get(collection_id)
 
     def update_query(self, collection_id: int, query: dict) -> Collection:
@@ -71,7 +80,8 @@ class CollectionRepository:
         query_json = json.dumps(query, ensure_ascii=False, sort_keys=True)
         conn = self.engine.thread_connection()
         with self.engine.transaction(conn, on_error=f"更新集合 {collection_id} 失败"):
-            conn.execute("UPDATE collections SET query_json=? WHERE id=?", (query_json, collection_id))
+            conn.execute("UPDATE collections SET query_json=?, updated_at=? WHERE id=?",
+                         (query_json, now_ts(), collection_id))
         return self.get(collection_id)
 
     def delete(self, collection_id: int) -> None:

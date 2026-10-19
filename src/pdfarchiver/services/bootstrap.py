@@ -46,6 +46,7 @@ from pdfarchiver.semantic.embedding import EmbeddingService
 from pdfarchiver.semantic.vector_store import VectorStore
 from pdfarchiver.services.archive_service import ArchiveService
 from pdfarchiver.services.backup_service import BackupService
+from pdfarchiver.services.collection_service import CollectionService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
 from pdfarchiver.services.dedup_service import DedupService
 from pdfarchiver.services.index_service import IndexService
@@ -92,8 +93,13 @@ class AppContext:
     """一次启动的全部运行时依赖。UI 只认这个对象，不自己拼路径、不自己开连接。
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
-    `patrol` / `archive` 这几个字段（`archive` 是阶段 4 的归档与撤销入口）和 `background_state()`、
-    `register_root()`、`unregister_root()`；仓储对象是给服务层和测试用的，界面直取等于绕过依赖方向。
+    `semantic_search` / `ai_classify` / `ocr` / `vector` / `dedup` / `backup` / `collection` /
+    `patrol` / `archive` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
+    `collection` 是 **ISSUES I78** 乙的智能集合入口）和 `background_state()`、
+    `register_root()`、`unregister_root()`；`documents` / `catalog` / `collections` / `roots` /
+    `jobs` / `texts` / `metadata` / `app_settings` / `operations` 是仓储对象，本该是给服务层和测试用的，
+    但今天界面确实在直接取其中几个（S1/S8 读 `ctx.catalog` 的分类标签清单、S7 读 `ctx.roots` 的根表）——
+    这一条现状写在这里而不是装作已经收干净，新写的读数一律优先走上面那些服务字段。
     `queue` / `watch` / `events` 是**私有运行时**，
     界面要那三样的数字就走 `background_state()`，不许自己摸线程对象 —— 所以登记/移除监测根走上面
     那两个方法而不是 `ctx.roots` 加 `ctx.watch`：漏掉 `watch()` 的话新登记的根**从此只有周期校验
@@ -133,6 +139,7 @@ class AppContext:
     archive: ArchiveService
     dedup: DedupService
     backup: BackupService
+    collection: CollectionService
     patrol: Patrol
     events: EventBuffer
     bootstrap_seconds: float
@@ -287,6 +294,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     archive = ArchiveService(operations, documents, paths, catalog, jobs)
     dedup = DedupService(documents, jobs)
     backup = BackupService(paths, engine)
+    collection = CollectionService(collections, documents)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
 
@@ -317,5 +325,6 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       scan=scan, indexer=indexer, search=search,
                       semantic_search=semantic_search, ai_classify=ai_classify,
                       ocr=ocr, vector=vector, archive=archive,
-                      dedup=dedup, backup=backup, patrol=patrol, events=events,
+                      dedup=dedup, backup=backup, collection=collection,
+                      patrol=patrol, events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

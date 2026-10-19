@@ -497,6 +497,26 @@ QPushButton#clearBtn:disabled {{
     color: {c.btn_disabled_text};
 }}
 
+/* ===== 筛选 chips（S1 顶栏那一排，**ISSUES I78** 乙）=====
+   底取 card_bg 而不是再造一个"chip 专用灰"：chip 上的字是 `QLabel#muted`（= text_secondary），
+   (text_secondary × card_bg) 与 (text_primary × card_bg) 两主题都在 `test_theme_contrast` 的
+   live_pairs 里量过。再加一档只在某个底上才成立的灰，就是 **ISSUES I74** 那个"同一个色在两个底上
+   结论不一样"的重演。 */
+QFrame#filterChip {{
+    background-color: {c.card_bg};
+    border: 1px solid {c.card_border};
+    border-radius: 9px;
+}}
+QToolButton#chipRemove {{
+    color: {c.text_secondary};
+    background-color: transparent;
+    border: none;
+    padding: 0 2px;
+}}
+QToolButton#chipRemove:hover {{
+    color: {c.text_primary};
+}}
+
 /* ===== 复选框 ===== */
 QCheckBox {{
     color: {c.text_secondary};
