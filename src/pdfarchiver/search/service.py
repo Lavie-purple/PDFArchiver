@@ -361,8 +361,9 @@ class SearchService:
                  filters: DocFilter) -> tuple[list[Hit], bool, bool]:
         """返回 (命中, 被 `CHANNEL_LIMIT` 截断, 被 `LIKE_SCAN_ROWS` 浅扫)。
 
-        第三条只有正文的 LIKE 通道可能为真：另外三条扫的是 `documents`（现库 10,980 行）与
-        `document_metadata`，量级比正文小两个数量级，给它们设预算是凭空砍召回（**D-051** 只改正文）。
+        第三条只有正文的 LIKE 通道可能为真：另外三条扫的是 `documents`（**2026-10-20 现读 10,977 行**，
+        清掉 **ISSUES I95** 那三条手写演示数据之后；此前 10,980）与 `document_metadata`，
+        量级比正文小两个数量级，给它们设预算是凭空砍召回（**D-051** 只改正文）。
         """
         if name == FIELD_FILENAME:
             return (*self._from_docs(self.documents.field_hits(
