@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>轮十四线框 · I67 + I78 · 2026-10-19</title>
+<style>
+  :root {
+    --ink: #111;
+    --mid: #666;
+    --faint: #b0b0b0;
+    --hair: #dcdcdc;
+    --wash: #f4f4f4;
+    --bg: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1160px;
+    margin: 40px auto 80px;
+    padding: 0 28px;
+    line-height: 1.65;
+    font-size: 14px;
+  }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 24px; }
+  header h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 1px; }
+  header .sub { color: var(--mid); font-size: 13px; }
+  nav.toc {
+    border: 1px solid var(--ink);
+    padding: 10px 14px;
+    margin: 18px 0 32px;
+    font-size: 13px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 24px;
+  }
+  nav.toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--mid); }
+  nav.toc a:hover { border-bottom-style: solid; }
+
+  section { margin-top: 44px; }
+  section > h2 {
+    font-size: 20px;
+    border-left: 4px solid var(--ink);
+    padding-left: 10px;
+    margin: 0 0 6px;
+  }
+  section > .issue-original {
+    color: var(--mid);
+    font-size: 13px;
+    padding-left: 14px;
+    border-left: 3px solid var(--faint);
+    margin: 8px 0 20px;
+  }
+  section > .issue-original b { color: var(--ink); }
+
+  article.option {
+    border: 1px solid var(--ink);
+    padding: 0;
+    margin: 22px 0 26px;
+    background: var(--bg);
+  }
+  article.option > .head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--ink);
+    background: var(--wash);
+  }
+  article.option > .head .tag {
+    display: inline-block;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--bg);
+    font-size: 11px;
+    padding: 1px 8px;
+    letter-spacing: 2px;
+    font-weight: 700;
+  }
+  article.option > .head .tag.alt { background: var(--bg); color: var(--ink); }
+  article.option > .head .name { font-size: 15px; font-weight: 700; }
+  article.option > .head .screen { color: var(--mid); font-size: 12px; margin-left: auto; font-family: ui-monospace, Consolas, monospace; }
+  article.option > .head .rec {
+    font-size: 11px;
+    padding: 1px 8px;
+    border: 1px dashed var(--mid);
+    color: var(--mid);
+    margin-left: 8px;
+  }
+  article.option > .head .rec.on { border-style: solid; color: var(--ink); border-color: var(--ink); }
+
+  article.option > .body { padding: 14px; }
+  article.option > .body p { margin: 0 0 12px; }
+
+  /* 线框容器 */
+  .wireframe {
+    border: 1px dashed var(--ink);
+    padding: 14px;
+    margin: 6px 0 16px;
+    background: var(--bg);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .wireframe > .wf-caption {
+    font-family: inherit;
+    color: var(--mid);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+
+  /* 三栏 S1/S8 通用 */
+  .three-col {
+    display: grid;
+    grid-template-columns: 200px 1fr 240px;
+    gap: 8px;
+    min-height: 220px;
+  }
+  .three-col.two-col { grid-template-columns: 200px 1fr; }
+  .panel {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .panel-title {
+    border-bottom: 1px solid var(--ink);
+    padding-bottom: 3px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .grow { flex: 1; min-width: 0; }
+  .muted { color: var(--mid); }
+  .fake-input {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    padding: 3px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--mid);
+    flex: 1;
+  }
+  .fake-input::before { content: ""; }
+  .btn {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    padding: 3px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .btn.primary { background: var(--ink); color: var(--bg); }
+  .btn.disabled { color: var(--faint); border-color: var(--faint); }
+  .btn.sm { padding: 1px 6px; font-size: 11px; }
+
+  .tree-line { padding: 1px 0; }
+  .tree-line.indent { padding-left: 14px; color: var(--mid); }
+  .tree-line.sel { background: var(--ink); color: var(--bg); padding-left: 4px; }
+  .tree-line.sel.indent { padding-left: 18px; }
+
+  .doc-table { border: 1px solid var(--ink); }
+  .doc-table > .tr {
+    display: grid;
+    grid-template-columns: 24px 1fr 60px 60px 60px;
+    gap: 6px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--hair);
+    font-size: 11.5px;
+    align-items: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .doc-table > .tr:last-child { border-bottom: none; }
+  .doc-table > .tr.h { background: var(--wash); color: var(--mid); font-weight: 700; }
+  .doc-table > .tr.cur { border-left: 3px solid var(--ink); padding-left: 3px; }
+  .doc-table > .tr.mark { background: var(--wash); }
+  .doc-table > .tr .check { font-family: inherit; }
+
+  .status-bar {
+    border-top: 1px solid var(--ink);
+    padding: 6px 8px;
+    background: var(--wash);
+    font-size: 11.5px;
+    color: var(--ink);
+    margin-top: 6px;
+  }
+
+  .popup {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    padding: 10px;
+    margin-top: 8px;
+    box-shadow: 4px 4px 0 var(--hair);
+  }
+  .popup .p-title {
+    font-weight: 700;
+    border-bottom: 1px solid var(--ink);
+    padding-bottom: 3px;
+    margin-bottom: 8px;
+  }
+  .popup .skip-item { padding: 3px 0; }
+  .popup .skip-item > .count { color: var(--mid); margin-left: 4px; }
+  .popup .skip-item > .files { color: var(--mid); font-size: 11px; padding-left: 12px; }
+  .kv-line { padding: 3px 0; font-size: 11.5px; }
+  .kv-line .k { display: inline-block; min-width: 90px; color: var(--mid); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    padding: 1px 8px;
+    font-size: 11px;
+  }
+  .chip .x { color: var(--mid); margin-left: 6px; }
+
+  .context-menu {
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    display: inline-block;
+    padding: 4px 0;
+    min-width: 180px;
+    box-shadow: 3px 3px 0 var(--hair);
+    margin: 4px 0;
+  }
+  .context-menu .mi { padding: 3px 12px; font-size: 11.5px; }
+  .context-menu .mi.hi { background: var(--ink); color: var(--bg); }
+  .context-menu .sep { border-top: 1px solid var(--hair); margin: 3px 0; }
+
+  .form-row { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 4px 0; align-items: center; }
+  .form-row > .label { font-size: 12px; }
+  .radios { display: inline-flex; gap: 14px; font-size: 12px; }
+  .radios span.on { font-weight: 700; }
+  .radios span::before { content: "○  "; }
+  .radios span.on::before { content: "●  "; }
+  .checkboxes { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+  .checkboxes label { display: inline-flex; align-items: center; gap: 4px; }
+  .checkboxes input { margin: 0; }
+  .warn { color: var(--ink); background: var(--wash); padding: 0 6px; font-size: 11px; border: 1px dashed var(--mid); }
+
+  table.facts {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin: 12px 0 4px;
+  }
+  table.facts th, table.facts td {
+    border: 1px solid var(--faint);
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.facts th { background: var(--wash); font-weight: 700; width: 150px; }
+  table.facts code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    background: var(--wash);
+    padding: 1px 4px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--ink);
+    padding: 8px 12px;
+    margin: 12px 0 4px;
+    background: var(--wash);
+    font-size: 12.5px;
+  }
+  .callout .lead { font-weight: 700; margin-right: 4px; }
+
+  .decision-box {
+    border: 1px solid var(--ink);
+    padding: 10px 14px;
+    margin: 8px 0 0;
+    font-size: 13px;
+  }
+  .decision-box .q { font-weight: 700; margin-bottom: 4px; }
+  .decision-box .opt { margin-left: 16px; padding: 1px 0; }
+  .decision-box .opt::before { content: "☐  "; }
+
+  footer {
+    margin-top: 56px;
+    border-top: 2px solid var(--ink);
+    padding-top: 16px;
+    color: var(--mid);
+    font-size: 12.5px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>轮十四线框 · I67 + I78</h1>
+  <div class="sub">
+    2026-10-19 · <b>本轮不写一行界面代码</b>（AGENTS.md 线框闸门在场）。
+    本页把 I67 的两案（已存在于 <code>docs/UI-WIREFRAMES.md §W-OCR</code>）与 I78 的四案（新画）装进同一屏，
+    方便你逐案勾选。每案下方有可断言硬条件与相关条 issue。
+  </div>
+</header>
+
+<nav class="toc">
+  <span><b>I67 · OCR 界面入口</b></span>
+  <a href="#I67-jia">甲 · 就地点名</a>
+  <a href="#I67-yi">乙 · 批量点名面板</a>
+  <a href="#I67-hook">W-OCR 三条待勾</a>
+  <span><b>I78 · 阶段 3 SPEC 四项写路径</b></span>
+  <a href="#I78-jia">甲 · 文档↔分类/标签 + 批量打标签</a>
+  <a href="#I78-yi">乙 · 智能集合保存筛选</a>
+  <a href="#I78-bing">丙 · 分类清单导出</a>
+  <a href="#I78-ding">丁 · 只入账不做</a>
+</nav>
+
+<!-- ==================================================================== -->
+<section id="I67">
+  <h2>ISSUES I67 · 扫描件识别（OCR）没有界面触发入口</h2>
+  <div class="issue-original">
+    <b>原文（docs/ISSUES.md I67）</b>：S7 只显示 O1/O2/O3 三个读数，队列必须由外部点名 ——
+    <code>services/ocr_service.py:176 request_ocr(doc_ids)</code> 在产品侧<b>零调用点</b>
+    （调用方全在 <code>gates/stage5.py:201</code> 与 <code>tests/</code>）。
+    所以「界面上勾一批扫描件让它自己认」这件事今天做不到。
+    <br><br>
+    <b>销账判定三条</b>：① 界面那个入口按下之后 <code>jobs</code> 里 <code>kind='ocr'</code> 的行数 <b>+N</b>，
+    N = 界面显示的「该跑份数」；② 被跳过的份数<b>每一类理由都能指到具体是哪几份</b>
+    （<code>OcrRequest.skipped</code> 的五类，I23 当年欠的就是这一条）；③ 预算跑满时界面可见，
+    不是只在读数里一个数字。
+  </div>
+
+  <article class="option" id="I67-jia">
+    <div class="head">
+      <span class="tag">甲</span>
+      <span class="name">就地点名</span>
+      <span class="screen">S1 · 三栏常驻 + 工具栏</span>
+      <span class="rec on">推荐 · 先落这一案</span>
+    </div>
+    <div class="body">
+      <p>入口长在<b>当前看着那一份</b>上，不新增屏、不改表格选择模式。改动面：一个按钮 + 状态条一句。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">S1 主窗口 · 库视图（三栏常驻 · 沿用 D-039/D-040 定案形状）</div>
+        <div class="three-col">
+          <div class="panel">
+            <div class="panel-title">左 · 导航 + 分类树</div>
+            <div class="tree-line">▾ 财务</div>
+            <div class="tree-line indent sel">合同</div>
+            <div class="tree-line indent">报销</div>
+            <div class="tree-line">▸ 技术</div>
+            <div class="tree-line">▸ 生活</div>
+            <div class="grow"></div>
+            <div class="tree-line muted">[S8 分类与标签管理]</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">中 · 文档表（行高统一 · SingleSelection）</div>
+            <div class="doc-table">
+              <div class="tr h"><span></span><span>标题</span><span>页数</span><span>文字层</span><span>OCR</span></div>
+              <div class="tr cur"><span>▸</span><span>扫描件 · 合同A.pdf</span><span>84</span><span>无</span><span>未跑</span></div>
+              <div class="tr"><span> </span><span>技术手册 X</span><span>212</span><span>原生</span><span>—</span></div>
+              <div class="tr"><span> </span><span>发票 2026-03</span><span>1</span><span>无</span><span>已跑 v3</span></div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <button class="btn">打开文档 → S2</button>
+              <button class="btn primary">送去识别</button>
+              <span class="muted">← 单份，只吃 <code>currentRow</code></span>
+            </div>
+            <div class="status-bar">
+              已排队 <b>1</b> 份 · 理由：无跳过 · 今日预算 已用 <b>512</b> / 剩 <b>5,488</b> 页
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">右 · 命中面板 / 单文档四种状态</div>
+            <div class="tree-line muted">（I53 ② 定案的形状，本轮不动）</div>
+          </div>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>控件 → 后端</th><td>「送去识别」按钮 → <code>ctx.ocr.request_ocr([doc_id])</code>；<b>产品里第一次</b>有 <code>request_ocr</code> 的调用点。</td></tr>
+        <tr><th>状态条三个数</th><td>取 <code>OcrRequest.named / queueable / enqueued</code> 与 <code>budget.describe()</code>；界面<b>不许</b>自己数第六种跳过理由。</td></tr>
+        <tr><th>硬断言</th><td>未选中行时按钮 <code>:disabled</code>；按下后 <code>jobs</code> 里 <code>kind='ocr'</code> 的行数 <b>+1 或 +0</b>，且 +0 时状态条必须出现理由（I67 销账判定①）。</td></tr>
+        <tr><th>红线</th><td>状态条那句里<b>没有</b>「整库还剩 x%」这种读数（沿用 <code>docs/UI-SCREENS.md</code> 第五节 I23 那条）。</td></tr>
+        <tr><th>1024×720</th><td>按钮与状态条都在同一行，无降级；只是状态句变两行，行高由 <code>sizeHint</code> 决定，不写死。</td></tr>
+        <tr><th>与其他条的关系</th><td>不新增屏 · 不改表格选择模式 · 与 I51 虚拟化不纠缠；<b>S7 上半区</b>既有的 O1/O2/O3 三读数继续承载进度与跑满即停。</td></tr>
+      </table>
+    </div>
+  </article>
+
+  <article class="option" id="I67-yi">
+    <div class="head">
+      <span class="tag">乙</span>
+      <span class="name">批量点名面板</span>
+      <span class="screen">S1 · 表改多选 + 就地展开批次面板</span>
+      <span class="rec">推荐 · 甲之后作为第二步</span>
+    </div>
+    <div class="body">
+      <p>入口长在<b>筛选结果</b>上：选中 N 份 → 展开面板显示「该跑 / 不跑」与五类跳过理由，逐类可展开到具体文件。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">S1 · 表格改 ExtendedSelection + 就地批次面板（不是模态框）</div>
+        <div class="three-col two-col" style="grid-template-columns: 200px 1fr;">
+          <div class="panel">
+            <div class="panel-title">左 · 导航 + 分类树</div>
+            <div class="tree-line indent sel">合同</div>
+            <div class="tree-line indent">报销</div>
+            <div class="tree-line">▸ 技术</div>
+            <div class="tree-line">▸ 生活</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">中 · 文档表（选中 12 份 · Ctrl/Shift 多选）</div>
+            <div class="doc-table">
+              <div class="tr h"><span></span><span>标题</span><span>页数</span><span>文字层</span><span>OCR</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>扫描件 · 合同A.pdf</span><span>84</span><span>无</span><span>未跑</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>扫描件 · 合同B.pdf</span><span>126</span><span>无</span><span>未跑</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>扫描件 · 合同C.pdf</span><span>44</span><span>无</span><span>未跑</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>扫描件 · 合同D.pdf</span><span>201</span><span>无</span><span>未跑</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>扫描件 · 合同E.pdf</span><span>88</span><span>无</span><span>已跑 v3</span></div>
+              <div class="tr"> <span class="check">☐</span><span>技术手册 X</span><span>212</span><span>原生</span><span>—</span></div>
+              <div class="tr muted"> … 其余 7 行选中略 … </div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <button class="btn primary">送去识别（选中 12 份）</button>
+              <span class="muted">← 表格 setSelectionMode 从 Single 改 Extended</span>
+            </div>
+
+            <div class="popup">
+              <div class="p-title">识别批次面板（就地展开）</div>
+              <div class="kv-line"><span class="k">点名</span><b>12</b> 份 ｜ <span class="k">该跑</span><b>7</b> 份 ｜ <span class="k">不跑</span><b>5</b> 份</div>
+              <div class="skip-item">├ 判过不需要 OCR<span class="count">（2）</span>
+                <div class="files">技术手册 X（有原生层）、年报 Y（已判过 SKIP_NOT_NEEDED）… <button class="btn sm">展开</button></div>
+              </div>
+              <div class="skip-item">├ 已是当前版本<span class="count">（2）</span>
+                <div class="files">扫描件 合同E（v3 当前）、扫描件 合同F（v3 当前）… <button class="btn sm">展开</button></div>
+              </div>
+              <div class="skip-item">├ 文字层还没判定<span class="count">（1）</span>
+                <div class="files">扫描件 合同G（还没进 indexing）… <button class="btn sm">展开</button></div>
+              </div>
+              <div class="skip-item">├ 主记录不在了<span class="count">（0）</span></div>
+              <div class="skip-item">├ 今日页预算跑满<span class="count">（0）</span></div>
+              <div class="kv-line" style="border-top:1px solid var(--hair); padding-top:6px;">
+                <span class="k">今日预算</span>剩 5,488 页 ≈ 还能跑 <b>65</b> 份 84 页的文档
+              </div>
+              <div class="kv-line"><span class="k">代价</span>预计 <b>7 份 × 84 页 × 2.0–5.8s/页</b>（区间是读数不是承诺）</div>
+              <div class="row" style="margin-top:8px;">
+                <button class="btn primary">排队</button>
+                <button class="btn">取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>选中份数</th><td><code>doc_table.selectionModel().selectedRows()</code>；表格 <code>setSelectionMode</code> 必须是 <code>ExtendedSelection</code>（今天 <code>library_page.py:153</code> 是 Single）。<b>与 I51 虚拟化纠缠</b>：选中集合跨视口仍成立。</td></tr>
+        <tr><th>该跑 / 不跑两份数</th><td><code>OcrRequest.named / queueable</code>，<b>由服务算</b>，界面不判 <code>ocr_ready</code>、不比版本号。<code>该跑 + Σ各类不跑 == 点名份数</code>；任何一类都不许被折叠成一个总数。</td></tr>
+        <tr><th>每类展开的具体文件</th><td><code>OcrRequest.skipped[reason]</code> 的 <code>doc_id</code> 反查标题 —— 直接落 <b>I67 销账判定②</b>：五类理由<b>每一类都能指到是哪几份</b>。</td></tr>
+        <tr><th>「还没排队」时的预算行</th><td><code>budget.describe()</code> + <code>settings["ocr_daily_page_budget"]</code>；预算耗尽时「排队」按钮按下去必须原样回 <code>SKIP_BUDGET</code>，<b>不许静默</b>（I67 销账判定③）。</td></tr>
+        <tr><th>与其他条的关系</th><td>I51 表格虚拟化（改多选是它的前置之一）· I69 丙「两个口径」<b>禁</b> —— 估算归服务算 · I23「跑满即停」上屏 —— 与 S7 那三个读数分工。</td></tr>
+      </table>
+
+      <div class="callout">
+        <span class="lead">取舍：</span>甲服务「一份一份看」；乙服务「我想把这 300 份扫描件都认了」这种批量意图。
+        <b>两案的回执形状必须同一条</b>：份数与理由一律取 <code>OcrRequest</code>，界面不重算。
+        如果只选一案，选<b>甲</b>—— 它今天就能把 <code>request_ocr</code> 从「零调用点」变成「有调用点」。
+      </div>
+    </div>
+  </article>
+
+  <article class="option" id="I67-hook">
+    <div class="head">
+      <span class="tag alt">钩</span>
+      <span class="name">W-OCR 三条待勾（沿用 docs/UI-WIREFRAMES.md 已定编号）</span>
+      <span class="screen">§W-OCR 尾</span>
+    </div>
+    <div class="body">
+      <div class="decision-box">
+        <div class="q">1. 入口形状</div>
+        <div class="opt">甲 · 单份，S1 当前行 + S2 工具栏同一句动作</div>
+        <div class="opt">乙 · 多选 + 批次面板</div>
+        <div class="opt">甲先乙后（<b>我推荐这一档</b>）</div>
+      </div>
+      <div class="decision-box">
+        <div class="q">2. 跳过理由上屏的粒度</div>
+        <div class="opt">甲 · 四类各一行，能展开到份名（<b>我推荐，这是 I67 销账判定②</b>）</div>
+        <div class="opt">乙 · 只报「跳过 5 份」+ 一句汇总，展开留给日志</div>
+      </div>
+      <div class="decision-box">
+        <div class="q">3. 要不要在 S7 加「批量重跑未识别扫描件」这一档</div>
+        <div class="opt">甲 · 不加，S7 只读数（<b>我推荐</b>）</div>
+        <div class="opt">乙 · 加一个「全部未跑的都排进队列」按钮，受当日预算闸门约束。<b>不推荐</b>：把 169 天这件事藏在一个点击后面。</div>
+      </div>
+    </div>
+  </article>
+</section>
+
+<!-- ==================================================================== -->
+<section id="I78">
+  <h2>ISSUES I78 · 阶段 3 SPEC 四项写路径在产品里没有</h2>
+  <div class="issue-original">
+    <b>原文（docs/ISSUES.md I78）</b>：SPEC 阶段 3 的验收条目「分类和标签能够持久化」「智能集合可根据保存的查询条件返回真实结果」在产品路径上做不到 ——
+    用户能建分类、建标签、建集合，却<b>没有任何一处能把一份文档归进去</b>。
+    <br><br>
+    四项缺法（本轮现测，非引用旧结论）：
+    ① <code>CatalogRepository.link_category / link_tag / unlink_tag</code> 在 <code>src/</code> 下<b>零调用点</b>，S1 的分类列与标签行读的是永远为空的关联表；
+    ② 批量打标签 —— 全仓（含界面）无一处；
+    ③ 智能集合 —— <code>add_collection()</code> 建出来的集合 <code>query</code> 恒为 <code>{}</code>，<code>CollectionRepository.update_query</code> 零调用点，选中一个集合不改变库视图的任何筛选；
+    ④ 分类清单导出 —— <code>src/</code> 里没有任何导出路径。
+    <br><br>
+    <code>gates/stage3.py</code> 全绿与此不冲突 —— 它判的是检索/回归/守卫，SPEC 那两条今天<b>一条断言都没有</b>。
+  </div>
+
+  <article class="option" id="I78-jia">
+    <div class="head">
+      <span class="tag">甲</span>
+      <span class="name">补「文档 ↔ 分类 / 标签」写路径 + 批量打标签</span>
+      <span class="screen">S1 表格 + 工具栏浮层 + S8 左树右键</span>
+      <span class="rec on">推荐 · 至少落这一案（这是 I78 ① ② 两条的<b>唯一</b>解）</span>
+    </div>
+    <div class="body">
+      <p>S1 表格多选（与 I67 乙 是同一改动），工具栏加「归入分类 ▾」「加标签 ▾」「移除标签 ▾」；
+      浮层就地展开目标树/标签清单；S8 左分类树补 <b>改父类 / 与…合并</b>两个右键动作（当前 <code>reparent_category</code> 与 <code>merge_categories</code> 在产品里也是零调用点）。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">S1 · 选中 3 份 → 归入分类浮层</div>
+        <div class="three-col" style="grid-template-columns: 200px 1fr 240px;">
+          <div class="panel">
+            <div class="panel-title">左 · 分类树</div>
+            <div class="tree-line">▾ 财务</div>
+            <div class="tree-line indent">合同</div>
+            <div class="tree-line indent">报销</div>
+            <div class="tree-line">▸ 技术</div>
+            <div class="tree-line">▸ 生活</div>
+            <div class="grow"></div>
+            <div class="tree-line muted">[S8 分类与标签管理]</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">中 · 文档表（选中 3 份）</div>
+            <div class="doc-table">
+              <div class="tr h"><span></span><span>标题</span><span>页数</span><span>当前分类</span><span>标签</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>合同A.pdf</span><span>84</span><span class="muted">（未分类）</span><span class="muted">—</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>合同B.pdf</span><span>126</span><span class="muted">（未分类）</span><span>草稿</span></div>
+              <div class="tr mark"><span class="check">☑</span><span>合同C.pdf</span><span>44</span><span>报销</span><span class="muted">—</span></div>
+              <div class="tr"><span class="check">☐</span><span>技术手册 X</span><span>212</span><span>技术 / 手册</span><span>参考</span></div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <button class="btn primary">归入分类 ▾</button>
+              <button class="btn">加标签 ▾</button>
+              <button class="btn">移除标签 ▾</button>
+              <span class="muted">← 三个按钮未选中时 <code>:disabled</code>（沿用 I74 三件套那一条）</span>
+            </div>
+
+            <div class="popup">
+              <div class="p-title">归入分类 · 目标选择浮层</div>
+              <div class="tree-line">▾ 财务</div>
+              <div class="tree-line indent sel">● 合同  ← 鼠标悬停/键盘选中</div>
+              <div class="tree-line indent">○ 报销</div>
+              <div class="tree-line">▸ 技术</div>
+              <div class="tree-line">▸ 生活</div>
+              <div class="tree-line">＋ 新建分类…</div>
+              <div class="kv-line muted">已选 3 份 · 归入「合同」 · <b>幂等</b>：已在合同里的重归不变</div>
+              <div class="row" style="margin-top:8px;">
+                <button class="btn primary">确定归入</button>
+                <button class="btn">取消</button>
+              </div>
+            </div>
+
+            <div class="status-bar">
+              已归入 <b>合同</b> · 3 份全部命中 · <span class="muted">其中 1 份（合同C）从「报销」改归 · 老关联已 unlink</span>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">右 · 命中面板 / 四种状态</div>
+            <div class="tree-line muted">（沿用 I53 ② 定案，本轮不动）</div>
+          </div>
+        </div>
+
+        <div style="height:14px;"></div>
+        <div class="wf-caption">S8 · 左分类树右键补 reparent / merge</div>
+        <div class="row">
+          <div class="panel" style="width:220px;">
+            <div class="panel-title">S8 · 左 · 分类树</div>
+            <div class="tree-line">▾ 财务</div>
+            <div class="tree-line indent">合同</div>
+            <div class="tree-line indent sel">报销  ← 右键</div>
+            <div class="tree-line">▸ 技术</div>
+          </div>
+          <div class="context-menu">
+            <div class="mi">重命名</div>
+            <div class="mi hi">改父类…</div>
+            <div class="mi">与…合并</div>
+            <div class="sep"></div>
+            <div class="mi">导出此分类清单…</div>
+            <div class="sep"></div>
+            <div class="mi">删除（先检查类下有无文件）</div>
+          </div>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>控件 → 后端</th><td>「归入分类」→ <code>CatalogRepository.link_category(doc_ids, category_id)</code>；「加标签」→ <code>link_tag</code>；「移除标签」→ <code>unlink_tag</code>；S8 右键「改父类」→ <b>新写</b> <code>reparent_category</code>；「与…合并」→ <b>新写</b> <code>merge_categories</code>。</td></tr>
+        <tr><th>关联表落点</th><td><code>db/repositories/catalog.py</code> 与 <code>document_categories / document_tags</code> 两张关联表（迁移 0001 里已建，只是没人调）。</td></tr>
+        <tr><th>硬断言（I78 销账判定① ②）</th><td>
+          (a) 多选 3 份归入某类 → <code>document_categories</code> 表 <b>+3 行</b>（幂等：已在类里的那份不重复加）；
+          (b) 归入后再移除：其他类关联不动；
+          (c) 打标签 → 移除 → 再打：同一 (doc, tag) 只 1 行；
+          (d) 合并两个分类：所有子文档的 <code>category_id</code> 指向目标类，源类行数归零或软删；
+          (e) 改父类：子孙树整片跟随（避免半路成孤儿）。
+        </td></tr>
+        <tr><th>与其他条的关系</th><td>S8 定案 §S8 那两条后果早就写了「<code>CatalogRepository</code> 现有 add/query/count，没有 rename/reparent/delete/merge，阶段 6 落地前要先补这四个操作」—— 甲案把 <b>reparent / merge</b> 也一起做（rename / delete 已由 S8 现有实现覆盖）· 与 I67 乙 同一次改多选，共享 I51 虚拟化约束 · 与 I53 ② 右栏「四种状态」不冲突（归入是<b>写入</b>，四种状态是<b>读数</b>）。</td></tr>
+        <tr><th>不做什么</th><td>不新增屏、不改三栏形状；「批量打标签」不放在 S8（S8 是<b>管理标签字典</b>，S1 是<b>把标签打到具体文档</b>，两者不混）。删除分类前必须先检查「该类下是否还有文件」，有则拒绝并给文件清单 —— 这是 §S8 定案的后果，不是本方案新加的约束。</td></tr>
+      </table>
+    </div>
+  </article>
+
+  <article class="option" id="I78-yi">
+    <div class="head">
+      <span class="tag">乙</span>
+      <span class="name">智能集合 = 保存的筛选条件 · 选中即回放</span>
+      <span class="screen">S1 顶栏筛选 chips + S8 右栏集合列表</span>
+      <span class="rec on">推荐 · 与甲同批（读写同源，是 I78 ③ 唯一解）</span>
+    </div>
+    <div class="body">
+      <p>S1 顶栏筛选区把当前 <code>Criteria</code>（分类 / 标签 / 时间 / 文字层状态 / 页数 / 大小 / 缺失）
+      序列化成一排 chips；旁边一个「存为智能集合」；S8 右栏集合点开 → 把集合存的 <code>query_json</code>
+      灌回 S1 顶栏（读写<b>同一份</b>序列化格式，与 I55 ③ 模板同一条做法）。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">S1 顶栏 · 当前筛选 chips + 「存为智能集合」</div>
+        <div class="panel" style="margin-bottom:8px;">
+          <div class="row">
+            <input class="fake-input" placeholder="搜索…" style="width:200px;">
+            <span class="muted">chips 区 ·← Criteria 序列化</span>
+          </div>
+          <div class="chips" style="margin-top:6px;">
+            <span class="chip">分类 = 合同<span class="x">×</span></span>
+            <span class="chip">标签 = 2026<span class="x">×</span></span>
+            <span class="chip">文字层 = 无<span class="x">×</span></span>
+            <span class="chip">修改时间 ≥ 2026-01-01<span class="x">×</span></span>
+            <span class="chip muted">＋ 添加条件 ▾</span>
+            <span class="grow"></span>
+            <button class="btn">清除全部</button>
+            <button class="btn primary">存为智能集合</button>
+            <button class="btn">另存一份</button>
+          </div>
+        </div>
+
+        <div class="wf-caption">S8 右栏 · 智能集合列表（点集合 → 回放筛选到 S1）</div>
+        <div class="three-col" style="grid-template-columns: 220px 1fr;">
+          <div class="panel">
+            <div class="panel-title">S8 左 · 分类树</div>
+            <div class="tree-line">▾ 财务 · <span class="muted">42 份</span></div>
+            <div class="tree-line indent">合同 · <span class="muted">17 份</span></div>
+            <div class="tree-line indent">报销 · <span class="muted">25 份</span></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">S8 中 · 标签 &nbsp;&nbsp;|&nbsp;&nbsp; S8 右 · 智能集合</div>
+            <div class="row">
+              <div class="grow panel" style="border-style:dashed;">
+                <div class="panel-title" style="border-bottom:1px dashed var(--hair);">标签（管理字典）</div>
+                <div class="tree-line">2026 · <span class="muted">128 份</span></div>
+                <div class="tree-line">草稿 · <span class="muted">9 份</span></div>
+                <div class="tree-line">待复核 · <span class="muted">3 份</span></div>
+              </div>
+              <div class="grow panel">
+                <div class="panel-title">智能集合（保存的查询）</div>
+                <div class="tree-line sel">▸ 合同类（回放筛选） · <span class="muted" style="color:var(--bg);">命中 17</span></div>
+                <div class="tree-line">▸ 待 OCR（文字层=无 · 未跑） · <span class="muted">命中 342</span></div>
+                <div class="tree-line">▸ 大文件（≥50MB） · <span class="muted">命中 21</span></div>
+                <div class="tree-line">＋ 存当前 S1 筛选为新集合…</div>
+                <div class="row" style="margin-top:6px;">
+                  <button class="btn sm">改名</button>
+                  <button class="btn sm">复制为新</button>
+                  <button class="btn sm">删除（不动文档）</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>控件 → 后端</th><td>「存为智能集合」→ 弹一次名称 + 备注 → <code>CollectionRepository.add(name, note, query_json=Criteria序列化)</code>；集合点开 → <code>CollectionRepository.query(id)</code> 反序列化回 <code>Criteria</code> → 灌回 S1 顶栏并触发查询；<code>update_query</code> 用于「另存一份」与「改名/改条件」。</td></tr>
+        <tr><th>Criteria ↔ query_json</th><td>chips 序列化后必须能 <code>== </code>回同一个 <code>Criteria</code>（这是「智能集合」的 <code>query_json</code> 的<b>同一份东西</b>，不写第二个格式）。字段沿用 <code>docs/UI-WIREFRAMES.md §S1 乙</code> 那张表：<code>category_ids / tag_ids / tag_match_all / modified_from / modified_to / root_key / fts_status / min_pages / min_size_bytes / missing_only</code>。</td></tr>
+        <tr><th>硬断言（I78 销账判定③）</th><td>
+          (a) 存进去 → 关集 → 打开集合：<b>筛选与结果一致</b>；
+          (b) <code>Criteria → query_json → Criteria</code> 三态往返 <code>==</code>；
+          (c) 删除集合<b>不许</b>动文档（SPEC 3.3.5：集合只存查询、不复制文件）；
+          (d) 集合命中数 = 回放筛选到 S1 后表格行数；
+          (e) <code>src/</code> 里 <code>update_query</code> 从「零调用点」变成「至少一处调用」。
+        </td></tr>
+        <tr><th>与其他条的关系</th><td>I55 ③「读写同源」的模板 → 沿用同一份做法 · §S8 定案 那条「每个集合是一条保存的查询（分类 + 标签 + 全文 + 时间范围）」—— 乙案把这句话第一次落进产品 · 与 I59 搜索通道口径不冲突（集合是筛选条件保存器，不改搜索本身）。</td></tr>
+        <tr><th>不做什么</th><td>不做「定时刷新集合」——集合是<b>保存的查询</b>，不是<b>物化视图</b>；每次点开现查。不做「共享集合 / 导出集合」——那是 I78 丙（清单导出）与远程协作另一件事。</td></tr>
+      </table>
+    </div>
+  </article>
+
+  <article class="option" id="I78-bing">
+    <div class="head">
+      <span class="tag">丙</span>
+      <span class="name">分类清单导出</span>
+      <span class="screen">S8 左树右键 → 「导出此分类清单…」弹层</span>
+      <span class="rec">口径先定，界面再动</span>
+    </div>
+    <div class="body">
+      <p>本方案<b>先要你勾三件口径</b>：列集 · 格式 · 本机绝对路径的默认策略。
+      勾完才有线框可画的空间；下面弹层是给口径摆出可断言位置，不是最终形状。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">S8 · 左树右键某类 → 「导出清单…」弹层</div>
+        <div class="row">
+          <div class="panel" style="width:220px;">
+            <div class="panel-title">S8 左 · 分类树</div>
+            <div class="tree-line">▾ 财务</div>
+            <div class="tree-line indent sel">合同  ← 右键</div>
+            <div class="tree-line indent">报销</div>
+            <div class="tree-line">▸ 技术</div>
+          </div>
+          <div class="context-menu">
+            <div class="mi">重命名</div>
+            <div class="mi">改父类…</div>
+            <div class="mi">与…合并</div>
+            <div class="sep"></div>
+            <div class="mi hi">导出此分类清单…</div>
+            <div class="sep"></div>
+            <div class="mi">删除（先检查类下有无文件）</div>
+          </div>
+          <div class="popup" style="flex:1; margin-left:12px;">
+            <div class="p-title">导出清单 · 合同（含子分类）</div>
+            <div class="form-row"><span class="label">目标</span><span>「合同」，<label><input type="checkbox" checked> 含子分类</label></span></div>
+            <div class="form-row"><span class="label">输出格式</span><span class="radios"><span class="on">CSV</span><span>JSON</span><span>Markdown 表</span></span></div>
+            <div class="form-row"><span class="label">导出列</span>
+              <span class="checkboxes">
+                <label><input type="checkbox" checked>标题</label>
+                <label><input type="checkbox" checked>页数</label>
+                <label><input type="checkbox" checked>大小 (MB)</label>
+                <label><input type="checkbox" checked>sha256（前 12 位）</label>
+                <label><input type="checkbox" checked>修改时间</label>
+                <label><input type="checkbox">文字层</label>
+                <label><input type="checkbox">OCR 状态</label>
+                <label><input type="checkbox">向量状态</label>
+                <label><input type="checkbox">索引状态</label>
+                <label><input type="checkbox">已归档</label>
+                <label><input type="checkbox">标签</label>
+                <label><input type="checkbox">本机绝对路径 <span class="warn">⚠ 隐私</span></label>
+              </span>
+            </div>
+            <div class="form-row"><span class="label">保存路径</span><span><input class="fake-input" placeholder="选一个目录…" style="width:220px;"> [选择…]</span></div>
+            <div class="form-row"><span class="label">口径提示</span><span class="muted">行数 = <code>SELECT COUNT(*) FROM documents WHERE category_id IN (本类 · 递归子树)</code>；未勾的列<b>不出现</b>（不留空列）。</span></div>
+            <div class="row" style="margin-top:8px;">
+              <button class="btn primary">导出</button>
+              <button class="btn">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>控件 → 后端</th><td><b>新写</b> <code>services/export_service.py</code>：<code>export_category_listing(category_id, *, include_children, fmt, columns, include_local_path) → Path</code>。S8 右键触发；产物写到用户选的目录，<b>不写库</b>、<b>不改文档</b>。</td></tr>
+        <tr><th>硬断言（I78 销账判定④）</th><td>
+          (a) 导出行数 == 那条 <code>SELECT COUNT(*)</code>（含子时用递归 CTE 或 <code>category_id IN (子树)</code>）；
+          (b) 未勾选的列<b>不出现</b>在 CSV 表头 / JSON key 里；
+          (c) 默认产物里 <b>grep 不到</b>本机绝对路径正则（<code>[A-Z]:\\</code>），勾了「本机绝对路径」才出现，且勾时弹一次「本操作会把文件在本机的完整路径写进产物」的确认；
+          (d) 只读：导出前后 <code>documents / document_categories / document_tags</code> 表字节级不变；
+          (e) 与 I77 0008 迁移的 <code>name_ci</code> 分类名口径一致（同名的两个分类不会被合并导）。
+        </td></tr>
+        <tr><th>与其他条的关系</th><td>AGENTS.md「密钥禁止出现在源码与构建产物」的相邻条 —— 本机路径也是隐私，默认关 · I89 甲 <code>roots.add</code> 归一口径 —— 相对路径写法与之一致 · 与 S5「只报告不删除」同一条纪律：本屏「只导出不动库」，导出后不生成待清理批次。</td></tr>
+      </table>
+
+      <div class="decision-box">
+        <div class="q">丙案先要你勾三件口径（不勾就不能进界面代码）</div>
+        <div class="opt">列集 · 默认 5 列（标题 / 页数 / 大小 / sha256 前 12 / 修改时间），其余勾选 · <b>推荐默认这一档</b></div>
+        <div class="opt">格式 · ⊙ CSV（Excel 兼容，UTF-8 BOM）○ JSON ○ Markdown 表 · <b>推荐 CSV 主，JSON 次，MD 可选</b></div>
+        <div class="opt">本机绝对路径 · 默认<b>关</b> + 勾时弹确认 · <b>推荐默认关</b></div>
+      </div>
+    </div>
+  </article>
+
+  <article class="option" id="I78-ding">
+    <div class="head">
+      <span class="tag alt">丁</span>
+      <span class="name">四项只入账不做</span>
+      <span class="screen">无新界面 · 改文档</span>
+      <span class="rec">不推荐 · 除非本轮线框不够时间过</span>
+    </div>
+    <div class="body">
+      <p>不画任何新界面、不改任何产品代码。<b>只做四件文档动作</b>：把「界面上勾一份文档就能归进分类 / 集合能筛选」这件事
+      从「看起来已有」改成「明确没有」，并加守卫钉住，防止下轮 README 又被写回「✅ 能用」。</p>
+
+      <div class="wireframe">
+        <div class="wf-caption">丁案没有界面 —— 只在 docs/README 上把四行状态改成 ✘</div>
+        <div class="panel">
+          <div class="panel-title">README.md · 能力表（丁案改动前后）</div>
+          <table class="facts" style="margin-top:0;">
+            <tr><th style="width:200px;">能力</th><th>本轮现状态</th><th>丁案之后</th></tr>
+            <tr><td>文档↔分类关联</td><td>看起来有（S1 表格有分类列，但 <code>document_categories</code> 表在 <code>src/</code> 下零写入方）</td><td><b>✘</b> 未在界面接入（写路径缺）</td></tr>
+            <tr><td>批量打标签</td><td>看起来有（S8 有标签字典）</td><td><b>✘</b> 未在界面接入</td></tr>
+            <tr><td>智能集合按筛选回放</td><td>看起来有（S8 有集合列表）</td><td><b>✘</b> 集合的 <code>query</code> 恒为 <code>{}</code></td></tr>
+            <tr><td>分类清单导出</td><td>无</td><td><b>✘</b> 无产品路径</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <table class="facts">
+        <tr><th>改动面</th><td>
+          <b>只动文档</b>：<code>docs/README.md</code> 能力表 4 行标 ✘；<code>docs/ROADMAP.md</code> 阶段 3 剩余项明写「SPEC 4 项在产品未做」；
+          <code>docs/UI-SCREENS.md</code> S8 描述加一句「集合只是名字，不回放筛选」；<code>docs/USAGE.md</code> 若有「按分类筛选可用」这种写法一并改。
+        </td></tr>
+        <tr><th>新加守卫</th><td><code>tests/guards/test_docs_capability_honesty.py</code>（I57 那条同族）扩到这四项：<br>
+          (a) 断言 <code>README.md</code> 里这四项的状态与 <code>grep -rn "link_category\|link_tag\|update_query\|export_service" src/</code> 是否命中调用点对齐；
+          <br>(b) 断言 <code>docs/USAGE.md</code> 里「按分类筛选 / 智能集合 / 批量打标签 / 导出清单」不出现「能用 / 已完成 / 已交付」句式（沿用 I67 那条同形状守卫）。
+        </td></tr>
+        <tr><th>与其他条的关系</th><td>I57（用户文档重写）· I67 销账判定「不许把未接线的动作写成界面能做的事」的守卫 <code>test_用户文档不许把未接线的动作写成界面能做的事</code> 已存在 —— 丁案是把这四条<b>并入</b>那条守卫，不新写一条。</td></tr>
+        <tr><th>丁案的<b>代价</b></th><td>SPEC 阶段 3 的验收条目继续挂着 ——「分类和标签能够持久化」这件事<b>事实上</b>做不到，下轮无论谁接手都得从甲案起步；丁案不减少工作量，只是把它推到下一轮。<b>不推荐</b>选丁；只有在「本轮线框不够时间过 + 有其他硬 deadline」时才选。</td></tr>
+      </table>
+    </div>
+  </article>
+</section>
+
+<!-- ==================================================================== -->
+
+<footer>
+  <p><b>勾选方式</b>：本页每条方案卡片右上角的甲 / 乙 / 丙 / 丁 编号即 <code>docs/ISSUES.md</code> 里 I67 / I78 的方案编号。
+  你可以一次勾多案（例：「I67 甲先乙后 + I78 甲 + 乙 + 丙」），也可以单案。</p>
+  <p><b>本轮承诺</b>：勾完之后我下一轮才动界面代码；勾之前 <code>src/pdfarchiver/ui/</code> 里不会新增一行。
+  <br>本页是 <code>docs/UI-WIREFRAMES.md</code> 的<b>补充展示</b>（同一口径、同一批既有事实引用），不是新台账；
+  §W-OCR 甲/乙两案原文仍在 <code>docs/UI-WIREFRAMES.md</code> 文末「追加两屏」一节，此处只重排为网页。</p>
+  <p class="muted">生成于 2026-10-19 · 轮十四设计准备 · 黑白线框 · 无配色 · 无图标 · 具体功能文案是设计的一部分（沿用 §W-OCR 已定的「送去识别」）</p>
+</footer>
+
+</body>
+</html>
