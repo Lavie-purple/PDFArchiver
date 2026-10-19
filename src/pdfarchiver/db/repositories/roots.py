@@ -10,6 +10,7 @@ import json
 
 from pdfarchiver.db.engine import Engine
 from pdfarchiver.db.models import MonitoredRoot, now_ts
+from pdfarchiver.fs.identity import identity_key
 
 _COLS = "id, root_path, root_key, label, enabled, exclude_globs, last_full_scan_at, last_scan_error, created_at, updated_at"
 
@@ -23,6 +24,10 @@ class RootRepository:
         conn = self.engine.thread_connection()
         ts = now_ts()
         globs = json.dumps(exclude_globs or [], ensure_ascii=False)
+        # ISSUES I89 甲：库里子树查询只认 identity_key 口径（`c:/users/lavie`），原生 Windows
+        # 写法（`C:\Users\lavie`）拼出的 LIKE 前缀一条都命中不了。在源头归一一次，让"传错根键"
+        # 这件事不可能发生 —— 而不是靠每个调用方各自记得调 identity_key（全站一处，不是两处）。
+        root_key = identity_key(root_key)
         with self.engine.transaction(conn, on_error=f"添加监测根 {root_path} 失败"):
             conn.execute(
                 "INSERT INTO monitored_roots(root_path, root_key, label, enabled, exclude_globs,"

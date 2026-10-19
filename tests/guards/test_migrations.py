@@ -80,8 +80,9 @@ def test_真实0002升级后旧数据行数一条不丢(old_db, tmp_path) -> Non
     report = migrate(engine, backup_dir=tmp_path / "backups2", migrations_dir=REAL_MIGRATIONS)
     assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking",
                               "0004_reading_history", "0005_stage4_vocab",
-                              "0006_drop_volume_id", "0007_vector_meta_and_drop_pdf_version"]
-    assert current_version(engine.connect()) == 7
+                              "0006_drop_volume_id", "0007_vector_meta_and_drop_pdf_version",
+                              "0008_name_ci_index"]
+    assert current_version(engine.connect()) == 8
 
     after = _counts(db, ignore=NEW_TABLES_AT_2 | NEW_TABLES_AT_7)
     assert after == before, "带数据升级把老表的内容弄丢或弄多了"
@@ -187,12 +188,47 @@ def test_真实迁移目录从空库一路能跑到最新版(tmp_path) -> None:
     engine = Engine(db)
     report = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     newest = discover(REAL_MIGRATIONS)[-1].order
-    assert report.to_version == newest == 7, \
+    assert report.to_version == newest == 8, \
         "水位必须停在迁移目录里的最新一版；这里同时是「版本号变了就要同步改 docs/DATABASE 与门禁」的哨兵"
     assert engine.integrity_check() == "ok"
     # 再跑一次必须什么都不做（幂等），否则重启会把同一迁移执行多遍
     again = migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
     assert again.did_anything is False
+
+
+def test_空库经迁移链建出的库把name排序交给索引(tmp_path) -> None:
+    """**ISSUES I77** 的"甲"落在库里的唯一可见形状：0008 建的那条索引要被**查询规划器用上**。
+
+    光验"索引在场"是不够的 —— 一条与排序表达式不同形的索引（`documents(name)` 少一个
+    `COLLATE NOCASE`）名字照样对、`sqlite_master` 照样查得到，而每批取数仍然排一遍全表。
+    所以这条同时钉两端：名字（文档与台账引用的就是它）与**产品那条 SQL 的执行计划**。
+    取 SQL 的方式是**现拼**而不是抄字面量：它由 `SORTS["name"]` 与 `where_for_filter` 生成，
+    与 `DocumentRepository.list_sorted` 逐字同源，排序口径哪天被人改掉，这条会跟着红 ——
+    那正是"改了口径却没人发现每批又变成全表排序"的那件事。
+
+    实测两种形状（空库即可复现，不必灌 8 万行；深库的读数在 `.probe_work/i77_0008_probe.log`）：
+    有它 `['SCAN d USING INDEX ix_documents_name_ci']`，没有它或它不同形
+    `['SCAN d', 'USE TEMP B-TREE FOR ORDER BY']`。
+    """
+    from pdfarchiver.db.repositories.documents import _COLS, SORTS, DocFilter, where_for_filter
+
+    engine = Engine(tmp_path / "catalog.db")
+    migrate(engine, backup_dir=tmp_path / "backups", migrations_dir=REAL_MIGRATIONS)
+    conn = engine.connect()
+    try:
+        filters = DocFilter(include_missing=True)
+        sql = (f"SELECT {_COLS} FROM documents d{where_for_filter(filters).sql_with()}"
+               f" ORDER BY {SORTS['name']} LIMIT ? OFFSET ?")
+        ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                           ("ix_documents_name_ci",)).fetchone()
+        assert ddl is not None, "0008 建的那条索引不在库里（名字：ix_documents_name_ci）"
+        plan = [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, (50, 0)).fetchall()]
+        assert "USE TEMP B-TREE FOR ORDER BY" not in plan, \
+            f"浏览那一列又变成每批排一遍全表（计划：{plan}）—— 索引与排序口径不同形或已不在"
+        assert "ix_documents_name_ci" in " ".join(plan), f"查询规划器没用上那条索引：{plan}"
+    finally:
+        conn.close()
+        engine.close_thread_connection()
 
 
 def test_迁移目录空时必须硬停而不是零迁移冒充成功(tmp_path) -> None:

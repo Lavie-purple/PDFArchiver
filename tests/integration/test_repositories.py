@@ -187,6 +187,20 @@ def test_监测根增删改查且不碰磁盘(ctx, tmp_path) -> None:
     assert root.is_dir(), "移除监测配置绝不能删用户的目录"
 
 
+def test_监测根根键在源头归一到_identity_key_口径(ctx, tmp_path) -> None:
+    """ISSUES I89 甲：`add()` 内部对入参做一次 `identity_key()` 归一，让"传了原生 Windows 写法"
+    这件事在源头就不可能发生 —— 而不是靠每个调用方各自记得调（全站一处，不是两处记得）。
+    真语料首扫脚本当年就是这么写出六个根键分家的行的。"""
+    root = tmp_path / "报告 A"
+    root.mkdir()
+    # 故意传错：第二个参数是原生写法（反斜杠 + 大小写混合），不是 identity_key 口径
+    added = ctx.roots.add(str(root).replace("\\", "/"), str(root), label="键归一")
+    assert added.root_key == identity_key(root), \
+        "add() 必须把传错的根键归回 identity_key 口径，否则全库子树查询按前缀命中 0 条"
+    assert ctx.roots.by_key(identity_key(root)) is not None, "按正确口径取得到那条"
+    assert ctx.roots.by_key(str(root)) is None, "按错口径（原生写法）取，不该再有一条落在它名下"
+
+
 def test_任务入队与按状态读取(ctx, tmp_path) -> None:
     p = tmp_path / "doc.pdf"
     p.write_bytes(b"x")

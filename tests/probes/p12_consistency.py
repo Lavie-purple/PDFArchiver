@@ -19,7 +19,7 @@
    队列残留检查、一份快照都没有的备份目录）都显式印成「未验」，并让整场门禁变红。
    这个调子是阶段 5 定下的：跳过的真引擎测试一条也没验。
 
-十二条对账：
+十三条对账：
 
     C0  水位停在迁移目录里的最新版          C6  状态列取值都在口径内
     C1  库自身健康（integrity / fk_check）   C7  向量状态取值都在口径内（产品里没人推进它）
@@ -28,7 +28,7 @@
     C4  正文表 ↔ 索引花名册 双向对账       C10 分类树父链可达、无环、name_path 一致
                                           （倒排幽灵免词测不到，见 c4_fts 说明）
     C5  正文页自洽（字数/来源/OCR 版本）     C11 每份备份快照都真能打开并读出版本
-    C12 正文页页码不超过库里记的页数
+    C12 正文页页码不超过库里记的页数         C13 监测根根键与 identity_key 同口径
 
 C7/C8 是反伪装用的：阶段 6 已交付（C7 换成真口径，见 `c7_vector_domain` 注释），阶段 4 已交付
 （C8 换成真口径，见 `c8_op_domain` 注释）。这两条在对应阶段真交付时同步改成了该阶段的口径。
@@ -235,7 +235,23 @@ def c4_fts(conn: sqlite3.Connection) -> Row:
 
 
 def c5_pages(conn: sqlite3.Connection) -> Row:
-    char_bad = int(_scalar(conn, "SELECT count(*) FROM text_pages WHERE char_count <> length(body)"))
+    """ISSUES I90 甲：字数口径必须与写入口径同源 —— 产品用 Python `len(body)`（models.py:141、
+    ocr_service.py:400），探针原来用 SQLite `length(body)`。正文夹 U+0000 时 SQLite 遇 NUL 即截断，
+    两个数分家 1,310 行，而**没有一行字数真的写错** —— 报的是探针自己的第四个 length 函数，不是缺陷。
+    改成：先用 SQL `char_count <> length(body)` 圈候选（Python len 与 SQL len 只在含 NUL 时才不等，
+    而产品写的 char_count 恒等于 Python len，所以真正字数分家的行必然也进候选 → 候选集是安全超集，
+    不会漏报），再把候选行取回 Python 侧用 `len(body)` 定生死。顺带数出正文里夹 NUL 的行（**I90 乙**
+    入库前该剥掉、真库那批该重写，这条让它在 p12 上如实红，而不是藏在字数红灯背后）。
+    """
+    char_bad = nul_bad = 0
+    char_examples: list[str] = []
+    for r in conn.execute("SELECT doc_id, page_no, char_count, body FROM text_pages"
+                          " WHERE char_count <> length(body)"):
+        if "\x00" in r["body"]:
+            nul_bad += 1  # 字数没写错（len==char_count），但正文夹着 NUL
+        if r["char_count"] != len(r["body"]):
+            char_bad += 1
+            char_examples.append(f"doc{r['doc_id']}p{r['page_no']} 记 {r['char_count']} 实际 {len(r['body'])}")
     kind_bad = int(_scalar(conn, "SELECT count(*) FROM text_pages"
                                  " WHERE source_kind NOT IN ('native','ocr')"))
     ocr_no_version = int(_scalar(conn, "SELECT count(*) FROM text_pages"
@@ -247,7 +263,11 @@ def c5_pages(conn: sqlite3.Connection) -> Row:
     ocr_rows = int(_scalar(conn, "SELECT count(*) FROM text_pages WHERE source_kind='ocr'"))
     problems = []
     if char_bad:
-        problems.append(f"{char_bad} 行的 char_count 与正文字数分家（状态页的字数是假的）")
+        problems.append(f"{char_bad} 行的 char_count 与 Python len(body) 分家（状态页的字数是假的），"
+                        f"例：{_brief(char_examples)}")
+    if nul_bad:
+        problems.append(f"{nul_bad} 行正文夹着 U+0000（SQL 侧 length/substr 会遇 NUL 即截断，"
+                        f"入库前该剥掉 —— 见 ISSUES I90 乙）")
     if kind_bad:
         problems.append(f"{kind_bad} 行的 source_kind 不在 native/ocr 之内")
     if ocr_no_version:
@@ -257,9 +277,9 @@ def c5_pages(conn: sqlite3.Connection) -> Row:
         problems.append(f"{native_with_version} 行原生正文带着 ocr_version（来源口径混了）")
     if empty_body:
         problems.append(f"{empty_body} 行正文是空串（索引里养着零信息行）")
-    return Row("C5", "正文页自洽（字数口径 / 来源 / OCR 版本列）", not problems,
+    return Row("C5", "正文页自洽（字数口径 / 无 NUL / 来源 / OCR 版本列）", not problems,
                f"正文 {total} 页（其中 ocr {ocr_rows}）｜"
-               + ("；".join(problems) if problems else "五项全部自洽"))
+               + ("；".join(problems) if problems else "六项全部自洽"))
 
 
 def _domain_problems(conn: sqlite3.Connection, table: str, column: str, legal: frozenset[str]) -> list[str]:
@@ -425,6 +445,21 @@ def c12_page_range(conn: sqlite3.Connection) -> Row:
                f"（page_count 的口径来自解析器，不是人工填的；页码越界=正文与文件对不上）")
 
 
+def c13_root_keys(conn: sqlite3.Connection) -> Row:
+    """ISSUES I89 丙：监测根根键必须是 `identity_key` 口径（`c:/users/lavie`），不是原生
+    Windows 写法（`C:\\Users\\lavie`）。C2 钉的是 `documents.path_key`，这一条钉它孪生的另一处
+    —— 全库子树查询（`path_key LIKE like_prefix(root_key)`）按 root_key 拼前缀，登记错了那个
+    根"下面有哪些文档"就恒返回 0 条。红就点名是哪一行（与 **ISSUES I88**「规则而不是补丁」同形状：
+    把只在真库才照得到的坏法，升成一条常驻断言）。
+    """
+    rows = [dict(r) for r in conn.execute("SELECT root_path, root_key FROM monitored_roots")]
+    bad = [r["root_key"] for r in rows if identity_key(r["root_key"]) != r["root_key"]]
+    return Row("C13", "监测根根键与 identity_key 同口径（子树查询认这个前缀）", not bad,
+               f"监测根 {len(rows)} 个｜"
+               + (f"{len(bad)} 行的 root_key 不等于 identity_key(root_key)，例：{_brief(bad)}"
+                  if bad else "每行 root_key 都等于 identity_key(root_key)"))
+
+
 def run_checks(db: Path, data_root: Path, *, walk: bool,
                alive_check: bool = True) -> list[Row]:
     alive = _app_running() if alive_check else (False, "注入模式：核的是临时副本，没有别的手在写它")
@@ -434,7 +469,7 @@ def run_checks(db: Path, data_root: Path, *, walk: bool,
         rows += c3_files_vs_db(conn, walk=walk)
         rows += [c4_fts(conn), c5_pages(conn), c6_status_domains(conn), c7_vector_domain(conn),
                  c8_op_domain(conn), c9_queue(conn, alive), c10_tree(conn),
-                 c11_backups(data_root), c12_page_range(conn)]
+                 c11_backups(data_root), c12_page_range(conn), c13_root_keys(conn)]
     finally:
         conn.close()
     return rows
@@ -488,6 +523,10 @@ INJECTIONS: list[tuple[str, str, str]] = [
      "UPDATE text_pages SET char_count=99999 WHERE doc_id=1 AND page_no=1;"),
     ("C5", "OCR 正文丢了版本号",
      "UPDATE text_pages SET ocr_version=NULL WHERE doc_id=2 AND page_no=1;"),
+    # ISSUES I90 乙：char_count 写成真实 Python len(3)，所以「字数分家」不红，只有新加的 NUL 子检查红。
+    ("C5", "正文夹着 U+0000（字数没写错，但 SQL 侧 length/substr 遇 NUL 即截断，入库前该剥掉）",
+     "INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
+     " VALUES(1, 3, 3, 'A' || char(0) || 'B', 1);"),
     ("C6", "text_status 写成库里根本没有的值",
      "UPDATE documents SET text_status='no_text' WHERE id=1;"),
     ("C6", "队列 state 写成口径外的值",
@@ -504,6 +543,10 @@ INJECTIONS: list[tuple[str, str, str]] = [
      "__corrupt_backup__"),
     ("C12", "库里记的页数比实际入库页码还小",
      "UPDATE documents SET page_count=1 WHERE id=1;"),
+    # ISSUES I89 丙：首字母大写 → identity_key(root_key) 对不上，C13 必须点名。
+    # 只翻 C13 不翻 C3：C3 的子树 LIKE 对 ASCII 大小写不敏感，故 `C:/…/%` 仍命中 `c:/…` 的 path_key。
+    ("C13", "监测根根键写成原生 Windows 大小写（子树查询按 identity_key 前缀会认不出）",
+     "UPDATE monitored_roots SET root_key = upper(substr(root_key,1,1)) || substr(root_key,2);"),
     ("C3", "盘上多出一份 PDF 而库里没有（漏索引）",
      "__add_file_on_disk__"),
     ("C3", "文件从盘上没了而库里没标缺失",

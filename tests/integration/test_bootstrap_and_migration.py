@@ -67,7 +67,7 @@ def test_空库首启建出全部表(data_root: Path) -> None:
     try:
         tables = _tables(ctx.paths.catalog_db)
         assert STAGE1_TABLES | STAGE2_TABLES <= tables
-        assert ctx.schema_version == 7
+        assert ctx.schema_version == 8
         # 启动路径不再跑同步库检查（2026-10-16 判死：6.1GB 真库上 integrity_check 19h+、
         # quick_check 452s+）。这里在 MB 级测试库上直接查 PRAGMA，验的是"迁移建出来的库健康"。
         conn = ctx.engine.thread_connection()
@@ -75,7 +75,8 @@ def test_空库首启建出全部表(data_root: Path) -> None:
         assert ctx.migration.did_anything and ctx.migration.applied == [
             "0001_initial", "0002_text_and_fts", "0003_ocr_tracking",
             "0004_reading_history", "0005_stage4_vocab", "0006_drop_volume_id",
-            "0007_vector_meta_and_drop_pdf_version"]
+            "0007_vector_meta_and_drop_pdf_version",
+            "0008_name_ci_index"]
     finally:
         ctx.shutdown()
 
@@ -122,7 +123,7 @@ def test_重启第二次不重复建表(data_root: Path) -> None:
     second = bootstrap(data_root)
     try:
         assert second.migration.did_anything is False
-        assert second.migration.from_version == second.migration.to_version == 7
+        assert second.migration.from_version == second.migration.to_version == 8
         assert sorted(p.name for p in second.paths.backups_dir.glob("*.db")) == snaps_before, \
             "没有待应用迁移时不许产生新快照"
         assert second.catalog.count_tags() == 1
@@ -144,8 +145,8 @@ def test_每一步迁移前都有可用快照且快照停在迁移之前(data_ro
     ctx = bootstrap(data_root)
     ctx.shutdown()
     snaps = sorted(p.name for p in ctx.paths.backups_dir.glob("pre-migration-*.db"))
-    assert len(snaps) == 7 and snaps == sorted(snaps), \
-        "应用了 0001/0002/0003/0004/0005/0006/0007 七个迁移，就该有七次迁移前快照"
+    assert len(snaps) == 8 and snaps == sorted(snaps), \
+        "应用了 0001/0002/0003/0004/0005/0006/0007/0008 八个迁移，就该有八次迁移前快照"
     assert all(n.startswith("pre-migration-000") for n in snaps)
 
     s1 = ctx.paths.backups_dir / snaps[0]
@@ -237,9 +238,10 @@ def test_坏迁移修好后能继续往前(data_root: Path) -> None:
     report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
     assert report.applied == ["0002_text_and_fts", "0003_ocr_tracking",
                               "0004_reading_history", "0005_stage4_vocab",
-                              "0006_drop_volume_id", "0007_vector_meta_and_drop_pdf_version"], \
+                              "0006_drop_volume_id", "0007_vector_meta_and_drop_pdf_version",
+                              "0008_name_ci_index"], \
         "真实迁移必须能接着坏迁移留下的 v1 库一路往上走"
-    assert current_version(engine.connect()) == 7
+    assert current_version(engine.connect()) == 8
     assert STAGE2_TABLES <= _tables(db)
     assert engine.integrity_check() == "ok"
     engine.close_thread_connection()
@@ -257,6 +259,7 @@ def test_运行时建过vector_meta的现存库升0007是无操作而不是撞�
     v6 = data_root / "m_v6"
     shutil.copytree(REAL_MIGRATIONS, v6)
     (v6 / "0007_vector_meta_and_drop_pdf_version.py").unlink()
+    (v6 / "0008_name_ci_index.py").unlink()
     report = migrate(engine, backup_dir=data_root / "backups", migrations_dir=v6)
     assert current_version(engine.connect()) == 6 and report.to_version == 6
 
@@ -279,8 +282,8 @@ def test_运行时建过vector_meta的现存库升0007是无操作而不是撞�
     conn.close()
 
     applied = migrate(engine, backup_dir=data_root / "backups", migrations_dir=REAL_MIGRATIONS)
-    assert applied.applied == ["0007_vector_meta_and_drop_pdf_version"], \
-        "现存库升 0007 必须只应用这一条，且不能因为表已存在而失败"
+    assert applied.applied == ["0007_vector_meta_and_drop_pdf_version", "0008_name_ci_index"], \
+        "现存库升到最新必须只应用这两条（0008 是本条写完之后追加的索引迁移），且不能因为表已存在而失败"
     conn = engine.connect()
     try:
         assert [tuple(r) for r in conn.execute(

@@ -42,6 +42,7 @@ from pdfarchiver.db.repositories.jobs import JobRepository  # noqa: E402
 from pdfarchiver.db.repositories.roots import RootRepository  # noqa: E402
 from pdfarchiver.db.repositories.text import TextRepository  # noqa: E402
 from pdfarchiver.db.repositories.metadata import MetadataRepository  # noqa: E402
+from pdfarchiver.fs.identity import identity_key  # noqa: E402
 from pdfarchiver.services.scan_service import ScanService  # noqa: E402
 from pdfarchiver.services.index_service import IndexService  # noqa: E402
 
@@ -157,7 +158,10 @@ def main() -> int:
                 if not root_path.exists():
                     print(f"  跳过不存在的根: {root_path}")
                     continue
-                root_key = str(root_path)
+                # ISSUES I89 甲：原先写 `str(root_path)`（`C:\Users\lavie`），绕开了
+                # `bootstrap.register_root()`，登记的根键与全库子树查询用的 identity_key 口径
+                # （`c:/users/lavie`）分家，导致真库六个根"下面有哪些文档"恒返回 0 条。
+                root_key = identity_key(str(root_path))
                 existing = root_repo.by_key(root_key)
                 if existing is None:
                     root_repo.add(root_path=str(root_path), root_key=root_key)
