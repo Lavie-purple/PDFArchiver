@@ -35,6 +35,7 @@ from PySide6 import QtCore, QtWidgets
 from pdfarchiver.db.models import Document
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.ui.library_rows import CATEGORY_COLUMN, category_cell_text
+from tests.integration.dialog_doubles import stub_item_chooser, stub_message_boxes
 from tests.conftest import settle as _settle
 
 _SELECT_FLAGS = (QtCore.QItemSelectionModel.SelectionFlag.Select
@@ -49,23 +50,11 @@ _SELECT_FLAGS = (QtCore.QItemSelectionModel.SelectionFlag.Select
 def dialogs(monkeypatch) -> list[tuple[str, str, str]]:
     """截住模态提示，返回 `(kind, title, text)` 清单 —— 这批测试的读数全在文案里。
 
-    autouse 的必需性与 `test_archive_execute_ui.py` 同一条：offscreen 下真 `QMessageBox`
-    的 `exec()` 会把主线程堵死，而「合并成功」与「拒绝删除」收尾各有一句弹窗。
+    替身本体在 `dialog_doubles.py`（轮十五 甲起一份共用，`test_saved_search_ui.py` 用的是
+    同一份逐字相同的）；autouse 的必需性见那里，也见 `test_archive_execute_ui.py` 记的那次
+    "漏装就永远不结束"。
     """
-    shown: list[tuple[str, str, str]] = []
-
-    def _capture(kind: str, reply=None):
-        def _fn(parent, title, text, *a, **k):
-            shown.append((kind, title, str(text)))
-            return reply
-        return staticmethod(_fn)
-
-    monkeypatch.setattr(QtWidgets.QMessageBox, "information", _capture("information"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", _capture("warning"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "critical", _capture("critical"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "question",
-                        _capture("question", QtWidgets.QMessageBox.StandardButton.Yes))
-    return shown
+    return stub_message_boxes(monkeypatch)
 
 
 @pytest.fixture
@@ -75,15 +64,7 @@ def pick(monkeypatch):
     返回的是一个可写的 dict：`pick["name"]` 是要选的那一项，`pick["items"]` 记下界面**实际**
     摆出来的清单 —— 「自己不出现在候选里」这条就靠后者断言，不靠读代码。
     """
-    ctl: dict[str, object] = {"name": "", "items": []}
-
-    def _getItem(parent, title, prompt, items, *a, **k):
-        ctl["items"] = list(items)
-        wanted = str(ctl["name"])
-        return wanted, wanted in items
-
-    monkeypatch.setattr(QtWidgets.QInputDialog, "getItem", staticmethod(_getItem))
-    return ctl
+    return stub_item_chooser(monkeypatch)
 
 
 def _library(window, qapp):

@@ -288,17 +288,40 @@ class CatalogRepository:
             conn.execute("DELETE FROM document_tags WHERE tag_id=?", (tag_id,))
             conn.execute("DELETE FROM tags WHERE id=?", (tag_id,))
 
-    def merge_tags(self, source_id: int, target_id: int) -> None:
-        """将 source 的所有文档关联移到 target，然后删除 source。"""
+    def merge_tags(self, source_id: int, target_id: int) -> int:
+        """把源标签并进目标标签：源名下的文档关联全部改指目标，然后删掉源。
+
+        返回**源名下的文档份数**（界面上要能说"并过去几份"，而这个数只有这里数得准 ——
+        与 `merge_categories` 同一条口径，那边也是自己数、让界面转述）。
+
+        三条前置检查都在这一层，界面不重算一遍（口径只有一个）：
+        - 源不存在 / 目标不存在 → 拒。修前没有这两条：`DELETE` 打在不存在的 id 上就是静默
+          无操作，而屏幕上那句"已并过去"照样说给用户听。
+        - 源 == 目标 → 拒。**这一条修前是最要命的**：`UPDATE OR IGNORE` 把 `tag_id` 改成
+          它自己（等于无操作），紧跟的那条 `DELETE FROM document_tags WHERE tag_id=?`
+          就把这个标签的**全部关联删光**，`tags` 行也跟着删 —— 按下去是"删标签"，不是"合并"。
+
+        为什么是两条语句而不是一条 `UPDATE`：`UPDATE OR IGNORE` 撞主键（这份文档已经挂着目标
+        那个标签）时那行**留在原处不动**，紧跟的 `DELETE` 把这类残留清掉 —— 于是"两边都有"的
+        一份文档不会变成两行，也不会一行都没有。顺序反了就是把关联删没了（同 `merge_categories`）。
+        """
         conn = self.engine.thread_connection()
+        source = conn.execute("SELECT name FROM tags WHERE id=?", (source_id,)).fetchone()
+        if source is None:
+            raise DatabaseError(f"源标签不存在：{source_id}", ValueError("外键前置检查"))
+        target = conn.execute("SELECT name FROM tags WHERE id=?", (target_id,)).fetchone()
+        if target is None:
+            raise DatabaseError(f"目标标签不存在：{target_id}", ValueError("外键前置检查"))
+        if source_id == target_id:
+            raise DatabaseError(f"不能把「{source['name']}」并进它自己", ValueError("自我合并前置检查"))
         with self.engine.transaction(conn, on_error=f"合并标签 {source_id} -> {target_id} 失败"):
-            # 移动关联（跳过已存在的）
-            conn.execute(
-                "UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?",
-                (target_id, source_id))
-            # 删除剩余的（已存在于 target 的）
+            moved = conn.execute("SELECT count(DISTINCT doc_id) FROM document_tags WHERE tag_id=?",
+                                 (source_id,)).fetchone()[0]
+            conn.execute("UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?",
+                         (target_id, source_id))
             conn.execute("DELETE FROM document_tags WHERE tag_id=?", (source_id,))
             conn.execute("DELETE FROM tags WHERE id=?", (source_id,))
+        return moved
 
     def _get_tag(self, tag_id: int) -> Tag:
         row = self.engine.thread_connection().execute(

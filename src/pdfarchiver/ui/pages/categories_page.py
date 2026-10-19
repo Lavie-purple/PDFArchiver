@@ -1,7 +1,8 @@
 """S8 分类与标签管理 —— 三栏常驻（甲 · 2026-10-15 定案）。
 
 左栏：分类树（支持增删改名 + 右键改父类/合并）
-中栏：标签列表（支持增删改名；`merge_tags` 在产品里仍无入口 —— 记在 **ISSUES I78** 销账那行）
+中栏：标签列表（新建 / 改名 / **并入…** / 删除 —— 第四颗 2026-10-20 补上，是 `merge_tags`
+在产品里的唯一调用点；**ISSUES I78** 记的那句"`merge_tags` 零调用方"随它销账）
 右栏：智能集合（**ISSUES I78** 乙，2026-10-19 补齐"保存筛选条件"那一半）——
 每一行写着它此刻命中几份（数由 `documents.count_matching` 出，与回放那张表同一个 WHERE），
 **双击 = 把那条集合存的条件灌回 S1 顶栏并立即回放**。
@@ -24,6 +25,14 @@ S1 那排 chips 旁边的「存为智能集合」（条件就在那里产生，`
 有无文件）」也跟着这一定案：删之前先查整枝，有文件就拒绝并给出清单（§S8 定案的第二条后果）。
 第四项「导出此分类清单…」（**ISSUES I78** 丙，同一天）也长在这里：要导出的是"哪一整枝"，
 这个位置只有分类树给得出，S1 那张表格里没有这棵树。
+
+「并入…」长在中栏那排按钮上、而不是像分类那样藏进左栏的右键菜单，理由不一样：中栏是 splitter
+里**会拉伸**的那一栏（不是左栏那 236px 定宽），而标签平铺一层、要补的只有"并进另一个"这一件事
+—— 右键那两个理由（三个动作挤不进一排 + 只在选中某一枝时才有意义）在这里一条都不成立。
+补这颗按钮时先逼出仓储层一处真 bug：修前 `merge_tags(a, a)`（把自己并给自己）先让
+`UPDATE OR IGNORE` 空转、紧接着 `DELETE FROM document_tags WHERE tag_id=a` —— 于是那个标签的
+**全部文档关联连同标签本身一起没了**，按下去是"删标签"而不是"合并"。现在源不存在 / 目标不存在 /
+并给自己 三条都拒在 `merge_tags` 里（口径只有一处），界面只负责不把自己摆上候选。
 
 数据全部来自 `AppContext.catalog` 与 `AppContext.collection`（集合的三个读数——命中数、
 可用性、存/覆盖——都只有服务层给得出，这一页不再直取 `collections` 仓储）。
@@ -100,10 +109,19 @@ class CategoriesPage(QtWidgets.QWidget):
         self.add_tag_btn.clicked.connect(self.add_tag)
         self.rename_tag_btn = QtWidgets.QPushButton("改名")
         self.rename_tag_btn.clicked.connect(self.rename_tag)
+        # 「并入…」是 `merge_tags` 在产品里的唯一入口（轮十五 甲，2026-10-20）。
+        # 这里放按钮而不是像分类那样藏进右键：中栏是 splitter 里**会拉伸**的那一栏（不是左栏
+        # 那 236px 定宽），而且标签是平铺列表、没有"整枝"的语义，要加的只有这一件事 ——
+        # 右键菜单的理由（三个动作 + 只在选中某一枝时有意义）在这里一条都不成立。
+        self.merge_tag_btn = QtWidgets.QPushButton("并入…")
+        self.merge_tag_btn.setToolTip("把当前这个标签并进另一个：它名下的文档关联跟着过去，"
+                                      "当前这个标签本身被删掉")
+        self.merge_tag_btn.clicked.connect(self.merge_tag)
         self.delete_tag_btn = QtWidgets.QPushButton("删除")
         self.delete_tag_btn.clicked.connect(self.delete_tag)
         tag_btns.addWidget(self.add_tag_btn)
         tag_btns.addWidget(self.rename_tag_btn)
+        tag_btns.addWidget(self.merge_tag_btn)
         tag_btns.addWidget(self.delete_tag_btn)
         center_lay.addLayout(tag_btns)
         splitter.addWidget(center)
@@ -172,9 +190,17 @@ class CategoriesPage(QtWidgets.QWidget):
         self.category_tree.expandAll()
 
     def _reload_tags(self) -> None:
+        """整列重查，每一行把**它自己那个标签的 id**挂在 `UserRole` 上（不是行号）。
+
+        与 `_reload_collections` 同一条纪律：行号当句柄成立的前提是"第几行 == 第几条"，
+        而那个前提只在列表没重排过的时候成立。修前三颗按钮各抄一遍
+        `list_tags()[currentRow()]`，就是把这个临时前提抄了三遍。
+        """
         self.tag_list.clear()
         for tag in self.ctx.catalog.list_tags():
-            self.tag_list.addItem(tag.name)
+            item = QtWidgets.QListWidgetItem(tag.name)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, tag.id)
+            self.tag_list.addItem(item)
 
     def _reload_collections(self) -> None:
         """整列重查：每一行带着**它自己那条** `CollectionEntry`（不是行号）。
@@ -381,34 +407,88 @@ class CategoriesPage(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.critical(self, "新建标签失败", str(exc))
 
     def rename_tag(self) -> None:
-        selected = self.tag_list.currentRow()
-        if selected < 0:
-            QtWidgets.QMessageBox.information(self, "改名标签", "请先选择一个标签")
+        picked = self._current_tag("改名")
+        if picked is None:
             return
-        tags = self.ctx.catalog.list_tags()
-        tag = tags[selected]
+        tag_id, _ = picked
         new_name, ok = QtWidgets.QInputDialog.getText(self, "改名标签", "新名称:")
         if ok and new_name.strip():
             try:
-                self.ctx.catalog.rename_tag(tag.id, new_name.strip())
+                self.ctx.catalog.rename_tag(tag_id, new_name.strip())
                 self._reload_tags()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "改名标签失败", str(exc))
 
-    def delete_tag(self) -> None:
-        selected = self.tag_list.currentRow()
-        if selected < 0:
-            QtWidgets.QMessageBox.information(self, "删除标签", "请先选择一个标签")
+    def _current_tag(self, action: str) -> tuple[int, str] | None:
+        """当前那一行的 `(标签 id, 名字)`；没选中就回一句提示并返回 None。
+
+        改名 / 并入 / 删除 三件事都只在"选中了某一个标签"时才有意义，同一条前置检查只写这一处
+        （与 `_current_category_id` / `_current_collection` 同一条纪律，AGENTS.md「禁止同类问题
+        逐个打补丁」—— 修前"请先选择一个标签"那一句在改名与删除里各抄了一遍）。
+        句柄取挂在行上的 id 而不是行号，理由见 `_reload_tags`。
+        """
+        item = self.tag_list.currentItem()
+        if item is None:
+            QtWidgets.QMessageBox.information(self, action, f"请先选择一个标签再{action}")
+            return None
+        return item.data(QtCore.Qt.ItemDataRole.UserRole), item.text()
+
+    def _pick_tag(self, title: str, prompt: str, *, exclude_id: int) -> tuple[int, str] | None:
+        """让人从"除自己以外的全部标签"里挑一个并入的对象，返回 `(id, 名字)`；取消返回 None。
+
+        与 `_pick_category` 同一形状，只少一个参数：标签平铺一层，没有「放到最外层」那种第三种
+        去处，也没有子孙要排除 —— 名字唯一由 `ux_tags_name` 保证（`name COLLATE NOCASE` 上的唯一
+        索引），所以 `names.index(name)` 不会撞到两条同名候选。
+        候选里不摆自己：自我合并由仓储层拒（那里是唯一口径），但那一拒的原文是给开发看的话术，
+        不如一开始就不给这一项。
+        """
+        choices = [(t.id, t.name) for t in self.ctx.catalog.list_tags() if t.id != exclude_id]
+        if not choices:
+            QtWidgets.QMessageBox.information(self, title, "没有可并入的标签")
+            return None
+        names = [name for _, name in choices]
+        name, ok = QtWidgets.QInputDialog.getItem(self, title, prompt, names, 0, False)
+        if not ok:
+            return None
+        return choices[names.index(name)]
+
+    def merge_tag(self) -> None:
+        """把当前标签并进另一个（轮十五 甲，2026-10-20：`merge_tags` 在产品里的唯一调用点）。
+
+        不做同名自动并，而是让人点名并进哪一个 —— 表上本来就容不下两个同名标签，这一条要治的是
+        "近义/错拼的两个标签各挂着一批文档"（「报销」与「报销单」）。
+        不再叠一道确认：挑目标那一步本身就是点名，而分类那边的 `merge_categories` 也没有第二道
+        （同一类动作在同一个页面上走同一个形状）。
+        """
+        picked = self._current_tag("并入")
+        if picked is None:
             return
-        tags = self.ctx.catalog.list_tags()
-        tag = tags[selected]
+        source_id, source_name = picked
+        target = self._pick_tag("合并标签", f"把「{source_name}」并进哪个标签:", exclude_id=source_id)
+        if target is None:
+            return
+        target_id, target_name = target
+        try:
+            moved = self.ctx.catalog.merge_tags(source_id, target_id)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "合并标签失败", str(exc))
+            return
+        self._reload_tags()
+        QtWidgets.QMessageBox.information(
+            self, "合并标签", f"已并入「{target_name}」· 移动 {moved} 份文档的标签关联")
+
+    def delete_tag(self) -> None:
+        picked = self._current_tag("删除")
+        if picked is None:
+            return
+        tag_id, tag_name = picked
         reply = QtWidgets.QMessageBox.question(
             self, "删除标签",
-            f"确定要删除标签「{tag.name}」吗？\n关联的文档标签也会被删除。",
+            f"确定要删除标签「{tag_name}」吗？\n关联的文档标签也会被删除。",
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             try:
-                self.ctx.catalog.delete_tag(tag.id)
+                self.ctx.catalog.delete_tag(tag_id)
                 self._reload_tags()
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "删除标签失败", str(exc))

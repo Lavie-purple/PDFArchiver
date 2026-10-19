@@ -41,6 +41,7 @@ from pdfarchiver.search.service import QUERY_FIELDS, Criteria
 from pdfarchiver.services.bootstrap import bootstrap
 from pdfarchiver.ui.collection_bar import CONDITIONS, FTS_LABELS
 from pdfarchiver.ui.main_window import MainWindow
+from tests.integration.dialog_doubles import stub_message_boxes, stub_text_prompt
 from tests.conftest import settle as _settle
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver"
@@ -54,23 +55,11 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver"
 def dialogs(monkeypatch) -> list[tuple[str, str, str]]:
     """截住模态提示，返回 `(kind, title, text)` 清单。
 
-    必需性与 `test_catalog_writes_ui.py` 同一条：offscreen 下真 `QMessageBox` 的 `exec()`
-    会把主线程堵死，而这一屏的「删除集合」「候选清单是空的」各要弹一句。
+    替身本体在 `dialog_doubles.py`（与 `test_catalog_writes_ui.py` 用的是同一份，轮十五 甲 起）；
+    autouse 的必需性同那里记的那次"漏装就永远不结束"。这一屏的「删除集合」「候选清单是空的」
+    各要弹一句。
     """
-    shown: list[tuple[str, str, str]] = []
-
-    def _capture(kind: str, reply=None):
-        def _fn(parent, title, text, *a, **k):
-            shown.append((kind, title, str(text)))
-            return reply
-        return staticmethod(_fn)
-
-    monkeypatch.setattr(QtWidgets.QMessageBox, "information", _capture("information"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", _capture("warning"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "critical", _capture("critical"))
-    monkeypatch.setattr(QtWidgets.QMessageBox, "question",
-                        _capture("question", QtWidgets.QMessageBox.StandardButton.Yes))
-    return shown
+    return stub_message_boxes(monkeypatch)
 
 
 @pytest.fixture
@@ -79,16 +68,7 @@ def answers(monkeypatch):
 
     队列吐完就返回 `(="", False)` = 人按了取消，所以"多问了一次"不会被静默喂一个默认值。
     """
-    ctl: dict[str, object] = {"queue": [], "asked": []}
-
-    def _getText(parent, title, prompt, *a, **k):
-        ctl["asked"].append((str(title), str(prompt)))
-        if not ctl["queue"]:
-            return "", False
-        return str(ctl["queue"].pop(0)), True
-
-    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", staticmethod(_getText))
-    return ctl
+    return stub_text_prompt(monkeypatch)
 
 
 @pytest.fixture

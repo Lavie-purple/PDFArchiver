@@ -22,16 +22,18 @@
 - 三种检索层级无模型依赖：已满足（架构断言守着）
 - 界面侧（S1 / S2 / S8 等）线框已逐屏确认并落地，判定在 `gates/final.py` 的 regression 与
   guards 段，本门禁不重复判
-- **SPEC 阶段 3 有一条没做到，本门禁不判**（写在 `docs/stage-reports/阶段3-交付报告.md`，
-  别把这一场的绿读成"阶段 3 全达标"）：
-  ① 智能集合是名字壳 —— 建集合时 `query` 恒为 `{}`，`CollectionRepository.update_query`
-  零调用方，选中集合不改变库视图的筛选（**ISSUES I78** 乙，未做）。
-  原来并在这里的第 ② 条「文档↔分类/标签在产品里没有写路径」**已销账**（**ISSUES I78** 甲，
-  2026-10-19）：S1 表格底下那排「归入分类 / 加标签 / 移除标签」写 `link_categories` /
-  `link_tags` / `unlink_tags`，S8 右键写 `reparent_category` / `merge_categories`
-  并在删除前调 `docs_in_subtree`。判定在 `tests/integration/test_catalog_writes_ui.py`
-  （19 条，坏法见 p9 注入 I50–I69），本门禁不重复判；
-  仍零调用方的是 `merge_tags`（标签合并的入口没在那份线框里，未记为已交付）
+- **SPEC 阶段 3 过去"本门禁不判"的那两条，现在各有一条产品测试钉着**（本门禁不重复判）：
+  ① 智能集合过去是名字壳 —— 建集合时 `query` 恒为 `{}`、选中集合不改变任何筛选。
+  **ISSUES I78** 乙（2026-10-20）补上写路径：S1 那排 chips 旁的「存为智能集合」与「覆盖此集合」
+  走 `services/collection_service.py` 的 `save` / `overwrite`，后者就是 `update_query` 在产品里的
+  调用点。判定在 `tests/integration/test_saved_search_ui.py`（23 条，坏法见 p21 注入 24 条）。
+  ② 文档↔分类/标签过去在产品里没有写路径。**ISSUES I78** 甲（2026-10-19）：S1 表格底下那排
+  「归入分类 / 加标签 / 移除标签」写 `link_categories` / `link_tags` / `unlink_tags`，S8 右键写
+  `reparent_category` / `merge_categories` 并在删除前调 `docs_in_subtree`；判定在
+  `tests/integration/test_catalog_writes_ui.py`（19 条，坏法见 p9 注入 I50–I69）。
+  同批剩下的最后一格 `merge_tags`（标签并入）已由**轮十五 甲**（2026-10-20）接进 S8 中栏那颗
+  「并入…」，判定在 `tests/integration/test_tag_merge_ui.py`（16 条，坏法见 p24 注入 17 条）——
+  **这一句本身**由那里的 `test_merge_tags在产品侧有调用点了` 钉着，不再靠这里的一句描述
 """
 from __future__ import annotations
 
