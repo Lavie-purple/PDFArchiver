@@ -6,6 +6,39 @@
 
 ---
 
+## 守卫在场性轮（十三）—— 2026-10-19 · **不升版本号**，销账 I94 甲：架构守卫里那两行"永远满足"的空规则
+
+上一轮收尾时用户说「处理遗留问题」，本轮做 I94 甲（其它 I67/I78/I95 需要线框或改用户真库，
+等勾选，不在本轮）。
+
+- **I94 甲 · 架构守卫方向表键的在场性**：`tests/guards/test_architecture.py` 的 `FORBIDDEN_IMPORTS`
+  里 `fileops`/`backup` 那两行键被删 —— 那两个目录在 `src/pdfarchiver/` 下各只有一个 `.gitkeep`、
+  没有任何 `.py`，`PKG.rglob("*.py")` 一个都扫不出来 ⇒ **两行恒真**；`ui` 与 `db` 禁列里的
+  `pdfarchiver.fileops` 与 `pdfarchiver.backup` 一并清掉（"不许 import 一个不存在的包"不是保护，
+  是空转）。守卫新增第 8 条 `check_direction_keys_reach_files`：方向表每个键必须在
+  `src/pdfarchiver/<key>/` 下至少扫到一个 `.py` 文件，且单独点名 `test_方向表每个键至少扫到一个文件`。
+  **坏法真注入过**：`p9_reverse_injection.py` Case 47 临时加 `"madeup_layer": ("pdfarchiver.ui",)`
+  假键，要求精确点名 —— 本机现跑一次：注入后 `test_方向表每个键至少扫到一个文件` FAILED，
+  报「FORBIDDEN_IMPORTS 里的键 `madeup_layer` 在 `src/pdfarchiver/madeup_layer/` 下扫不到任何
+  `.py` 文件」；字节还原后 `3 passed`。归档/备份链路的实际方向约束由 `services` 那一行管辖，
+  今天的 `archive_service.py` 若真出现 `import pdfarchiver.ui` 仍会被抓住。
+  `docs/ARCHITECTURE.md` §二 与图同步（"任何层 import `fileops.execute`" 那句删掉，
+  图里的 `{fs, parsing, indexing, search, ocr, semantic, fileops, backup}` 收成不含空目录的
+  `{fs, parsing, indexing, search, ocr, semantic, jobs}`）。
+- 顺带一条同类清扫：全仓 `DeprecationWarning: invalid escape sequence` 由 **4 处** 一次改光 ——
+  `services/vector_service.py:25` `%LOCALAPPDATA%\PdfArchiver\models`（`'\P'`，上一轮 commit 842dff4 引入）、
+  `scripts/real_corpus_first_scan.py:1` 模块 docstring `<数据根>\logs\first_scan_report.json`（`'\l'`）、
+  `tests/probes/p7_path_identity.py:1` 模块 docstring `\\?\ 前缀`（`'\ '`）与
+  `tests/probes/p7_path_identity.py:314` 判据标签 `\\?\ 前缀`（`'\ '`，改成 `\\?\\ ` 保持渲染一致）。
+  前 3 处把 docstring 加 `r"""` 前缀变 raw string；第 4 处（判据字符串，会被写进 JSON 报告）
+  用双反斜杠 `\\` 替换 `\ `，可读文本完全不变。
+  触发本轮的是 **AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问『还有哪些地方是同类』，一次性声明规则」**
+  —— 我跑 I94 断言时只看到 `'\P'`，若不查同类就只改一处，正是要禁止的逐个打补丁。
+  全仓 `compileall src tests scripts` 现回 `0 invalid escape warnings remain`；
+  Python 3.13+ 会把这类升成 SyntaxError，本轮相当于提前摘掉三颗雷。
+
+---
+
 ## 向量写路径轮（十二）—— 2026-10-19 · **不升版本号**，交 D3（I63 丙+丁）与 D4（I80 丙）：语义向量写路径接进产品
 
 按用户「均跟进推荐来」把台账 I74–I93 那批编号方案的推荐项逐条落地。本节记 D3/D4 两件（其余 轮十二 项在台账逐条销账，收尾时并入）。

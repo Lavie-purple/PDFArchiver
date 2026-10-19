@@ -650,3 +650,10 @@ test_ui_layout 4／test_monitor_roots_ui 3／test_app_shell 1）。已按现数�
 > CHANGELOG 活册收成 132、本轮 249 = 132 + 轮（十二）那一大块；VERIFICATION 主册未动，仍 856（余 344）。
 > `tests/guards/test_file_size.py` 的 `MD_LIMIT=1200` 那档现在**没有**任何一份临近 100 以内（最紧的是
 > `DECISIONS 687 余 513`），所以本册这条末行现数不是"下一轮第一个动作"，只是把本轮读数落在这里）。
+> **本册末行现数（2026-10-19 守卫在场性轮（十三）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 856｜本册 659｜CHANGELOG 282｜ISSUES 132`（`wc -l`＝`splitlines()`＝守卫判定那条口径；
+> 上一块轮（十二）按 §4.22 保留为历史、不动。本轮只涨 CHANGELOG 249→282（+33 = 轮（十三）那一整块）与
+> 本册 652→659（+7 = 这一块自身）；DECISIONS / VERIFICATION 主册 / ISSUES 未动 —— I94 甲 改的是守卫代码与文档正文，
+> 没开新决策也没换台账行）。现册里带 `**本册末行现数**` 标题的历史块共 **4 块**（轮（七）／轮（八）／轮（九）／轮（十二））
+> + 本轮这块**活的**；轮（六）以前那些轮用的是别的措辞，不计入这类。
+> `tests/guards/test_file_size.py` 的 `MD_LIMIT=1200` 那档现在**没有**任何一份临近 100 以内（最紧的是 `DECISIONS 687 余 513`）。
