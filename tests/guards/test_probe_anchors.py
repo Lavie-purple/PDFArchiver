@@ -3,11 +3,12 @@
 反向注入探针的判据是「红且点名」，而锚点失配时代码根本没被改过：p9/p10 直接
 `RuntimeError`，p15/p16/p17/p18 记一条 SKIP 并让 `VERDICT` 变 RED —— 两种都算红，
 但要等 **680.5s**（段 injection，2026-10-19 六份探针同段实测；同段不含 p21 时 2026-10-18
-空载 **332s**）+ **70s**（段 ui-inject）才告诉你坏了，
+空载 **332s**。p22 于 2026-10-19 入段，单跑 73s，段总时长待空载复跑后更新这一行）
++ **70s**（段 ui-inject）才告诉你坏了，
 而且坏因是三周前改 OCR 熔断器时往锚点中间插了一行。
 2026-10-18 的门禁就是这么红的（p10 的 #8、#26、#28 三条同时失配）。
 
-这条守卫只做一件事：**不跑 pytest**，把七份探针表里每条锚点拿来在目标文件里数一遍。
+这条守卫只做一件事：**不跑 pytest**，把八份探针表里每条锚点拿来在目标文件里数一遍。
 口径与探针自己一致，不另立第二份：
 - `count(anchor) == 1`，按通用换行读入（p9/p10 的 `_apply` 就是这个式子）；
 - 目标文件不存在同样算失配。
@@ -41,6 +42,7 @@ import p16_doc_pointers_injection as p16  # noqa: E402
 import p17_handler_shape_injection as p17  # noqa: E402
 import p18_irreversible_source_injection as p18  # noqa: E402
 import p21_saved_search_injection as p21  # noqa: E402
+import p22_category_export_injection as p22  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -72,7 +74,7 @@ def _from_tuples(probe: str, mutations, path_at: int | None, anchor_at: int,
 
 
 def anchors() -> list[tuple[str, str, Path, str]]:
-    """七份探针的全部坏法锚点：(探针, 编号, 目标文件, 锚点)。"""
+    """八份探针的全部坏法锚点：(探针, 编号, 目标文件, 锚点)。"""
     return [
         *_from_case_edits("p9", p9.CASES),
         *_from_case_edits("p10", p10.CASES),
@@ -81,6 +83,7 @@ def anchors() -> list[tuple[str, str, Path, str]]:
         *_from_tuples("p17", p17.MUTATIONS, None, 2, fixed_path=p17.SRC),
         *_from_tuples("p18", p18.MUTATIONS, 2, 3),
         *_from_case_edits("p21", p21.CASES),
+        *_from_case_edits("p22", p22.CASES),
     ]
 
 
@@ -110,16 +113,16 @@ def test_探针与其注入目标不许混用行尾() -> None:
           ("p9_reverse_injection", "p10_reverse_injection_ocr",
            "p15_archive_ui_injection", "p16_doc_pointers_injection",
            "p17_handler_shape_injection", "p18_irreversible_source_injection",
-           "p21_saved_search_injection")),
+           "p21_saved_search_injection", "p22_category_export_injection")),
     })
     mixed = [str(p.relative_to(REPO)) for p in paths if b"\r\r\n" in p.read_bytes()]
     assert not mixed, "这些文件里有 \\r\\r\\n（会被按通用换行数成两倍行数）：" + " ".join(mixed)
 
 
 def test_注入锚点表不许空转() -> None:
-    """七份探针都真在表里 —— 探针改名或表清空时，上面两条会静默变成永真。"""
+    """八份探针都真在表里 —— 探针改名或表清空时，上面两条会静默变成永真。"""
     counts = {probe: sum(1 for row in anchors() if row[0] == probe)
-              for probe in ("p9", "p10", "p15", "p16", "p17", "p18", "p21")}
+              for probe in ("p9", "p10", "p15", "p16", "p17", "p18", "p21", "p22")}
     empty = [f"{k}={v}" for k, v in counts.items() if v == 0]
     assert not empty, f"这些探针一条锚点都没收集到：{' '.join(empty)}｜全表 {counts}"
 

@@ -535,6 +535,26 @@ QCheckBox::indicator:checked {{
     border-color: {c.accent};
 }}
 
+/* ===== 单选钮 ===== */
+/* 与复选框同一套尺寸与配色，只是指示器是圆的：S8 的「导出此分类清单…」弹层第一次用到
+   `QRadioButton`（三种格式互斥），不写这一段就会落回平台默认的浅色圆圈，压在暗色卡片上。 */
+QRadioButton {{
+    color: {c.text_secondary};
+    spacing: 6px;
+    font-size: 12px;
+}}
+QRadioButton::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid {c.input_border};
+    border-radius: 8px;
+    background-color: {c.input_bg};
+}}
+QRadioButton::indicator:checked {{
+    background-color: {c.accent};
+    border-color: {c.accent};
+}}
+
 /* ===== 标签 ===== */
 QLabel {{
     color: {c.text_primary};

@@ -99,6 +99,10 @@ src/pdfarchiver/
     collection_service.py★ #  【**ISSUES I78** 乙】智能集合的口径层：存之前把条件读回一次（`Criteria.from_query`
                           #   是唯一能判"这份 dict 生不生效"的人）、命中数由 SQL 数（与回放同一个 WHERE）、
                           #   空条件当场拒；`CollectionEntry.label()` 是那一行的唯一上屏出口
+    export_service.py★    #  【**ISSUES I78** 丙】分类清单导出的口径层：`EXPORT_COLUMNS`/`FORMATS` 是列集与
+                          #   格式档的唯一出处（弹层的复选框和单选钮都从这里读标签，抄一份就会漂）、行集与
+                          #   S1 浏览共用同一个 `DocFilter`、本机绝对路径要 `acknowledge_local_path`、
+                          #   落盘经 `.part` 且不覆盖同名产物；`ExportReceipt.describe()` 是那句回执的唯一出口
   ui/                     # UI 层，只用 services/，不 import db.repositories
     nav.py★               #   导航注册表，按 SPEC 条款号登记；阶段 1 唯一的"界面知识"
     main_window.py★       #   外壳：左导航 + 右堆叠页 + 状态栏；关窗真关连接并留对账行
@@ -108,6 +112,9 @@ src/pdfarchiver/
     library_rows.py★      #   S1 中栏那张表的行与右栏详情怎么从一份文档摊出来（**ISSUES I78** 甲拆出）
     collection_bar.py★    #   S1 顶栏那一排筛选 chips + 「存为智能集合 / 覆盖此集合」（**ISSUES I78** 乙）：
                           #   界面状态就是那份能直接进 `query_json` 的 dict，不 import `Criteria`
+    export_dialog.py★     #   S8 右键「导出此分类清单…」的弹层（**ISSUES I78** 丙）：列标签与格式档从服务层读、
+                          #   屏幕上那个份数就是产物行数（同一个 `DocFilter`）、隐私列勾下先确认一次、
+                          #   没有目录或一列没勾时「导出」是死的；目录存在与否只由服务层判
     theme.py★             #   浅色/暗色两套令牌 + QSS 装配；占位色这类只能走 QPalette 的属性见 **ISSUES I50**
     format.py★            #   界面文本格式化；时间串一律来自 `status_service.format_ts`（守卫第 7 条）
     tier.py★              #   1024 档降级（D-039/D-040）
@@ -127,6 +134,7 @@ tests/
                           # 交付链新增：p12★ 一致性仪表坏法、p13★ 长跑采样、p14★ FTS 仪表验牙、
                           #   p15★ 归档界面与磁盘链路 36 条坏法、p16★ 文档指针坏法、p17★ handler 形状坏法、
                           #   p18★ 不可逆源文件坏法、p19★ 组合内存压测、p20★ 监测根改名/删除自愈
+                          #   轮十四新增：p21★ 智能集合 24 条坏法、p22★ 分类清单导出 25 条坏法
   unit/★                  # 纯逻辑，无 UI、无真实文件；阶段 5 新增 ocr_engine 18 / ocr_idempotency 22 / ocr_limits 6
   integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
                           # 阶段 2 新增：扫描 34 / 队列 29（含三种"停"各一条）/ 索引 23 / 检索 20 / 状态 16 / 监听接线 10

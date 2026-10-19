@@ -607,15 +607,17 @@ def test_空枝才删得掉而子枝一起消失(window, ctx, qapp, dialogs) -> 
 
 
 # ---------------------------------------------------------------------------
-# 右键菜单的形状：那四项，且不多不少
+# 右键菜单的形状：那五项，且不多不少
 # ---------------------------------------------------------------------------
 
-def test_右键菜单上就那四项而选中跟着右键走(window, ctx, qapp, monkeypatch) -> None:
+def test_右键菜单上就那五项而选中跟着右键走(window, ctx, qapp, monkeypatch) -> None:
     """「改父类 / 合并」这两个动作在产品里只有这一个入口（**ISSUES I78** 甲的补法），
-    菜单少一项就是功能没入口；多一项就是**未接线的按钮**（**ISSUES I79** 那一类）。
-    「导出此分类清单…」属于 **ISSUES I78** 丙，这一轮出现它就是提前挂了个空动作。
+    菜单少一项就是功能没入口；多一项就是**未接线的按钮**（**ISSUES I79** 那一类）——
+    所以第五项「导出此分类清单…」（**ISSUES I78** 丙，轮 D）进这张清单的同时，
+    `test_category_export_ui.py::test_菜单上那一项按下去真的把弹层开起来` 必须在场，
+    否则这一条形状断言只是在给一颗空动作盖章。
 
-    第二条钉的是 `_show_category_menu` 里那句 `setCurrentItem` —— 菜单上的四个动作全读
+    第二条钉的是 `_show_category_menu` 里那句 `setCurrentItem` —— 菜单上的五个动作全读
     `currentItem()`，右键不先挪选中就会"在 A 上右键、改了 B"。
     """
     opened: list[QtWidgets.QMenu] = []
@@ -634,8 +636,9 @@ def test_右键菜单上就那四项而选中跟着右键走(window, ctx, qapp, 
     assert len(opened) == 1, f"右键没开出菜单（只开了 {len(opened)} 个）"
     assert page.category_tree.currentItem() is item, "右键没把选中挪到被点的那一枝"
     titles = [a.text() for a in opened[0].actions() if not a.isSeparator()]
-    assert titles == ["改名…", "改父类…", f"与…合并「{cat.name}」", "删除（先检查类下有无文件）"], titles
-    assert [a.isEnabled() for a in opened[0].actions() if not a.isSeparator()] == [True] * 4
+    assert titles == ["改名…", "改父类…", f"与…合并「{cat.name}」", "导出此分类清单…",
+                      "删除（先检查类下有无文件）"], titles
+    assert [a.isEnabled() for a in opened[0].actions() if not a.isSeparator()] == [True] * 5
 
 
 def test_右键空白处不开菜单(window, ctx, qapp, monkeypatch) -> None:

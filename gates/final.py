@@ -5,7 +5,7 @@
     python gates/final.py                       # 默认段：guards + regression + coldstart + e2e + consistency
     python gates/final.py --list                # 打印每段是什么、实测耗时、该不该并进默认
     python gates/final.py --only package        # 只跑打包段（build.py + 冻结冒烟）
-    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21）
+    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22）
     python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（最慢的一段）
     python gates/final.py --only soak --soak-minutes 4
     python gates/final.py --all --data-root "<要核查的数据根>"
@@ -44,6 +44,7 @@ P16 = "tests/probes/p16_doc_pointers_injection.py"
 P17 = "tests/probes/p17_handler_shape_injection.py"
 P18 = "tests/probes/p18_irreversible_source_injection.py"
 P21 = "tests/probes/p21_saved_search_injection.py"
+P22 = "tests/probes/p22_category_export_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
 
@@ -290,7 +291,9 @@ def segment_injection() -> list[Row]:
             _gate("p18 「不可逆」口径唯一：三条坏法（S1 落库字段 / S2 界面自己数 / S3 服务定义退化）",
                   [sys.executable, P18]),
             _gate("p21 智能集合 24 条坏法（a/b/c/d/e/n 五条硬断言 + k chips 接线 + s S8 那一栏 + "
-                  "p 两张表漂移 + g 分档算术 + h1 结构性写）", [sys.executable, P21])]
+                  "p 两张表漂移 + g 分档算术 + h1 结构性写）", [sys.executable, P21]),
+            _gate("p22 分类清单导出 25 条坏法（a/b/c/d/e 五条线框硬断言 + u 口径来源 + n 落盘纪律 + "
+                  "r 回执 + f 格式与空值 + g 门 + w 接线）", [sys.executable, P22])]
 
 
 def segment_ui_injection() -> list[Row]:
@@ -362,8 +365,10 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     # 起跑 CPU 84.9%，那一场 p9 在**基线**就判红 —— 红的是负载绑定的冷启动读数
     # （`test_进程级冷启动实测符合G1约定`，同一台机器空载 0.737s / 满载 3.13s，**ISSUES I25**），
     # 不是产品坏了，也不是断言没牙。空载复跑待补，别把 680.5s 当可比读数用。
-    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 反向注入（断言到底有没有约束力）",
-                  ["415.3s（空载）｜680.5s @CPU 84.9%（2026-10-19）"]),
+    # p22 是 2026-10-19 轮 D 入段的第七份，单跑 **73s**（25 条坏法 + 一次基线，同场实测）；
+    # 段总时长要等空载复跑才能给可比读数，所以这里只登记这一份自己的数，不把它加进 680.5s 冒充实测。
+    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 反向注入（断言到底有没有约束力）",
+                  ["415.3s（空载）｜680.5s @CPU 84.9%（2026-10-19，不含 p22）"]),
     "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（不进默认段）",
                   ["71.8s（2026-10-18 实测）"]),
     "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["28.4–30.6s"]),
@@ -421,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:<12} {cost[0]:>22}  {what}")
         print("  docs-inject           ~1s  交付文档门禁自己的坏法注入")
         print(f"  耗时是 2026-10-18 分段实测（`.probe_work/b1_seg*.log`），"
-              f"injection 那行另带 2026-10-19 含 p21 的读数；"
+              f"injection 那行另带 2026-10-19 含 p21（不含 p22）的读数；"
               f"跑临时库的段共用 {GATE_TIMEOUT_SECONDS:.0f}s 那一档，"
               f"带 --data-root 的真根核查单独走 {REAL_ROOT_TIMEOUT:.0f}s 那一档（I91）")
         return 0

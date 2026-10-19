@@ -87,6 +87,18 @@ class CatalogRepository:
                              "大批量请按条件分批，不要把 ID 列表整个塞进参数")
         return unique
 
+    def subtree_ids(self, category_id: int) -> list[int]:
+        """这一枝的全部分类 id（**含自己**）。谓词只有 `_subtree_ids` 那一条，这里是带前置检查的公开口。
+
+        为什么要公开：`services/export_service.py` 的「含子分类」要的正是这一串 id，而它自己不许写
+        SQL（依赖方向，**D-054**）。让服务层去 `name_path LIKE` 就是当年那条把兄弟整枝圈进来的
+        坏谓词的第二次登场 —— 见本文件顶部那段。
+        """
+        conn = self.engine.thread_connection()
+        if conn.execute("SELECT id FROM categories WHERE id=?", (category_id,)).fetchone() is None:
+            raise DatabaseError(f"分类不存在：{category_id}", ValueError("外键前置检查"))
+        return self._subtree_ids(conn, category_id)
+
     # ---- 分类 ----
 
     def add_category(self, name: str, parent_id: int | None = None, note: str | None = None) -> Category:
@@ -155,7 +167,7 @@ class CatalogRepository:
             conn.execute("UPDATE categories SET name=?, name_path=?, updated_at=? WHERE id=?",
                          (new_name, new_path, ts, category_id))
             self._repath_subtree(conn, category_id, old["name_path"], new_path, ts)
-        return self._get_category(category_id)
+        return self.get_category(category_id)
 
     def reparent_category(self, category_id: int, new_parent_id: int | None) -> Category:
         """移动到新的父分类下，更新 name_path 和所有子分类的 name_path。
@@ -186,7 +198,7 @@ class CatalogRepository:
             conn.execute("UPDATE categories SET parent_id=?, name_path=?, updated_at=? WHERE id=?",
                          (new_parent_id, new_path, ts, category_id))
             self._repath_subtree(conn, category_id, old["name_path"], new_path, ts)
-        return self._get_category(category_id)
+        return self.get_category(category_id)
 
     def delete_category(self, category_id: int) -> None:
         """删除这一整枝分类，连带它们的文档关联（子分类的关联由整枝列表显式删掉）。"""
@@ -231,7 +243,7 @@ class CatalogRepository:
             conn.execute(f"DELETE FROM categories WHERE id IN ({marks})", subtree)
         return moved
 
-    def _get_category(self, category_id: int) -> Category:
+    def get_category(self, category_id: int) -> Category:
         row = self.engine.thread_connection().execute(
             "SELECT id,name,parent_id,name_path,note,created_at,updated_at FROM categories WHERE id=?",
             (category_id,)).fetchone()

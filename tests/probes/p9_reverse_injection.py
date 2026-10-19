@@ -408,7 +408,7 @@ CASES: list[Case] = [
                "        except Exception:  # 注入：这一拒不上屏\n"
                "            pass")]),
     Case("65", "右键菜单少一项「改父类…」（那个动作没有入口）",
-         "tests/integration/test_catalog_writes_ui.py::test_右键菜单上就那四项而选中跟着右键走",
+         "tests/integration/test_catalog_writes_ui.py::test_右键菜单上就那五项而选中跟着右键走",
          [Edit("src/pdfarchiver/ui/pages/categories_page.py",
                '            ("改父类…", self.reparent_category),\n',
                "")]),

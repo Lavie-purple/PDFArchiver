@@ -49,6 +49,7 @@ from pdfarchiver.services.backup_service import BackupService
 from pdfarchiver.services.collection_service import CollectionService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
 from pdfarchiver.services.dedup_service import DedupService
+from pdfarchiver.services.export_service import ExportService
 from pdfarchiver.services.index_service import IndexService
 from pdfarchiver.services.ocr_service import OcrService
 from pdfarchiver.services.vector_service import VectorService
@@ -94,8 +95,9 @@ class AppContext:
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
     `semantic_search` / `ai_classify` / `ocr` / `vector` / `dedup` / `backup` / `collection` /
-    `patrol` / `archive` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
-    `collection` 是 **ISSUES I78** 乙的智能集合入口）和 `background_state()`、
+    `patrol` / `archive` / `export` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
+    `collection` 是 **ISSUES I78** 乙的智能集合入口，`export` 是 **ISSUES I78** 丙 的分类清单导出入口），
+    以及 `background_state()`、
     `register_root()`、`unregister_root()`；`documents` / `catalog` / `collections` / `roots` /
     `jobs` / `texts` / `metadata` / `app_settings` / `operations` 是仓储对象，本该是给服务层和测试用的，
     但今天界面确实在直接取其中几个（S1/S8 读 `ctx.catalog` 的分类标签清单、S7 读 `ctx.roots` 的根表）——
@@ -140,6 +142,7 @@ class AppContext:
     dedup: DedupService
     backup: BackupService
     collection: CollectionService
+    export: ExportService
     patrol: Patrol
     events: EventBuffer
     bootstrap_seconds: float
@@ -295,6 +298,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     dedup = DedupService(documents, jobs)
     backup = BackupService(paths, engine)
     collection = CollectionService(collections, documents)
+    export = ExportService(documents, catalog)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
 
@@ -325,6 +329,6 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       scan=scan, indexer=indexer, search=search,
                       semantic_search=semantic_search, ai_classify=ai_classify,
                       ocr=ocr, vector=vector, archive=archive,
-                      dedup=dedup, backup=backup, collection=collection,
+                      dedup=dedup, backup=backup, collection=collection, export=export,
                       patrol=patrol, events=events,
                       bootstrap_seconds=elapsed, schema_version=schema_version)

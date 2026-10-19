@@ -22,6 +22,8 @@ S1 那排 chips 旁边的「存为智能集合」（条件就在那里产生，`
 `merge_categories` 在仓储层早就定义过，但产品里零调用点 —— 于是"改父类"和"合并"这两件事
 在界面上不存在，而 §S8 定案写着分类树"支持增删改名**移动**"。右键上那颗「删除（先检查类下
 有无文件）」也跟着这一定案：删之前先查整枝，有文件就拒绝并给出清单（§S8 定案的第二条后果）。
+第四项「导出此分类清单…」（**ISSUES I78** 丙，同一天）也长在这里：要导出的是"哪一整枝"，
+这个位置只有分类树给得出，S1 那张表格里没有这棵树。
 
 数据全部来自 `AppContext.catalog` 与 `AppContext.collection`（集合的三个读数——命中数、
 可用性、存/覆盖——都只有服务层给得出，这一页不再直取 `collections` 仓储）。
@@ -32,6 +34,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.collection_service import CollectionEntry
+from pdfarchiver.ui.export_dialog import ExportDialog
 from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 
 #: 「放到最外层」在下拉清单里的那一行的载荷。分类 id 由 sqlite 自增、从 1 起，
@@ -192,8 +195,9 @@ class CategoriesPage(QtWidgets.QWidget):
         """造这一枝的右键菜单。**菜单动作的标题从这里出，不许在别处再抄一遍** ——
         p9 注入 I<n> 里「菜单上少一项」要能让断言变红，两处各写一份就注不成。
 
-        菜单上**没有**「导出此分类清单…」：那是 **ISSUES I78** 丙（轮 D），现在加上去
-        就是一颗点了没反应的菜单项。
+        「导出此分类清单…」是 **ISSUES I78** 丙（轮 D，2026-10-19）补上的第四件事：
+        它排在「删除」那道分隔线**之前**，因为前三项与它都是"对这整枝做点什么"，
+        分隔线后面那一项是"取消这整枝"。
         """
         name = item.text(0)
         menu = QtWidgets.QMenu(self)
@@ -201,6 +205,7 @@ class CategoriesPage(QtWidgets.QWidget):
             ("改名…", self.rename_category),
             ("改父类…", self.reparent_category),
             (f"与…合并「{name}」", self.merge_category),
+            ("导出此分类清单…", self.export_category),
             ("", None),
             ("删除（先检查类下有无文件）", self.delete_category),
         ):
@@ -248,8 +253,8 @@ class CategoriesPage(QtWidgets.QWidget):
     def _current_category_id(self, action: str) -> int | None:
         """树上当前选中的分类 id；没选中就回一句提示并返回 None。
 
-        改名 / 改父类 / 合并 / 删除 四件事都只在"选中了某一枝"时才有意义，同一条前置检查
-        只写这一处（AGENTS.md「禁止同类问题逐个打补丁」）。
+        改名 / 改父类 / 合并 / 导出清单 / 删除 五件事都只在"选中了某一枝"时才有意义，
+        同一条前置检查只写这一处（AGENTS.md「禁止同类问题逐个打补丁」）。
         """
         item = self.category_tree.currentItem()
         if item is None:
@@ -316,6 +321,17 @@ class CategoriesPage(QtWidgets.QWidget):
         self._reload_categories()
         QtWidgets.QMessageBox.information(
             self, "合并分类", f"已并过去 · 移动 {moved} 份文档的分类关联")
+
+    def export_category(self) -> None:
+        """导出这一整枝的清单（**ISSUES I78** 丙）：这一层只负责点名哪一枝，口径全在弹层与服务层。
+
+        对话框里不预填目录、也不在这里先查一次"这枝有几份" —— 份数与拒因都只有
+        `ExportService` 说得准，页面重算一遍就是第二个口径（**ISSUES I60** 同一条纪律）。
+        """
+        cat_id = self._current_category_id("导出清单")
+        if cat_id is None:
+            return
+        ExportDialog(self.ctx, cat_id, self).exec()
 
     def delete_category(self) -> None:
         """删除这一整枝 —— 但**先检查类下有无文件，有则拒绝并给清单**（§S8 定案的后果）。
