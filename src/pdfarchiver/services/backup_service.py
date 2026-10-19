@@ -1,9 +1,11 @@
 """备份与恢复服务 —— S6 的后端。
 
 备份口径唯一：`sqlite3.Connection.backup()`（WAL 模式禁止文件拷贝）。
-备份文件名必须带版本号（`catalog-YYYYMMDD-HHMMSS-v版本.db`），否则恢复时不知道跑哪个迁移。
+备份包是一个**目录**（`backup-YYYYMMDD-HHMMSS-v版本/`），内含 `catalog.db` + `settings.json`
+（如果存在）。旧格式（单个 `.db` 文件）仍然可读，恢复时自动识别。
 
-恢复必须写到新目录，不覆盖当前库；用户确认后再切换成新库。
+恢复必须写到新目录，不覆盖当前库；恢复前跑 `PRAGMA integrity_check`，坏库当场拒绝。
+用户确认后再切换成新库。
 """
 from __future__ import annotations
 
@@ -28,30 +30,32 @@ class BackupService:
         self.engine = engine
 
     def create_backup(self, target_dir: str | Path | None = None) -> Path:
-        """备份当前库到指定目录（默认 backups_dir）。返回备份文件路径。
+        """备份当前库 + 设置到指定目录（默认 backups_dir）。返回备份**目录**路径。
 
-        文件名格式：`catalog-YYYYMMDD-HHMMSS-v版本.db`。
-        使用 sqlite3.Connection.backup()，WAL 模式下文件拷贝不可用。
+        目录名格式：`backup-YYYYMMDD-HHMMSS-v版本/`，内含：
+        - `catalog.db`（sqlite3.Connection.backup()）
+        - `settings.json`（如果存在，原样拷贝）
+
+        旧格式（单个 `.db` 文件）不再产出，但仍然可读（`restore_to_new_dir` 自动识别）。
         """
         if target_dir is None:
             target_dir = self.paths.backups_dir
         target_dir = Path(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # 取当前版本号
         conn = self.engine.thread_connection()
         version = current_version(conn)
 
-        # 生成文件名
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y%m%d-%H%M%S")
-        filename = f"catalog-{timestamp}-v{version}.db"
-        backup_path = target_dir / filename
+        dir_name = f"backup-{timestamp}-v{version}"
+        backup_dir = target_dir / dir_name
+        backup_dir.mkdir(parents=True, exist_ok=True)
 
-        # 执行备份（sqlite3.Connection.backup()）
+        db_path = backup_dir / "catalog.db"
         src_conn = sqlite3.connect(str(self.engine.path))
         try:
-            dst_conn = sqlite3.connect(str(backup_path))
+            dst_conn = sqlite3.connect(str(db_path))
             try:
                 src_conn.backup(dst_conn)
             finally:
@@ -59,11 +63,19 @@ class BackupService:
         finally:
             src_conn.close()
 
-        log.info("备份完成：%s", backup_path)
-        return backup_path
+        settings_src = self.paths.settings_file
+        if settings_src.exists():
+            shutil.copy2(str(settings_src), str(backup_dir / "settings.json"))
+
+        log.info("备份完成：%s", backup_dir)
+        return backup_dir
 
     def list_backups(self, backup_dir: str | Path | None = None) -> list[dict]:
-        """列出指定目录下的全部备份文件。返回 [{"path": Path, "version": int, "mtime": int}, ...]。"""
+        """列出指定目录下的全部备份。返回 [{"path": Path, "version": int, "mtime": int,
+        "kind": "dir"|"file"}, ...]。
+
+        同时识别新格式（目录）与旧格式（单个 `.db` 文件）。
+        """
         if backup_dir is None:
             backup_dir = self.paths.backups_dir
         backup_dir = Path(backup_dir)
@@ -71,21 +83,28 @@ class BackupService:
             return []
 
         backups = []
+
+        for d in backup_dir.glob("backup-*"):
+            if d.is_dir():
+                version = _parse_version_from_stem(d.name)
+                if version is not None:
+                    backups.append({
+                        "path": d,
+                        "version": version,
+                        "mtime": int(d.stat().st_mtime),
+                        "kind": "dir",
+                    })
+
         for p in backup_dir.glob("catalog-*.db"):
-            # 从文件名解析版本号
-            parts = p.stem.split("-")
-            version = None
-            for part in parts:
-                if part.startswith("v") and part[1:].isdigit():
-                    version = int(part[1:])
-                    break
+            version = _parse_version_from_stem(p.stem)
             if version is not None:
                 backups.append({
                     "path": p,
                     "version": version,
                     "mtime": int(p.stat().st_mtime),
+                    "kind": "file",
                 })
-        # 按修改时间倒序
+
         backups.sort(key=lambda b: b["mtime"], reverse=True)
         return backups
 
@@ -93,6 +112,11 @@ class BackupService:
                            target_dir: str | Path) -> Path:
         """把备份恢复到新目录（不覆盖当前库）。返回新库路径。
 
+        自动识别新旧格式：
+        - 新格式（目录）：从 `backup_dir/catalog.db` 拷贝，同时恢复 `settings.json`（如果存在）
+        - 旧格式（单个 `.db` 文件）：直接拷贝
+
+        恢复后跑 `PRAGMA integrity_check`，失败则删除已拷贝的文件并抛 `ValueError`。
         用户确认后，由调用方切换 engine 连接（本服务不自动切换）。
         """
         backup_path = Path(backup_path)
@@ -103,8 +127,52 @@ class BackupService:
         if new_db.exists():
             raise FileExistsError(f"目标库已存在：{new_db}")
 
-        # 拷贝备份文件到新位置
-        shutil.copy2(str(backup_path), str(new_db))
+        if backup_path.is_dir():
+            src_db = backup_path / "catalog.db"
+            if not src_db.exists():
+                raise FileNotFoundError(f"备份目录里没有 catalog.db：{backup_path}")
+            shutil.copy2(str(src_db), str(new_db))
+
+            src_settings = backup_path / "settings.json"
+            if src_settings.exists():
+                dst_config = target_dir / "config"
+                dst_config.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src_settings), str(dst_config / "settings.json"))
+        else:
+            shutil.copy2(str(backup_path), str(new_db))
+
+        restored_engine = Engine(new_db)
+        try:
+            check = restored_engine.integrity_check()
+        except Exception as exc:
+            del restored_engine
+            import gc
+            gc.collect()
+            import time
+            for _ in range(5):
+                try:
+                    new_db.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(0.2)
+            raise ValueError(
+                f"恢复出来的库无法打开（{exc}）。已删除残留文件。") from exc
+        restored_engine.close_thread_connection()
+        del restored_engine
+
+        if check != "ok":
+            import gc
+            gc.collect()
+            import time
+            for _ in range(5):
+                try:
+                    new_db.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(0.2)
+            raise ValueError(
+                f"恢复出来的库完整性检查失败：{check}。已删除残留文件。")
+
         log.info("恢复到新目录：%s", new_db)
         return new_db
 
@@ -115,7 +183,6 @@ class BackupService:
         """
         migrations_dir = self.paths.root.parent / "src" / "pdfarchiver" / "db" / "migrations"
         if not migrations_dir.exists():
-            # 尝试从包内找
             import pdfarchiver.db.migrations as m
             migrations_dir = Path(m.__file__).parent
 
@@ -131,3 +198,11 @@ class BackupService:
                 "applied": m.order <= current,
             })
         return result
+
+
+def _parse_version_from_stem(stem: str) -> int | None:
+    """从 `backup-YYYYMMDD-HHMMSS-v版本` 或 `catalog-YYYYMMDD-HHMMSS-v版本` 里提取版本号。"""
+    for part in stem.split("-"):
+        if part.startswith("v") and part[1:].isdigit():
+            return int(part[1:])
+    return None
