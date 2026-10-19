@@ -7,6 +7,9 @@ file_operations 是一次操作批次（如"归档 128 份文件"），operation
   不在表里 —— 见迁移 `0005_stage4_vocab` 的 CHECK 与 **D-048**）
 
 journal_path 指向 JSONL 文件，每步操作前写一行，用于崩溃恢复。
+批次的 `kind` 只有 `archive`（正向）与 `undo`（反向，**D-043** 甲：另开一条批次而不是改原行），
+「已归档」那一列的口径就靠这个值把撤销写下的那几行排除掉 —— 见 `last_archive_destinations()`
+与 **ISSUES I78** 丙。
 job_id 是「队列任务 ⇄ 操作批次」的反查口径（**D-043** 第 2 条后果 / **ISSUES I43**）：
 由 `claim_previewed()` 在领批次的那一刻写下，所以它指的是"真的跑掉这一批的那条任务"，
 而不是提交时猜的那一条。
@@ -14,11 +17,13 @@ job_id 是「队列任务 ⇄ 操作批次」的反查口径（**D-043** 第 2 �
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from pdfarchiver.db.engine import Engine, DatabaseError
 from pdfarchiver.db.models import ITEM_KINDS, ITEM_STATES, OP_STATUSES, now_ts
+from pdfarchiver.db.repositories.documents import MAX_BULK_IDS
 
 
 @dataclass
@@ -173,6 +178,43 @@ class OperationRepository:
             "error, src_sha256, dst_sha256, updated_at "
             "FROM operation_items WHERE op_id=? ORDER BY id", (op_id,)).fetchall()
         return [OperationItem(**dict(r)) for r in rows]
+
+    def last_archive_destinations(self, doc_ids: Iterable[int]) -> dict[int, str]:
+        """每份文档**最后一笔已完成的归档搬动**落到了哪儿（`{doc_id: dst_path}`）。
+
+        「已归档」只有一个口径（**ISSUES I78** 丙 · 轮十五 丙），而它对台账的形状很挑，
+        所以四个挑法都写死在这里，界面上与导出里都不许再各挑一次：
+
+        - **「最后一笔」按 `id` 最大取，不按 `updated_at`**：写终态那句取的是 `now_ts()`，
+          那是**秒级**的，同一批里前后几条会并列，按它排就等于让 SQLite 的返回顺序决定谁赢。
+          `id` 是单调的，一份文件归档两次（换了模板重跑）时第二次天然在后面。
+        - **只认正向批次（`file_operations.kind='archive'`）**：撤销是另开一条 `kind='undo'`
+          的批次、条目是全新的行且 src/dst 取反（**D-043** 甲）。不加这一道筛选，刚被退回
+          原处的文件会因为"正躺在反向搬动把它放去的位置上"而重新读成已归档。
+        - **`state='done'` 就够了，不再筛 `kind`**：0005 的 CHECK 只有 `move`/`copy` 两个值，
+          两个都把文件落到 `dst_path`（`copy` 是跨盘那一档：验完 sha256 才删源，G19）。
+          `pending`/`failed`/`skipped` 都不算 —— 那些文件根本不在 `dst_path` 上。
+        - `doc_id` 为 NULL 的历史不参与（原记录被删过，`ON DELETE SET NULL`）：它已经没有
+          一条"当前路径"可以跟落点对照。
+
+        一批一条 SQL、最多 `MAX_BULK_IDS` 个 id，与 `CatalogRepository.tags_by_doc_ids` 同形
+        （**ISSUES I51**：逐行查就是 n 条 SQL）。返回的字典**只含有归档记录的**那些份，
+        缺键就是"这批台账里没动过它"，调用方不要替它补一个落点。
+        """
+        unique = list(dict.fromkeys(doc_ids))
+        if not unique:
+            return {}
+        if len(unique) > MAX_BULK_IDS:
+            raise ValueError(f"一次取 {len(unique)} 条超出 {MAX_BULK_IDS}；"
+                             "大批量请按条件分页取文档，不要把 ID 列表塞进参数")
+        marks = ",".join("?" * len(unique))
+        rows = self.engine.thread_connection().execute(
+            "SELECT doc_id, dst_path FROM operation_items WHERE id IN ("
+            "  SELECT max(x.id) FROM operation_items AS x"
+            "  JOIN file_operations AS y ON y.id = x.op_id"
+            "  WHERE x.state='done' AND y.kind='archive' AND x.dst_path IS NOT NULL"
+            f"    AND x.doc_id IN ({marks}) GROUP BY x.doc_id)", unique).fetchall()
+        return {int(r["doc_id"]): str(r["dst_path"]) for r in rows}
 
     def start_operation(self, op_id: int) -> None:
         conn = self.engine.thread_connection()

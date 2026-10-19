@@ -35,7 +35,7 @@ from pdfarchiver.db.repositories.catalog import CatalogRepository
 from pdfarchiver.db.repositories.documents import NS_PER_SECOND, DocumentRepository
 from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.operations import FileOperation, OperationRepository
-from pdfarchiver.fs.identity import read_identity
+from pdfarchiver.fs.identity import identity_key, read_identity
 from pdfarchiver.jobs.queue import JobCancelled, ProgressMonitor
 from pdfarchiver.services.status_service import format_day
 
@@ -192,6 +192,36 @@ class UndoPlan:
     moves: tuple[PlannedMove, ...]
     excluded: tuple[str, ...]
     irreversible: int
+
+
+def is_archived(path_key: str, last_archive_dst: str | None) -> bool:
+    """「已归档」的唯一口径（**ISSUES I78** 丙 · 轮十五 丙）。
+
+    库里**没有** `is_archived` 这一列，也不该有：归档这个动作改的是路径而不是标记
+    （`documents.adopt_path` 改路径不改 id），加一列就等于让"文件在哪儿"有两个说法。
+    所以这个概念只能从两件已经存在的事实算出来，而这两件各只有一个出处：
+
+    1. 这份文档**当前**在哪 —— `documents.path_key`（扫描与执行器共同维护，全站唯一）；
+    2. 最后一笔**正向归档**把它放在了哪 —— `OperationRepository.last_archive_destinations()`
+       （挑法在那句 SQL 里：`state='done'`、按 `max(id)`、只认 `kind='archive'` 的批次）。
+
+    两者归一化之后相等就算「是」。三个后果要说在前面，它们不是偏好：
+
+    - **撤销之后读「否」**。反向批次写的是它自己的行（**D-043** 甲），文件回到原处，
+      于是"当前位置"不再等于"归档落点"。这一条是本轮否掉的第一版口径（"最后一笔搬动的落点"）
+      所露出来的形状：那种读法会把刚刚被人退回原处的文件重新报成已归档。
+    - **归档之后又被手动挪走读「否」**。诚实版：这一列说的是"它还在归档把它放去的位置上"，
+      不是"它曾经被归档过"。要那个历史语义得另立一列，而那需要库里真留一个标记。
+    - **从没归档过读「否」**而不是空着。缺键就是"台账里没有它"，而"没有"是这一列能答的
+      三种情况之一（与「本机绝对路径」那一列不同：那一列的缺席是隐私口径，不是无信息）。
+
+    归一化走 `identity_key`（**D-005** 同一条）而不是字符串相等：台账里的 `dst_path` 是计划
+    渲染出来的原生 Windows 写法（`C:\\a\\b.pdf`），`path_key` 是正斜杠小写；不归一就是**永远**
+    读「否」，而那种错在界面上看起来完全正常（**ISSUES I89** 甲 判过的同一族）。
+    """
+    if last_archive_dst is None:
+        return False
+    return identity_key(last_archive_dst) == path_key
 
 
 class ArchiveService:

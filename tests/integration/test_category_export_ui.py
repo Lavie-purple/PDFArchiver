@@ -9,7 +9,8 @@
 (b) 未勾的列**不出现在** CSV 表头 / JSON key 里（`test_未勾的列不出现在表头与json键里`）；
 (c) 默认产物里 grep 不到盘符，勾了「本机绝对路径」才出现，且勾时弹一次确认
     （`test_默认产物里搜不到盘符` + 确认的两条路径各一条）；
-(d) 只读：导出前后 `documents` / `document_categories` / `document_tags` 逐行不变；
+(d) 只读：导出前后 `documents` / `document_categories` / `document_tags` 逐行不变
+    （轮十五 丙 起「已归档」要读台账，这条跟着扩到 `file_operations` / `operation_items`）；
 (e) 与 **ISSUES I77** 甲 的 `name_ci` 口径一致：同名的两枝各导各的、产物文件名不撞。
 
 另有六条线框没写但实现期冒出来的口径断言：弹层上的列与格式**逐字来自服务层那张表**
@@ -18,8 +19,12 @@
 Markdown 里的竖线要转义、被拒时不留半截产物。屏幕上那句回执逐字来自
 `ExportReceipt.describe()`（**ISSUES I60**），「没有目录就不许点得动」沿用 **ISSUES I74** 那一族。
 
-**25 条各配一条坏法，全部真注入过**：`tests/probes/p22_category_export_injection.py`
-（2026-10-19 实跑：基线 25 条绿，25 条坏法全部红且各自点名自己那一条，单跑 73s）。
+**31 条断言各配坏法（33 条），全部真注入过**：`tests/probes/p22_category_export_injection.py`
+（轮十五 丙 实跑：基线 31 条绿，33 条坏法全部红且各自点名自己那一条）。
+
+「已归档」那一列（轮十五 丙，**ISSUES I78** 丙 的残留 ②）另成一组：口径由
+`archive_service.is_archived` 一家说，表头带着口径名，默认列集里故意没有它 ——
+库里没有 `is_archived` 这一列，也不该有。
 
 夹具三条规矩照常（offscreen、独立数据根、真 sqlite3 —— **D-012**）；库里的文档全是现造的假名字，
 真实语料一条不进测试（**ISSUES I64**）。测试直连真库只为**数行与算指纹**——(d) 那条要的就是
@@ -168,7 +173,7 @@ def _by_suffix(dest: Path) -> dict[str, Path]:
 
 
 def _fingerprint(ctx, tables: tuple[str, ...]) -> dict[str, str]:
-    """三张表的**逐行指纹**：内容一样 → 字符串一样。导出前后各算一次就是 (d) 那条。"""
+    """几张表的**逐行指纹**：内容一样 → 字符串一样。导出前后各算一次就是 (d) 那条。"""
     conn = ctx.engine.thread_connection()
     out: dict[str, str] = {}
     for table in tables:
@@ -181,6 +186,34 @@ def _csv_rows(path: Path) -> list[list[str]]:
     return list(csv.reader(io.StringIO(path.read_text(encoding="utf-8-sig"))))
 
 
+def _ledger(ctx, doc_id: int, dst: str, *, batch: str = "archive",
+            state: str = "done", kind: str = "move") -> None:
+    """在真台账里写一条搬动：先 `pending` 落库再写终态，与执行器同一形状（**D-048**）。"""
+    op = ctx.operations.create_operation(batch)
+    item = ctx.operations.add_item(op.id, doc_id, kind, f"E:\\导出测试源\\{doc_id}.pdf", dst)
+    if state != "pending":
+        ctx.operations.update_item_state(item.id, state)
+
+
+def _relocate(ctx, doc_id: int, path: str) -> None:
+    """搬完之后的收尾：`adopt_path` 换 path/path_key，**id 不变**（归档执行真做完的样子）。"""
+    ctx.documents.adopt_path(
+        doc_id, path=path, path_key=identity_key(path), name=Path(path).name,
+        ext=".pdf", size_bytes=2048, mtime_ns=1_760_000_000_000_000_000, ctime_ns=None)
+
+
+def _archived_cells(ctx, category_id: int, dest: Path) -> dict[str, str]:
+    """按「文件名 → 已归档单元格」导一遍，读的是产品自己那条链路（勾列 → 导出 → 解析）。"""
+    dest.mkdir(parents=True, exist_ok=True)
+    box = _box(ctx, category_id)
+    box.column_checks["archived"].setChecked(True)
+    _set_dir(box, dest)
+    box.run_export()
+    rows = _csv_rows(_written(dest)[0])
+    col = rows[0].index("已归档（按最后一笔归档落点）")
+    return {r[0]: r[col] for r in rows[1:]}
+
+
 # ---------------------------------------------------------------------------
 # 口径来源：弹层不许抄一份列清单
 # ---------------------------------------------------------------------------
@@ -188,7 +221,7 @@ def _csv_rows(path: Path) -> list[list[str]]:
 def test_弹层上的列与格式逐字来自服务层那张表(ctx, branch) -> None:
     """**ISSUES I80** 那一类：界面写着有、产物写不出。
 
-    十一行复选框与三颗单选钮的**文本**必须逐个等于 `EXPORT_COLUMNS` / `FORMATS` 里的标签 ——
+    十二行复选框与三颗单选钮的**文本**必须逐个等于 `EXPORT_COLUMNS` / `FORMATS` 里的标签 ——
     界面抄一份，服务层加一列时界面就会先上屏一个"勾了也没用"的选项。
     """
     box = _box(ctx, branch["fin"].id)
@@ -319,10 +352,10 @@ def test_未勾的列不出现在表头与json键里(ctx, branch, tmp_path) -> N
 # ---------------------------------------------------------------------------
 
 def test_默认产物里搜不到盘符(ctx, branch, tmp_path) -> None:
-    """(c) 的前半：把十一列**全勾满但不勾隐私列**，产物正文里仍然不许出现 `[A-Z]:\\`。
+    """(c) 的前半：把十二列**全勾满但不勾隐私列**，产物正文里仍然不许出现 `[A-Z]:\\`。
 
     勾满再 grep 而不是按默认五列 grep，是因为"默认档里没有路径"可以靠漏列蒙对；
-    而「本机绝对路径」是唯一带盘符的来源，其余十列的值都来自文件本身。
+    而「本机绝对路径」是唯一带盘符的来源，其余十一列的值来自文件或库里的元数据。
     """
     dest = tmp_path / "out"
     dest.mkdir()
@@ -370,22 +403,111 @@ def test_确认时答否就回落到未勾而产物里没有那一列(ctx, branc
 # 线框硬断言 (d)：只读
 # ---------------------------------------------------------------------------
 
-def test_只读导出前后三张表逐行不变(ctx, branch, tmp_path) -> None:
-    """(d)：`documents` / `document_categories` / `document_tags` 三张表**逐行**相同。
+def test_只读导出前后五张表逐行不变(ctx, branch, tmp_path) -> None:
+    """(d)：`documents` / `document_categories` / `document_tags` + 台账两张表**逐行**相同。
 
     这条要拦的是"顺手写一笔"的诱惑：导出时给分类记一个"上次导出时间"看起来无害，
-    但它让一屏只读操作变成写操作，而界面上没有任何地方说它写了。
+    但它让一屏只读操作变成写操作，而界面上没有任何地方说它写了。轮十五 丙 起「已归档」
+    要读台账，所以那两张表也进指纹 —— 读归读，写一笔就不行。
     """
-    tables = ("documents", "document_categories", "document_tags")
+    doc = branch["own"][0]
+    _ledger(ctx, doc, "E:\\导出测试归档\\只读.pdf")
+    _relocate(ctx, doc, "E:\\导出测试归档\\只读.pdf")
+    tables = ("documents", "document_categories", "document_tags",
+              "file_operations", "operation_items")
     before = _fingerprint(ctx, tables)
     dest = tmp_path / "out"
     dest.mkdir()
     box = _box(ctx, branch["fin"].id)
     box.column_checks["tags"].setChecked(True)
+    box.column_checks["archived"].setChecked(True)
     _set_dir(box, dest)
     box.run_export()
     assert _written(dest), "这一条没真的导出东西，指纹相同只是因为什么都没发生"
     assert _fingerprint(ctx, tables) == before, "导出动了库"
+
+
+# ---------------------------------------------------------------------------
+# 「已归档」唯一口径（ISSUES I78 丙 · 轮十五 丙）
+# ---------------------------------------------------------------------------
+
+def test_默认列集仍是线框勾的那五列() -> None:
+    """默认档是五列**有序**的一项策略：多一列就多一次跨表读，少一列就少一个判据。
+
+    比的是元组而不是集合 —— 集合放得过"顺序被 sort 过一遍"，而列顺序是产物的一部分。
+    """
+    assert DEFAULT_COLUMNS == ("name", "page_count", "size_bytes", "sha256_12", "mtime")
+
+
+def test_已归档列的表头带着口径名() -> None:
+    """库里没有 `is_archived` 这一列，也不该有：口径不写进表头，拿到清单的人
+    会以为它是文件的属性，而不是"按台账最后一笔归档落点"算出来的。
+    """
+    label = next(c.label for c in EXPORT_COLUMNS if c.key == "archived")
+    assert label == "已归档（按最后一笔归档落点）"
+
+
+def test_已归档列读的是最后一笔归档落点(ctx, branch, tmp_path) -> None:
+    """同一份文件归档两次（换了模板重跑）：读**最后一笔**，不是第一笔。
+
+    另一份从没归档过的读「否」而不是空着 —— 空列分不清"没归档"与"这一列没实现"。
+    """
+    doc = branch["own"][0]
+    old = "E:\\导出测试归档\\旧\\财务卷0号.pdf"
+    new = "E:\\导出测试归档\\新\\财务卷0号.pdf"
+    for dst in (old, new):
+        _ledger(ctx, doc, dst)
+        _relocate(ctx, doc, dst)
+    assert ctx.operations.last_archive_destinations([doc])[doc] == new
+    cells = _archived_cells(ctx, branch["fin"].id, tmp_path / "out")
+    assert cells["财务卷0号.pdf"] == "是", cells
+    assert cells["合同卷0号.pdf"] == "否", f"从没归档过的读成了 {cells['合同卷0号.pdf']!r}"
+
+
+def test_撤销之后这一列读否而归档落点那行还在台账里(ctx, branch, tmp_path) -> None:
+    """撤销另开一条 `kind='undo'` 的批次、src/dst 取反（**D-043** 甲），原来那行不动。
+
+    只看"最后一笔搬动落在哪"的旧口径会把刚退回原处的文件报成已归档 —— 文件确实正躺在
+    那笔撤销把它放去的位置上。所以这里先证台账里归档落点还在，再证这一列读「否」：
+    「否」来自位置对不上，不是来自历史被抹了。
+    """
+    doc = branch["own"][1]
+    archived_to = "E:\\导出测试归档\\撤销前\\财务卷1号.pdf"
+    original = "D:\\导出测试\\财务\\财务卷1号.pdf"
+    _ledger(ctx, doc, archived_to)
+    _relocate(ctx, doc, archived_to)
+    _ledger(ctx, doc, original, batch="undo")
+    _relocate(ctx, doc, original)
+    assert ctx.operations.last_archive_destinations([doc])[doc] == archived_to, \
+        "归档那条记录被撤销批次顶掉了"
+    cells = _archived_cells(ctx, branch["fin"].id, tmp_path / "out")
+    assert cells["财务卷1号.pdf"] == "否", "退回原处之后仍读已归档"
+
+
+def test_跨盘归档的copy条目也算已归档(ctx, branch, tmp_path) -> None:
+    """跨盘那一档台账写的是 `kind='copy'`（验完 sha256 才删源，G19），文件照样落在 `dst_path`。
+
+    只在 `kind='move'` 里挑，等于把"跨盘归档过"的文档全报成没归档 —— 而它恰恰是搬过的。
+    """
+    doc = branch["own"][0]
+    dst = "E:\\导出测试归档\\跨盘\\财务卷0号.pdf"
+    _ledger(ctx, doc, dst, kind="copy")
+    _relocate(ctx, doc, dst)
+    cells = _archived_cells(ctx, branch["fin"].id, tmp_path / "out")
+    assert cells["财务卷0号.pdf"] == "是", cells
+
+
+def test_没跑完的搬动不算已归档(ctx, branch, tmp_path) -> None:
+    """`failed` / `skipped` 的条目文件根本没落到 `dst_path`，不能进这个口径。
+
+    先直接读仓储：导出层那句 `len()` 看不出"把失败项也算进来"这种坏法。
+    """
+    failed, skipped = branch["kids"][0], branch["kids"][1]
+    _ledger(ctx, failed, "E:\\导出测试归档\\失败的.pdf", state="failed")
+    _ledger(ctx, skipped, "E:\\导出测试归档\\跳过的.pdf", state="skipped")
+    assert ctx.operations.last_archive_destinations([failed, skipped]) == {}
+    cells = _archived_cells(ctx, branch["fin"].id, tmp_path / "out")
+    assert cells["合同卷0号.pdf"] == "否" and cells["合同卷1号.pdf"] == "否", cells
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +670,8 @@ def test_没有页数的文档写成空单元格而不是none字面量(ctx, bran
 
 
 def test_勾上标签列之后每行是那几个标签(ctx, branch, tmp_path) -> None:
-    """标签列是十一列里唯一要**跨表**取值的：一批一条查询取回（**ISSUES I51** 那条纪律）。
+    """标签列是十二列里要**跨表**取值的那两列之一（另一列是「已归档」）：一批一条查询
+    （**ISSUES I51** 那条纪律）。
 
     这条数结果（6 份里 2 份带标签、4 份空）；"逐行查"那种坏法不改结果，所以由 p22 注入里
     数 SQL 条数那一 case 负责。
@@ -655,8 +778,10 @@ def test_导出链路每一环在产品侧各有调用点了() -> None:
     src = Path(__file__).resolve().parents[2] / "src"
     files = {p.relative_to(src).as_posix(): p.read_text(encoding="utf-8") for p in src.rglob("*.py")}
     expected = {
-        "ExportService(documents, catalog)": "pdfarchiver/services/bootstrap.py",
+        "ExportService(documents, catalog, operations)": "pdfarchiver/services/bootstrap.py",
         "self.catalog.subtree_ids(category_id)": "pdfarchiver/services/export_service.py",
+        "self.ops.last_archive_destinations(": "pdfarchiver/services/export_service.py",
+        "is_archived(d.path_key": "pdfarchiver/services/export_service.py",
         "self.ctx.export.count(": "pdfarchiver/ui/export_dialog.py",
         "self.ctx.export.export(": "pdfarchiver/ui/export_dialog.py",
         "ExportDialog(self.ctx, cat_id, self)": "pdfarchiver/ui/pages/categories_page.py",

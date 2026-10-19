@@ -1,8 +1,9 @@
 """p22 · 轮十四 D（**ISSUES I78** 丙 · 分类清单导出）的坏法注入证伪。
 
 AGENTS.md 的规矩：「每写完一条断言，先用能骗过它的坏法真注入一次；不会变红的断言直接删」。
-本文件覆盖 `tests/integration/test_category_export_ui.py` 的**全部 25 个测试函数**，
+本文件覆盖 `tests/integration/test_category_export_ui.py` 的**全部 31 个测试函数**，
 一条不落 —— 每个坏法都是一个"等价但错"的生产代码改动，要求它**必然**把自己该杀的那条打红。
+轮十五 丙 起「已归档」那一列也在这张网里（k1–k8，其中 k4/k5 分别打 T3 的两半）。
 
 跑法：
     .venv/Scripts/python.exe tests/probes/p22_category_export_injection.py             # 全跑
@@ -17,8 +18,8 @@ AGENTS.md 的规矩：「每写完一条断言，先用能骗过它的坏法真�
 3. 先跑一遍**未注入**的基线。没有这一步，"注入后变红"可能只是复制环境跑不起来，那不算证据。
 
 编号用的是断言自己的字母（线框 §I78-bing 的硬断言 (a)–(e) / u=口径来源 / n=落盘纪律 /
-r=回执 / f=格式与空值 / g=门 / w=接线），不用连续序号 —— 序号会和 ISSUES 的 `I<n>` 撞名，
-那正是 **ISSUES I35** 清掉过的那类歧义。
+r=回执 / f=格式与空值 / g=门 / w=接线 / k=已归档口径），不用连续序号 —— 序号会和
+ISSUES 的 `I<n>` 撞名，那正是 **ISSUES I35** 清掉过的那类歧义。
 
 runner 的判定口径与 **ISSUES I55** 一致：`rc≠0 且 failed≥1 且 errored==0`；锚点命中不是恰好一次
 判「注入失效」（那种情况下断言根本没被改到，结论不作数）。
@@ -37,6 +38,7 @@ from p9_reverse_injection import Case, Edit, _apply, _copy_repo, _run, _verdicts
 CRIT = "tests/integration/test_category_export_ui.py::"
 
 SVC = "src/pdfarchiver/services/export_service.py"
+OPS = "src/pdfarchiver/db/repositories/operations.py"
 BOX = "src/pdfarchiver/ui/export_dialog.py"
 CATS = "src/pdfarchiver/ui/pages/categories_page.py"
 BOOT = "src/pdfarchiver/services/bootstrap.py"
@@ -75,10 +77,10 @@ CASES: list[Case] = [
          CRIT + "test_未勾的列不出现在表头与json键里",
          [Edit(SVC, "    writer.writerow([s.label for s in specs])\n"
                    "    for doc in rows:\n"
-                   "        writer.writerow([s.value(doc, tags) for s in specs])",
+                   "        writer.writerow([s.value(doc, batch) for s in specs])",
                "    writer.writerow([c.label for c in EXPORT_COLUMNS])\n"
                "    for doc in rows:\n"
-               "        writer.writerow([c.value(doc, tags) if c in specs else \"\" for c in EXPORT_COLUMNS])")]),
+               "        writer.writerow([c.value(doc, batch) if c in specs else \"\" for c in EXPORT_COLUMNS])")]),
 
     # —— 硬断言 (c)：本机绝对路径 ——————————————————————————————————
     Case("c1", "「文件名」那一列写的是整条路径（列名与取值不同源，盘符漏进产物）",
@@ -95,7 +97,7 @@ CASES: list[Case] = [
 
     # —— 硬断言 (d)：只读 ——————————————————————————————————————————
     Case("d1", "导出时顺手把这一枝的文档标成「这次扫描见过」（只读变成写）",
-         CRIT + "test_只读导出前后三张表逐行不变",
+         CRIT + "test_只读导出前后五张表逐行不变",
          [Edit(SVC, "        target = self._target(dest_dir, category.name_path, ext)",
                "        self.documents.mark_scanned_many(d.id for d in docs)   # 注入：顺手记一笔\n"
                "        target = self._target(dest_dir, category.name_path, ext)")]),
@@ -166,8 +168,51 @@ CASES: list[Case] = [
                "            (\"导出此分类清单…\", lambda: None),   # 注入：空动作")]),
     Case("w2", "装配时不接 `export` 服务字段（弹层构造得出，一按就断）",
          CRIT + "test_导出链路每一环在产品侧各有调用点了",
-         [Edit(BOOT, "    export = ExportService(documents, catalog)",
+         [Edit(BOOT, "    export = ExportService(documents, catalog, operations)",
                "    export = None   # 注入：这一环没接上")]),
+
+    # —— 已归档唯一口径（ISSUES I78 丙 · 轮十五 丙）——————————————————
+    Case("k1", "撤销批次也当正向归档（退回原处的文件读成已归档）",
+         CRIT + "test_撤销之后这一列读否而归档落点那行还在台账里",
+         [Edit(OPS, "WHERE x.state='done' AND y.kind='archive' AND x.dst_path IS NOT NULL",
+               "WHERE x.state='done' AND x.dst_path IS NOT NULL   # 注入：撤销也算")]),
+    Case("k2", "只认 move、不认跨盘那一档 copy（跨盘归档过的全报没归档）",
+         CRIT + "test_跨盘归档的copy条目也算已归档",
+         [Edit(OPS, "WHERE x.state='done' AND y.kind='archive' AND x.dst_path IS NOT NULL",
+               "WHERE x.state='done' AND y.kind='archive' AND x.kind='move'"
+               " AND x.dst_path IS NOT NULL")]),
+    Case("k3", "失败 / 跳过的搬动也算已归档（文件根本没落到 dst_path）",
+         CRIT + "test_没跑完的搬动不算已归档",
+         [Edit(OPS, "WHERE x.state='done' AND y.kind='archive' AND x.dst_path IS NOT NULL",
+               "WHERE x.state IN ('done','failed','skipped') AND y.kind='archive'"
+               " AND x.dst_path IS NOT NULL")]),
+    Case("k4", "「最后一笔」取成第一笔（换模板重跑之后读的还是旧落点）",
+         CRIT + "test_已归档列读的是最后一笔归档落点",
+         [Edit(OPS, "  SELECT max(x.id) FROM operation_items AS x",
+               "  SELECT min(x.id) FROM operation_items AS x   # 注入：取第一笔")]),
+    Case("k5", "导出层根本没去取归档落点（整列恒读否）",
+         CRIT + "test_已归档列读的是最后一笔归档落点",
+         [Edit(SVC, "        out: dict[int, str] = {}\n"
+                   "        for start in range(0, len(doc_ids), MAX_BULK_IDS):\n"
+                   "            out.update(self.ops.last_archive_destinations(\n"
+                   "                list(doc_ids[start:start + MAX_BULK_IDS])))\n"
+                   "        return out",
+               "        return {}   # 注入：一批都不取")]),
+    Case("k6", "默认列集偷偷多勾「已归档」（默认导出白扫一遍台账）",
+         CRIT + "test_默认列集仍是线框勾的那五列",
+         [Edit(SVC, "DEFAULT_COLUMNS: tuple[str, ...] = (\"name\", \"page_count\", \"size_bytes\","
+                    " \"sha256_12\", \"mtime\")",
+               "DEFAULT_COLUMNS: tuple[str, ...] = (\"name\", \"page_count\", \"size_bytes\","
+               " \"sha256_12\", \"mtime\", \"archived\")")]),
+    Case("k7", "表头只写「已归档」不带口径名（读者以为它是文件属性）",
+         CRIT + "test_已归档列的表头带着口径名",
+         [Edit(SVC, "ARCHIVED_LABEL = \"已归档（按最后一笔归档落点）\"",
+               "ARCHIVED_LABEL = \"已归档\"   # 注入：口径名掉了")]),
+    Case("k8", "读台账时顺手收掉一个批次（只读导出写一笔业务表）",
+         CRIT + "test_只读导出前后五张表逐行不变",
+         [Edit(SVC, "        out: dict[int, str] = {}",
+               "        self.ops.finish_operation(1)   # 注入：读的时候写一笔\n"
+               "        out: dict[int, str] = {}")]),
 ]
 
 

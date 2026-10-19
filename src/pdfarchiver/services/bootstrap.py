@@ -298,7 +298,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     dedup = DedupService(documents, jobs)
     backup = BackupService(paths, engine)
     collection = CollectionService(collections, documents)
-    export = ExportService(documents, catalog)
+    export = ExportService(documents, catalog, operations)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
 
