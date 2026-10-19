@@ -736,16 +736,16 @@
             <div class="form-row"><span class="label">输出格式</span><span class="radios"><span class="on">CSV</span><span>JSON</span><span>Markdown 表</span></span></div>
             <div class="form-row"><span class="label">导出列</span>
               <span class="checkboxes">
-                <label><input type="checkbox" checked>标题</label>
+                <label><input type="checkbox" checked>文件名</label>
                 <label><input type="checkbox" checked>页数</label>
-                <label><input type="checkbox" checked>大小 (MB)</label>
-                <label><input type="checkbox" checked>sha256（前 12 位）</label>
+                <label><input type="checkbox" checked>大小 (字节)</label>
+                <label><input type="checkbox" checked>SHA256（前 12 位）</label>
                 <label><input type="checkbox" checked>修改时间</label>
-                <label><input type="checkbox">文字层</label>
+                <label><input type="checkbox">正文覆盖率</label>
                 <label><input type="checkbox">OCR 状态</label>
                 <label><input type="checkbox">向量状态</label>
                 <label><input type="checkbox">索引状态</label>
-                <label><input type="checkbox">已归档</label>
+                <label><input type="checkbox">已归档（按最后一笔归档落点）</label>
                 <label><input type="checkbox">标签</label>
                 <label><input type="checkbox">本机绝对路径 <span class="warn">⚠ 隐私</span></label>
               </span>
@@ -766,7 +766,7 @@
           (a) 导出行数 == 那条 <code>SELECT COUNT(*)</code>（含子时用递归 CTE 或 <code>category_id IN (子树)</code>）；
           (b) 未勾选的列<b>不出现</b>在 CSV 表头 / JSON key 里；
           (c) 默认产物里 <b>grep 不到</b>本机绝对路径正则（<code>[A-Z]:\\</code>），勾了「本机绝对路径」才出现，且勾时弹一次「本操作会把文件在本机的完整路径写进产物」的确认；
-          (d) 只读：导出前后 <code>documents / document_categories / document_tags</code> 表字节级不变；
+          (d) 只读：导出前后 <code>documents / document_categories / document_tags / file_operations / operation_items</code> 表逐行不变（轮十五 丙 起「已归档」要读台账，那两张表也进指纹）；
           (e) 与 I77 0008 迁移的 <code>name_ci</code> 分类名口径一致（同名的两个分类不会被合并导）。
         </td></tr>
         <tr><th>与其他条的关系</th><td>AGENTS.md「密钥禁止出现在源码与构建产物」的相邻条 —— 本机路径也是隐私，默认关 · I89 甲 <code>roots.add</code> 归一口径 —— 相对路径写法与之一致 · 与 S5「只报告不删除」同一条纪律：本屏「只导出不动库」，导出后不生成待清理批次。</td></tr>
@@ -774,7 +774,7 @@
 
       <div class="decision-box">
         <div class="q">丙案先要你勾三件口径（不勾就不能进界面代码）</div>
-        <div class="opt">列集 · 默认 5 列（标题 / 页数 / 大小 / sha256 前 12 / 修改时间），其余勾选 · <b>推荐默认这一档</b></div>
+        <div class="opt">列集 · 默认 5 列（文件名 / 页数 / 大小 (字节) / SHA256（前 12 位） / 修改时间），其余勾选 · <b>推荐默认这一档</b></div>
         <div class="opt">格式 · ⊙ CSV（Excel 兼容，UTF-8 BOM）○ JSON ○ Markdown 表 · <b>推荐 CSV 主，JSON 次，MD 可选</b></div>
         <div class="opt">本机绝对路径 · 默认<b>关</b> + 勾时弹确认 · <b>推荐默认关</b></div>
       </div>
