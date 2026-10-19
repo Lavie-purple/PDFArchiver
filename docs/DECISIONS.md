@@ -616,3 +616,72 @@ S4 是**阶段 4** 的屏。第 3 问选了"执行跑在后台队列"，**这是
 **代价**：多两份文件要同步维护（`SELF_DEFINING`、`LEDGER_DOCS`、`_decision_files` 三处名单，
 都由第 3 条那条断言钉着）；读者要看早期决定得翻两册 —— 所以活册末尾那条指针段写明「编号仍然
 算在场」，不是把内容藏起来。
+
+## D-060 · 迁移 0008 加浏览排序索引（2026-10-18，**ISSUES I77** 甲）
+
+**背景**：`browse_documents` 默认按 `name COLLATE NOCASE` 排序，但这条表达式没有匹配的索引。
+8 万份库的 `EXPLAIN QUERY PLAN` 显示 `SCAN d` + `USE TEMP B-TREE FOR ORDER BY`，库尾延迟 737 ms；
+加一条 `CREATE INDEX ix_documents_name_ci ON documents(name COLLATE NOCASE)` 后降到 13 ms（**58×**），
+写入侧每份文档 +7.4%（3,000 份探针：1.208 s → 1.297 s），索引构建 0.364 s@8 万份。
+
+**决定**（四条，每条都可断言）：
+
+1. **纯加索引，不动表/列/数据**：`0008_name_ci_index.py` 只含一条 `CREATE INDEX IF NOT EXISTS`，
+   回滚是 `DROP INDEX IF EXISTS`。`IF NOT EXISTS` 是因为探针在临时库里手动建过同名索引再跑迁移，
+   不能撞 `already exists`。
+2. **不跑 `ANALYZE`**：实测加索引前后 `EXPLAIN QUERY PLAN` 都是 `SCAN d USING INDEX ix_documents_name_ci`，
+   加不加 `ANALYZE` 计划不变、延迟差异在噪声内（12.7 → 13.8 ms@79,950）；而 `ANALYZE` 是 O(库大小)
+   的慢操作，按 AGENTS.md「慢操作只许放在显式慢路径」不许塞进迁移。
+3. **守卫用 `SORTS["name"]` 直接取产品模块**：`tests/guards/test_migrations.py` 新增
+   `test_空库经迁移链建出的库把name排序交给索引`，断言 `EXPLAIN QUERY PLAN` 不含
+   `USE TEMP B-TREE FOR ORDER BY` 且含 `ix_documents_name_ci`。因为 SQL 是从 `SORTS["name"]` 拼的，
+   改排序口径时守卫自动跟着变（不会守着一条与产品脱钩的索引）。
+4. **坏法真注入过**：`.probe_work/i77_badway.py` 三种坏法（禁掉迁移文件 / 改索引表达式丢 `COLLATE NOCASE` /
+   改 `SORTS["name"]` 丢 `COLLATE NOCASE`）全部 RED，控制组 GREEN，字节级还原。证明守卫抓得住
+   「索引名在但表达式不对」与「排序口径与索引脱钩」两类复发。
+
+**被否的两种**：① 加 `ANALYZE` —— 实测无收益，且违反「慢操作只许放在显式慢路径」；
+② 用 `LOWER(name)` 代替 `name COLLATE NOCASE` —— 与产品排序口径脱钩，守卫会 RED（第 3 条）。
+
+**代价**：写入侧 +7.4%（每份文档多一次 B-tree 更新）；库体积 +索引大小（8 万份约 2.5 MB，
+占库总体积 8%）。**不解决虚拟化那一半**：浏览走索引，搜索走 FTS，两件事分开算（**ISSUES I51**
+那条是另一条路）。
+
+## D-061 · 语义向量写路径只按显式点名触发（2026-10-19，**ISSUES I63** 丙 + 丁）
+
+**背景**：阶段 6 的语义层此前只有读路径 —— `VectorStore.add/add_batch/delete_by_doc` 零产品调用方、
+`vector_status` 恒为默认 `na`、`jobs.KINDS` 里的 `"vector"` 从不入队。ISSUES I63 丙/丁 要补的就是这唯一
+缺失的一环：**让 `VectorStore` 有真调用方、`vector_status` 真有人推进、`"vector"` 真能进 worker**。
+补的时候撞到一个必须定死的岔路：向量该在什么时候建。一条 embedding 任务对一份 946 页的文件就是
+946 次模型前向（真语料里 946 页的部件实测存在），"扫一遍全库把所有已索引正文的都悄悄排上向量"看着
+省事，实际是把 GPU 时间烧在用户没要求的文件上。
+
+**决定**（四条，每条都可断言）：
+
+1. **唯一入口 = 用户点名（`request_vectors(doc_ids)`），不做全库自动建**：沿用 OCR 阶段 5 的
+   Q3=甲 口径，与 D-006「不扫全库自动跑重活」一致。`VectorService` 里没有"遍历全库把 pending 都
+   排上"的方法 —— 想建向量就得给出具体 doc_id 集合。这一条把"什么时候愿意为语义搜索付 GPU 钱"
+   的决定权交回用户，而不是服务层替他决定。
+2. **入场券是一份可搜的正文（`text_status ∈ TEXT_SEARCHABLE`）**：没正文就没东西可嵌，对从没索引
+   过的文档直接建向量只会得到一堆空页向量污染语义搜索。`_why_skipped`（进队前）与 `build_vectors`
+   （执行时）两处都判，前者挡在门外给回执、后者拒已入队的漏网者；空正文页（`char_count=0`）逐页跳过。
+3. **重嵌前先 `delete_by_doc` 清旧向量**：这是 `VectorStore.delete_by_doc` 在产品里的调用方。
+   页变少时旧向量的孤儿只有清旧能带走（`add_batch` 的 `(doc_id,page_no)` 去重只覆盖同名页、带不走
+   少掉的那页），不清则语义搜索命中一个已经没有正文的页。测试对应用意选"页变少"场景做断言，
+   正是因为同页集合重嵌删不删 `delete_by_doc` 都不翻倍、照不出这条（本轮实测证伪）。
+4. **失败一律留 `failed` + 原文，可取消留 `stale`，绝不伪装 `done`**：模型没装（`FileNotFoundError`，
+   本机 `%LOCALAPPDATA%\PdfArchiver\models` 今天就不存在）当场写 `failed` 并把原文进 `last_error`
+   （AGENTS.md 不许伪装成功）；逐页问 `monitor.cancelled()`，中途停下写 `stale` 并抛 `JobCancelled`，
+   "跑了半截"不算"跑完"。`vector_status` 的推进由 `documents.set_vector_status` 独占，处理函数拿不到
+   仓储、写不出表里没有的流转。
+
+**被否的两种**：① 把向量自动接进索引链路（索引完就排队建向量）—— 违反 D-006/Q3=甲 的"用户点名"，
+会为没被要求的文件烧 GPU；② 全库 `pending` 扫描入口 —— 同①，且 202 万页量级下是自我 DoS。
+真要"一键全库建向量"，那是需要单独线框 + 预算闸门的界面决定，不在本条范围。
+
+**代价**：语义搜索/AI 分类在真界面上**仍要等一个"建向量"入口**才会出结果 —— 本轮接通的是服务层
+写路径与 worker 调度，`ui/` 下没有按钮调 `request_vectors`（AGENTS.md：线框未逐屏确认前不写界面代码）。
+所以 `vector_status` 在只走 GUI 的用户机上仍停在 `na`，直到该入口落地或手工 enqueue。测试夹具
+`tests/integration/test_vector_write_path.py` 用桩 embedding 绕开模型，验证的是编排与落库口径，
+不是模型本身（模型在场性由 ISSUES I37 的路径守卫与 ISSUES I84 的失败可见另行覆盖）。
+

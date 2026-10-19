@@ -11,8 +11,8 @@
 | --- | --- | --- | --- |
 | L0 探针（技术前提） | `tests/probes/p0..p14` | 独立可运行脚本，末尾打印 `VERDICT` | 换机器 / 换依赖版本 / 怀疑环境时 |
 | L0b 断言自证 | `tests/probes/p9_reverse_injection.py` | 把 **46** 种坏法注进**临时副本**，逐条确认对应测试真会变红（1–18 阶段 1，19–46 阶段 2） | 每阶段收尾（已进 `gates/stage1.py` 与 `gates/stage2.py`） |
-| L0b 断言自证（四份，**2026-10-18 起常驻门禁链**） | `tests/probes/p15_archive_ui_injection.py`／`p16_doc_pointers_injection.py`／`p17_handler_shape_injection.py`／`p18_irreversible_source_injection.py` | 同类坏法注入，守的是（四）（五）两轮新上架的断言：界面↔磁盘链路 **36** 条、文档指针守卫 **5** 条（含 1 条反向对照）、队列 handler 形状核对 **3** 条、`irreversible` 口径唯一 **3** 条 —— 合计 **47** 条。**判据本轮统一成一条**：红 **且** `FAILED` 行点名到该坏法登记的那条测试 —— 「红但不点名」（把断言改成崩溃）与「锚点今天落不进去」同等算漏。**R-012 已勾乙**：p16/p17/p18 进 `--only injection`（实测 **332s**），p15 单开 `--only ui-inject`（实测 **70s**）；p17/p18 的末行口径同时由 `ALL INJECTIONS CAUGHT` 改成门禁认的 `VERDICT: ALL GREEN`（进门禁链的入场券） | `gates/final.py --only injection`／`--only ui-inject`；锚点落不落得进去由 `tests/guards/test_probe_anchors.py` 秒级预检（**ISSUES I73**） |
-| LG 守卫（结构规则） | `tests/guards/` | `test_dependency_pins.py`（G21）、`test_architecture.py`（AST 现 7 条：依赖方向 / SQL 位置 / 静默吞异常 / 本机路径字面量 / 导航分组 / 语义层模型根单源 / **界面不许自己拼时间串**）、`test_migrations.py`（旧库带数据升级不丢行）、`test_file_size.py`（**AGENTS.md 那条"单文件超 800 行就拆"的断言**：`.py` ≤800 / `.md` ≤1,200，两条口径的出处与拆法见 **D-054** 与 `docs/REPO-JOURNAL.md` R-010）、`test_schema_columns.py`（**ISSUES I62** 甲+丁，定案 **D-055**：A 列级双向对账 —— 文档声明的列 ⇄ `table_info` 实际列；B 迁移目录外不许 DDL，唯一例外按语句放行 `migrate.py` 那条 `SCHEMA_TABLE`。坏法注入 13/13 达标）、`test_test_hygiene.py`（AST 扫 `tests/` 整棵树禁同名 `def test_` —— 定义同名会把前一条**静默遮蔽**，本轮就是靠它逮到两条）、`test_doc_pointers.py`（**ISSUES I70**，2026-10-17 上架：文档里的四类引用也是断言 —— 决策编号 `D-<n>` / 台账行号 `ISSUES I<n>` / `某文档 §n` 节号 / **活文档**引用的 `test_*` 函数名；带日期的台账类文档在第四类上豁免，但旧名条数钉死在 `LEDGER_STALE_CAP`，超一条就红。四类 + 上限各配一条坏法、另配一条"台账写旧名必须仍绿"的反向对照，见 `tests/probes/p16_doc_pointers_injection.py`）、`test_probe_anchors.py`（**ISSUES I73**，2026-10-18 上架：把六份反向注入探针表里的 **133** 条坏法锚点在各自目标文件里逐条数一遍，要求**恰好命中 1 次** —— 锚点漂移原先要等整段 332s 的门禁跑到 p10 才报 RED，现在不到 1s 就红；顺带钉「探针与其注入目标不许混用 CR CR LF 行尾」，因为 `test_file_size.py` 的 `splitlines()` 会把那种文件数成两倍行数） | 每次改动；架构守卫可独立跑并打印 `VERDICT` |
+| L0b 断言自证（四份，**2026-10-18 起常驻门禁链**） | `tests/probes/p15_archive_ui_injection.py`／`p16_doc_pointers_injection.py`／`p17_handler_shape_injection.py`／`p18_irreversible_source_injection.py` | 同类坏法注入，守的是（四）（五）两轮新上架的断言：界面↔磁盘链路 **36** 条、文档指针守卫 **11** 条（**2026-10-18 轮十二从 5 条涨到 11 条**：加第 5 档 `.py` 文件名与第 6 档本机状态各一条坏法 + 两条顶破上限的计数注入 + 两条反向对照；含反向对照共 **3** 条）、队列 handler 形状核对 **3** 条、`irreversible` 口径唯一 **3** 条 —— 合计 **53** 条。**判据本轮统一成一条**：红 **且** `FAILED` 行点名到该坏法登记的那条测试 —— 「红但不点名」（把断言改成崩溃）与「锚点今天落不进去」同等算漏。**R-012 已勾乙**：p16/p17/p18 进 `--only injection`（实测 **332s**，那是**旧的 5 档 p16** 那一场读的数，涨到 11 档之后本轮没有复测整段 —— 收尾轮 #145 全量回归时重读），p15 单开 `--only ui-inject`（实测 **70s**）；p17/p18 的末行口径同时由 `ALL INJECTIONS CAUGHT` 改成门禁认的 `VERDICT: ALL GREEN`（进门禁链的入场券） | `gates/final.py --only injection`／`--only ui-inject`；锚点落不落得进去由 `tests/guards/test_probe_anchors.py` 秒级预检（**ISSUES I73**） |
+| LG 守卫（结构规则） | `tests/guards/` | `test_dependency_pins.py`（G21）、`test_architecture.py`（AST 现 7 条：依赖方向 / SQL 位置 / 静默吞异常 / 本机路径字面量 / 导航分组 / 语义层模型根单源 / **界面不许自己拼时间串**）、`test_migrations.py`（旧库带数据升级不丢行）、`test_file_size.py`（**AGENTS.md 那条"单文件超 800 行就拆"的断言**：`.py` ≤800 / `.md` ≤1,200，两条口径的出处与拆法见 **D-054** 与 `docs/REPO-JOURNAL.md` R-010）、`test_schema_columns.py`（**ISSUES I62** 甲+丁，定案 **D-055**：A 列级双向对账 —— 文档声明的列 ⇄ `table_info` 实际列；B 迁移目录外不许 DDL，唯一例外按语句放行 `migrate.py` 那条 `SCHEMA_TABLE`。坏法注入 13/13 达标）、`test_test_hygiene.py`（AST 扫 `tests/` 整棵树禁同名 `def test_` —— 定义同名会把前一条**静默遮蔽**，本轮就是靠它逮到两条）、`test_doc_pointers.py`（**ISSUES I70**，2026-10-17 上架：文档里的**六类**引用也是断言 —— 决策编号 `D-<n>` / 台账行号 `ISSUES I<n>` / `某文档 §n` 节号 / **活文档**引用的 `test_*` 函数名 / **活文档**引用的 `*.py` 文件名（**ISSUES I82** 乙，2026-10-18 加）/ **现在时的本机状态句子必须带读数日期**（**ISSUES I87** 丙，同日加）；带日期的台账类文档在后三类上豁免，但旧名与旧文件名两笔条数分别钉死在 `LEDGER_STALE_CAP` 与 `PY_STALE_CAP`，超一条就红。六类 + 两道上限各配坏法、另配三条"台账写旧名 / 旧文件名 / 带日期的本机状态必须仍绿"的反向对照，共 **11** 条，见 `tests/probes/p16_doc_pointers_injection.py`）、`test_probe_anchors.py`（**ISSUES I73**，2026-10-18 上架：把六份反向注入探针表里的坏法锚点在各自目标文件里逐条数一遍，要求**恰好命中 1 次**（现读 **138** 条、落 34 个文件，2026-10-18 轮十二 —— 上架时是 133，p16 从 5 档涨到 11 档把它顶上去的；这个数由该守卫自己打印，不在这儿抄成常量） —— 锚点漂移原先要等整段 332s 的门禁跑到 p10 才报 RED，现在不到 1s 就红；顺带钉「探针与其注入目标不许混用 CR CR LF 行尾」，因为 `test_file_size.py` 的 `splitlines()` 会把那种文件数成两倍行数） | 每次改动；架构守卫可独立跑并打印 `VERDICT` |
 | L1 单元 | `tests/unit/` | 纯函数：路径归一、分词预切、文件名解析、规则引擎、体积/耗时预算计算。**阶段 1 已有**：路径解析、设置校验、文件身份、迁移发现 | 每次改动 |
 | L2 集成 | `tests/integration/` | 真实 SQLite（临时文件，**不 mock**）：建表 + 触发器 + FTS 一致性 + 迁移。**阶段 1**：装配与迁移、仓储层、异常处理、应用外壳（真 Qt 控件）。**阶段 2 新增**：`test_scan_service.py` 34、`test_job_queue.py` 27、`test_index_service.py` 23、`test_search_service.py` 20、`test_status_tasks.py` 16、`test_watcher_events.py` 10 | 每次改动 |
 | L3 端到端 | `tests/e2e/test_stage2_acceptance.py`（11 条） | **只走真链路**：`bootstrap()` + `start_background()` + 真 `WindowsApiObserver` + 真 worker，然后只做磁盘动作（落盘 / 改内容 / 改名 / 删除 / 重开进程），**全程不手调 `scan_root` / `index_document`**。语料在 `tmp_path` 现造：真扫描件（只有图没有字）、真截断 PDF、真 AES-256 加密件、重叠根、非 PDF 文件。归档与撤销要到阶段 4 才接进这条链 | 每阶段收尾（已进 `gates/stage2.py`） |
@@ -126,7 +126,7 @@ OCR 断言合计 **92 条**（六个文件 18/22/6/34/8/4，`--collect-only` 逐
 | 这一轮新增的判据 | 落在哪 | 现在能不能常驻 |
 | --- | --- | --- |
 | 交付文档在场性（四份用户文档 + 报告五分栏 + 无占位符 + 每份引用当次实测） | `gates/final.py::gate_docs()`，在 `guards` 段里 | ✅ 常驻，且 `docs-inject` 那条证明它会被残缺报告与 `TBD` 文档打红 |
-| 盘 ↔ 库一致性十三条（C0–C12） | `tests/probes/p12_consistency.py`，`consistency` 段 | ✅ 常驻（17 条坏法自检全过）；**对真实数据根那行仍明写"本次未跑"**，因为默认数据根在本机不存在 —— 不许读成"真实现场已核" |
+| 盘 ↔ 库一致性十三条（C0–C12） | `tests/probes/p12_consistency.py`，`consistency` 段 | ✅ 常驻（17 条坏法自检全过）；**「对真实数据根那行本次未跑」这句到 2026-10-18 还在，但它的原因是错的**：本表 2026-10-15 写的「因为默认数据根在本机不存在」是一句**已经过期的本机状态** —— 2026-10-18 现读默认根 `C:\Users\lavie\AppData\Local\PdfArchiver` **在场**（`.probe_work/i87_else_branch.txt`，**ISSUES I87**）。今天未跑的真实原因是门禁不默认去碰真库（要显式 `--data-root`），而第一次给就撞满 1800s 上限（`.probe_work/b1_1018_seg1_reallll.log`）→ 那一档已单独提到 7300s（**ISSUES I91**）。不许读成"真实现场已核" |
 | 长跑九条（S1–S9，进程树采样） | `tests/probes/p13_soak.py`，`soak` 段 | ⚠ 常驻但**证据有界**：`--minutes` 默认 4 分钟，且 S6 那次排空 0.0s —— **ISSUES I32** OPEN |
 | G10 那几种口径谁能看见哪一种坏法（10 条） | `tests/probes/p14_fts_instrument.py`，`consistency` 段 | ✅ 常驻；⑤ 与第 10 条现在走**产品入口** `IndexService.rebuild_fts()`，摘掉补救会红（**ISSUES I33**） |
 | 探针自己的 SQL 传感器与产品口径对齐 | `tests/integration/test_probe_sql_sensors.py`（2 条，进 `regression`） | ✅ 常驻（静态 `ast` 核对 + 一条等式） |
@@ -386,12 +386,13 @@ subprocess.TimeoutExpired: Command '['H:\\AI project\\demo19\\.venv\\Scripts\\py
 | package | **241.9–255.0s** | `.probe_work/b1_seg6_package.log` |
 | soak | **288.8–289.3s**（`--soak-minutes 4`） | `.probe_work/b1_seg5_soak.log` |
 | injection | **170.9–415.3s** ← 跑临时库时最慢的一段 | `.probe_work/b1_seg2_injection.log` |
-| consistency **带 `--data-root`** | **3,661.7s**（真根 10,977 份 / 202 万页） | `.probe_work/serial_run_status.json` |
+| consistency **带 `--data-root`** | **3,661.7s**（真根 10,977 份 / 202 万页。**这一场是探针独立跑，不经门禁** ⇒ 18 条全出、红 9；同一时刻经门禁的那一场是在 1,800s 被整条杀掉，见上面那段 traceback） | `.probe_work/serial_run_status.json`＋`.probe_work/p12_real_root.log` |
+| consistency **带 `--data-root`，经门禁新档复跑** | **3,597.1s**（2026-10-18 15:07，`── 段 consistency（3597.1s）`，**未验 0 条** ⇒ 这一场没有任何一条是"闸门时间到"） | `.probe_work/b1_seg1d_consistency_real.log` |
 
 | 超时档 | 值 | 覆盖谁 | 来源 |
 | --- | --- | --- | --- |
 | `GATE_TIMEOUT_SECONDS` | **1,800s** | 链里所有跑**临时小库**的段 | **[约定]** = 最慢实测 415.3s（injection）× **4.3** 取整；不是反算，因为这条档没有库量级输入 |
-| `REAL_ROOT_TIMEOUT` | **7,300s** | 只给 `--data-root` 那一条核查 | **[反算]** = 实测 **3,661.7s × 2** |
+| `REAL_ROOT_TIMEOUT` | **7,300s** | 只给 `--data-root` 那一条核查 | **[反算]** = 实测 **3,661.7s × 2**；2026-10-18 经门禁复跑实测 **3,597.1s**，用掉这一档的 **49%**（余量 2.03 倍）⇒ 这一档不再是断言 |
 
 要预先告诉人的三句话：
 
@@ -400,7 +401,8 @@ subprocess.TimeoutExpired: Command '['H:\\AI project\\demo19\\.venv\\Scripts\\py
    —— 注意这数是把上表各段实测**相加**得到的，各段来自不同场次，不是一场连续跑出来的读数。
    它超过 Bash 单命令 600s 上限，所以整链必须分段跑（**ISSUES I91** 之外另记 B1 那条）。
 3. **真根那条一致性是量级跳跃**：临时库 5.7s → 真根 3,661.7s（约 **640 倍**），带 `--data-root`
-   跑全链要按 **≈82.8 分钟** 预告。**同族近失**：`p20_root_selfheal` 真根一场实测 **1,809.6s**，
+   跑全链要按 **≈82 分钟** 预告（2026-10-18 经门禁复跑那一场是 **3,597.1s**，与独立跑的 3,661.7s
+   差 64.6s，不改量级）。**同族近失**：`p20_root_selfheal` 真根一场实测 **1,809.6s**，
    比共享那档只多 **9.6s** —— 它目前不在链里（离线跑）所以没炸，但这就是"1,800s 不是随便哪个
    现场都兜得住"的证据；将来把它排进常驻段时必须同时给它那一档。
 

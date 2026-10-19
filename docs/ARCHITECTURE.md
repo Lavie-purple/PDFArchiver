@@ -5,7 +5,17 @@
 
 ## 一 · 目录结构
 
-★ = 阶段 1 已落地且有测试覆盖；没标的仍是**设计落点**，现在不存在（不是遗漏，见 `docs/ROADMAP`）。
+★ 是**阶段 1 那一轮**留下的「已落地且有测试覆盖」标记，属历史产物：它不能反着读
+（`fs/exclude.py` 有测试却没标 —— 2026-10-18 现读，`tests/integration/test_scan_service.py` 用得到它），
+更不该读成「没标 = 不存在」。**旧图例正是这么写的，而这句话在这张树上有 9 个反例**：
+树里 9 个名字带说明文字、看着像已落地的文件，`src/` 下从来没有过（逐条清单与为什么危险记在
+`docs/ISSUES.md` 的 **ISSUES I82**，这里不重抄 —— 抄一遍就多了九处会过期的断言）。
+2026-10-18 本轮按那张台账把树改成与 `src/` 一致，并把层名 ⇄ 实际落点单列成 §1.1。
+
+★ 的地位降下来之后，顶上来的是一条机器断言：**树里出现的每一个 `*.py` 文件名，都必须在
+`src/`／`gates/`／`tests/`／`packaging/`／`scripts/` 之一真实在场**，由
+`tests/guards/test_doc_pointers.py` 第 5 档核（坏法 P7/P8/P9 在 `tests/probes/p16_doc_pointers_injection.py`）。
+真没落地的东西不许写成一条文件线，一律收进 §1.1 用文字说明白。
 
 ```
 src/pdfarchiver/
@@ -18,8 +28,16 @@ src/pdfarchiver/
     engine.py★            #   连接工厂（每线程独立连接）、WAL、busy_timeout、Backup 快照、integrity_check
     migrate.py★           #   先快照后动结构；一个迁移一个事务（isolation_level=None + BEGIN IMMEDIATE）
     models.py★            #   表结构常量与行数据类
-    migrations/★          #   0001_initial.py（12 张表；空库首启实测 13 张 = 这 12 张 + `schema_version`，见 docs/DATABASE.md §2.5）+ 0002_text_and_fts.py★（阶段 2：正文表 + 外部内容 FTS + 三触发器）
-    repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata；只有这里能写 SQL
+    migrations/★          #   0001_initial.py（12 张表；空库首启实测 13 张 = 这 12 张 + `schema_version`，见 docs/DATABASE.md §2.5）
+                          #   + 0002_text_and_fts.py★（阶段 2：正文表 + 外部内容 FTS + 三触发器）
+                          #   + 0003_ocr_tracking.py★（阶段 5：OCR 结果的可追溯列）
+                          #   + 0004_reading_history.py★（阶段 3 · S2：上次读到哪一页）
+                          #   + 0005_stage4_vocab.py★（阶段 4：批次/条目状态词表与 CHECK，D-048/D-049）
+                          #   + 0006_drop_volume_id.py★（删 `documents.volume_id` 死列，ISSUES I40 收尾）
+                          #   + 0007_vector_meta_and_drop_pdf_version.py★（vector_meta 收进迁移链 + 删 pdf_version 死列）
+                          #   + 0008_name_ci_index.py★（浏览排序索引 ix_documents_name_ci，ISSUES I77 甲）
+                          #   每一条都受 `tests/guards/test_migrations.py` 钉（丢数据即 RED）
+    repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata/collections/operations；只有这里能写 SQL
     sqltext.py★           #   SQL 片段的唯一拼装处（占位符与 IN 列表），仓储层共用
   fs/                     # 文件扫描与监测层
     identity.py★          #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
@@ -41,58 +59,126 @@ src/pdfarchiver/
                           #   逐页返回错误对象而不抛（I 类事故：一本坏书拖死 worker）
     budget.py★            #   两条资源限量的唯一出处：单页超时（按 provider 分档）+ 每日页预算（UTC 日记账，D-028/D-032）
                           #   推导关系由 tests/unit/test_ocr_limits.py 钉住 —— 改数必须同时改实测出处
-  semantic/               # 语义搜索与本地 AI 层（**可整体缺席**）
-    embedder.py           #   ONNX 向量；模型缺失时抛 ModelUnavailable
-    vector_store.py       #   独立向量索引文件
-    hybrid.py             #   关键词 + 向量融合
-    suggest.py            #   分类建议，只产建议，不落库
-  fileops/                # 文件操作与恢复层（唯一能动用户文件的地方）
-    plan.py               #   生成操作计划（预览用，绝不碰磁盘）
-    journal.py            #   操作日志：执行前写盘，崩溃可恢复
-    execute.py            #   执行 + 校验 + 失败记录
-    undo.py               #   撤销计划
-  jobs/★ queue.py         # 暂停/恢复/重试/进度/并发上限；ProgressMonitor 是处理函数唯一的进度笔
-  backup/                 # 备份、恢复、迁移
+  semantic/               # 语义搜索与本地 AI 层（**可整体缺席**：模型/可选依赖不在时应用照常起，只是不给向量结果）
+    embedding.py★         #   ONNX 向量服务：加载的文件名写死在文件里（`onnx/model_int8.onnx`，产品唯一口径），
+                          #   模型缺失抛 `FileNotFoundError` 并回显该去哪个目录下载（旧树在这里写的是一个
+                          #   src 里从没存在过的异常类名，见 **ISSUES I82**）
+    vector_store.py★      #   int8 向量 + 内存映射 `.npy` + `vector_meta` 表（迁移 0007 收编进链）
+    search_service.py★    #   语义检索：查询文本 → embedding → `VectorStore.search()` → 命中（这一整条串的断言见 **ISSUES I83** 甲）
+    classify_service.py★  #   分类建议，只产建议，不落库
+  # ── `fileops/` 与 `backup/` 这两个目录**在场但是空的**：各只有一个零字节 `.gitkeep`，没有
+  #    `__init__.py`、没有任何 `.py`（2026-10-18 现读 `git ls-files`），所以它们不是可导入的包。
+  #    SPEC 4.1 的 11 层划分里这两个是**层名**，代码实际落在 services/ 与 db/repositories/ 里，
+  #    逐条对应关系见 §1.1。旧树的问题不是"目录不存在"，是**给空目录画了五条文件线**（**ISSUES I82**）。
+  jobs/★                  # 队列层
+    queue.py★             #   暂停/恢复/重试/进度/并发上限；ProgressMonitor 是处理函数唯一的进度笔。
+                          #   **旧树在 `ui/` 下面画的那条 worker 文件线不存在**：QThreadPool/QRunnable 那条线程桥
+                          #   其实在这个文件里，「主线程绝不做扫描/索引/OCR」是靠它实现的，不是靠一个 Qt worker 模块
   services/               # 应用服务层：把上面各层编排成用例
     scan_service.py★      #   scan 任务体 + 单条事件对账（快路）；唯一写 documents 文件事实的地方
     index_service.py★     #   index 任务体；四条口径见文件头（sha256 短路 / fts_status 不写 running）
     ocr_service.py★       #   ocr 任务体：入场券（ocr_ready）→ 页级幂等待办 → 逐页识别 → 按页落库带版本 →
                           #   进同一张 FTS；回执分四类（点名/该跑/新增/为什么没进，D-031）；限量在这里判停（D-028）
+    vector_service.py★    #   vector 任务体（**ISSUES I63** 丙+丁 / **D-061**）：`request_vectors(doc_ids)` 是"用户点名建
+                          #   向量"的唯一入口（沿用 OCR Q3=甲 的显式点名，不做全库自动）；入场券 = `text_status ∈
+                          #   TEXT_SEARCHABLE`；重嵌前先 `delete_by_doc` 清旧；模型没装写 `failed`+原文、绝不伪装 `done`；
+                          #   这是 `VectorStore.add_batch/delete_by_doc` 与 `vector_status` 在产品里的写入方
     patrol.py★            #   界面定时器上的巡检：只排任务，自己绝不扫目录（慢路 = 周期全量校验）
     bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检
     status_service.py★    #   界面唯一取数口；只读、不缓存
     session_service.py★   #   导航记忆等内部状态，让 UI 不必 import 仓储层
     default_catalog.py★   #   SPEC 3.3 的 14 个分类模板（数据不是代码）；靠标记"种一次"
+    archive_service.py★   # 【层名 `fileops` 的落点】plan（纯计算，预览与执行同一份）→ submit（要用户确认）→
+                          #   执行器（跨盘 copy+逐项验 sha256 才删源）→ journal（JSONL，执行前写盘，崩溃可恢复）→
+                          #   撤销 = 另开一条 `kind='undo'`、`undo_of=原批次` 的反向批次走同一个执行器（D-043 甲）。
+                          #   批次与逐文件条目的持久化在 `db/repositories/operations.py`，不在这里
+    backup_service.py     # 【层名 `backup` 的落点】备份/恢复/迁移的用例编排。没标 ★ 是实话：
+                          #   `tests/integration/test_backup_restore_e2e.py` 那条端到端走的是引擎 + 仓储，
+                          #   这个服务本身目前没有断言钉（挂在 **ISSUES I80** 的 D4 上）
+    dedup_service.py      # 判重（阶段 4 S5）：分组口径与逐条比对。同样没有直接断言，见上面那条同款诚实边界
   ui/                     # UI 层，只用 services/，不 import db.repositories
     nav.py★               #   导航注册表，按 SPEC 条款号登记；阶段 1 唯一的"界面知识"
     main_window.py★       #   外壳：左导航 + 右堆叠页 + 状态栏；关窗真关连接并留对账行
-    pages/★               #   status_page（自检页，全是从库里算出的事实）/ pending_page（未实现说明页）
-                          #   其余每屏一个文件、对应 docs/UI-SCREENS.md 的编号 —— 等 Q7
-    workers.py            #   QThread/Signal 桥；主线程绝不做扫描/索引/OCR
-    models_qt.py          #   Qt 表格/树模型（虚拟化）
+    table_layout.py★      #   列宽口径的唯一出处（内容宽 + 实测 23px 内边距；八张表都走它，**ISSUES I54**）
+    theme.py★             #   浅色/暗色两套令牌 + QSS 装配；占位色这类只能走 QPalette 的属性见 **ISSUES I50**
+    format.py★            #   界面文本格式化；时间串一律来自 `status_service.format_ts`（守卫第 7 条）
+    tier.py★              #   1024 档降级（D-039/D-040）
+    confirm.py★           #   分级确认控件（D-042 丙）——「未确认绝不执行」那条契约的界面侧
+    pages/★               #   每屏一个文件、对应 docs/UI-SCREENS.md 的编号：status_page / library_page（虚拟化，
+                          #   **ISSUES I51**）/ reader_page（S2）/ archive_page（S3）/ operations_page（S4）/
+                          #   dedup_page（S5）/ backup_page（S6）/ settings_page（S7）/ categories_page（S8）/
+                          #   pending_page（未实现说明页）
+                          #   **旧树在这里画的那个「Qt 表格/树模型」文件不存在**：虚拟化是在 library_page 里用
+                          #   QAbstractItemModel 做的，列宽另由 table_layout.py 统一，不是一个 model 文件
   diagnostics/
     logs.py★              #   app.log（轮转）/ crash.log（sys+threading excepthook）/ state.log（一行一条 JSON）
                           #   时间戳唯一口径 log_stamp() = UTC ISO 带 Z（D-022）
 tests/
-  probes/                 # p0..p8 阶段 0 技术前提探针（保留可重跑）+ p9★ 反向注入（验断言有没有牙齿）
+  probes/                 # p0–p8 阶段 0 技术前提探针（保留可重跑）+ p9★ 反向注入（验断言有没有牙齿）
                           # 阶段 5 新增：p10★ OCR 反向注入 45 条、p11★ 产品路径端到端实测（真语料扫描件）
+                          # 交付链新增：p12★ 一致性仪表坏法、p13★ 长跑采样、p14★ FTS 仪表验牙、
+                          #   p15★ 归档界面与磁盘链路 36 条坏法、p16★ 文档指针坏法、p17★ handler 形状坏法、
+                          #   p18★ 不可逆源文件坏法、p19★ 组合内存压测、p20★ 监测根改名/删除自愈
   unit/★                  # 纯逻辑，无 UI、无真实文件；阶段 5 新增 ocr_engine 18 / ocr_idempotency 22 / ocr_limits 6
   integration/★           # 临时目录 + 真实 SQLite；阶段 1：装配与迁移 / 仓储 / 异常处理 / 应用外壳
                           # 阶段 2 新增：扫描 34 / 队列 29（含三种"停"各一条）/ 索引 23 / 检索 20 / 状态 16 / 监听接线 10
                           # 阶段 5 新增：ocr_service 33 / ocr_budget 8 / ocr_real_engine 4（真推理，装了可选层才跑）
+                          # 阶段 3/4/6 新增：界面几何与布局 / 归档磁盘安全 / 备份恢复端到端 / 向量与语义层
   guards/★                # pytest 形态的常驻守卫：依赖版本锁（G21）、架构方向 / SQL 位置 / 静默吞异常 /
-  #                         本机路径字面量 / 导航分组（AST）、迁移不丢数据
+                          #   本机路径字面量 / 导航分组（AST）/ 语义层模型根单源 / 界面不许自己拼时间串、
+                          #   迁移不丢数据、文档列 ⇄ table_info、交付文档在场性与指针存在性
   e2e/★                   # 阶段 2 已建：真 worker + 真 watchdog + 真 PDF，11 条全链验收
-  load/                   # ×10 量级压测仍未建（等 Q8 给出真实监测范围，见 ISSUES I16/ISSUES I20）
+  test_guard_schema_consistency.py★  # 文档↔库结构一致性守卫（**ISSUES I44** 的"仍欠"由它补上）
+  # ×10 量级压测的 `tests/load/` **没建**（等 Q8 给出真实监测范围，见 **ISSUES I16 / I20**）——
+  # 这一句 2026-10-18 从"树里一条目录线"改成明文，因为目录本身不在盘上（**ISSUES I82** 的同类形状）
 gates/
   stage1.py★              # 阶段 1 门禁链：G21→架构守卫→全量回归→冷启动实测→反向注入，末行 VERDICT
+                          #   `GATE_TIMEOUT_SECONDS`（子进程超时天花板的唯一出处，**ISSUES I91**）也在这里
   stage2.py★              # 阶段 2 在其上加两步：后台生命周期（state.log 三行齐全）+ e2e 验收（搬回真实检索行）
+  stage3.py★              # 阶段 3 门禁：分类树 / 多标签 / 智能集合 / 全文搜索 UI / 阅读器
+  stage4.py★              # 阶段 4 门禁：归档批次（预览⇄执行同一份计划）+ 判重 + 操作台账
   stage5.py★              # 阶段 5 在其上加三步：产品路径端到端实测（现场打印耗时/内存/显卡/质量/追溯/幂等/控制组）、
                           #   每日页预算真停机、真引擎套件不许退化成 skip。**这条门禁里不许出现任何写死的性能数字**
+  stage6.py★              # 阶段 6 门禁：语义检索与 AI 分类（向量存储那段用随机向量证，真模型那段不许 skip）
+  final.py★               # 最终交付门禁：11 段链（`--list` 每段标称是 2026-10-18 的分段实测区间）、
+                          #   `--data-root` 真根核查走 `REAL_ROOT_TIMEOUT` 那一档、未跑的段一律打 SKIP 不算绿
   # 01_deps_guard … 09_readback 那份拆分是阶段 7 的形态；没到对应阶段不建空门禁（R-007）
+packaging/
+  build.py                # PyInstaller 冻结产物构建 + 内容断言（final.py 的 package 段调它）
+  frozen_smoke.py         # 冻结产物冒烟：干净目录首启、重启恢复、全阶段判定
+  PdfArchiver.spec        # 打包配方
+scripts/
+  real_corpus_first_scan.py    # 真语料首扫（10,977 份那条一次性链路，不属于产品代码）
+  resume_indexing.py           # 续跑无主的 running 任务（**ISSUES I46** 的处置工具）
+  g2_search_benchmark.py       # G2 搜索 P95 真库实测
+  fix_bare_issue_refs.py       # 台账裸 `I<n>` 加命名空间的一次性改写（**ISSUES I35**）
+  fix_bare_issue_refs_pass2.py # 同上一条的第二轮补漏
 docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表
 requirements/             # 分层依赖清单
 ```
+
+### 1.1 层名 ⇄ 实际落点，以及还没落的地方
+
+`PROJECT_SPEC.md` 4.1 的 11 层划分里，有四个层名**在 `src/` 下没有承载它的代码**：`fileops` 与
+`backup` 各有一个同名目录，但目录里只有一个 `.gitkeep`（上面刚数过）；`hybrid` 与 `models_qt`/`workers`
+连目录都没有。这本来不是问题 —— 层是概念、目录是实现 —— 但旧树把 `fileops/` 与 `backup/` 写成了
+带文件线的目录，读图的人按图找路就撞空（**ISSUES I82**）。对应关系只有这一份，别处不许再画第二张：
+
+| 层名 | 实际落在 |
+| --- | --- |
+| `fileops` | `services/archive_service.py`（plan / submit / 执行器 / journal / 反向批次）＋ `db/repositories/operations.py`（批次与逐条目持久化、`journal_path`、`job_id` 反查） |
+| `backup` | `services/backup_service.py` ＋ `db/engine.py` 的 Backup 快照与 `integrity_check` |
+| `hybrid`（**D-038** RRF 融合） | **没有实现**。全文通道在 `search/service.py`，语义通道在 `semantic/search_service.py`，两者各回各的命中，**没有任何一处把它们融合** —— "已采纳"不等于"已落地"，这句话就是这条表存在的理由 |
+| `models_qt` / `workers` | 分别是 `ui/pages/library_page.py` 里的 `QAbstractItemModel` 虚拟化 ＋ `ui/table_layout.py` 的列宽口径；线程桥在 `jobs/queue.py`（QThreadPool/QRunnable），`ui/` 下没有 worker 模块 |
+
+还欠的、图上现在**没有**的地方：`tests/load/`（×10 量级压测，等 Q8）、语义写路径的**界面入口**
+（服务层 `vector_service.py` 已接通产品写入方，**ISSUES I63** 丙/丁 · **D-061**，但 `ui/` 下还没有
+"建向量"按钮调 `request_vectors` —— GUI 里 `vector_status` 仍停在 `na` 直到该入口落地）、安装包与代码签名（只交付冻结目录，没交付安装器）。
+
+**顺带一条本轮现读的新坏法**（记在台账等勾选，不在本轮修）：`tests/guards/test_architecture.py` 的
+依赖方向表里有 `fileops` 与 `backup` 两行（第 37、38 行），而它扫的文件来自 `PKG.rglob("*.py")`，
+这两个目录下没有任何 `.py`，于是那两行**一个文件都扫不到、恒真** —— 形状与归并表「自检喂的好例子必须在生产可达」同一族：
+一条永远不会红的断言，在场与不在场没有区别。
 
 ## 二 · 依赖方向（只能自上而下）
 

@@ -80,7 +80,7 @@ PdfArchiver.exe
 ```
 数据根 <默认位置> 建出 config / data / logs / data\backups / data\cache
 logs\state.log 事件序列：startup.begin → migration.applied → startup.done → window.ready
-结构版本 = 7（2026-10-17 迁移链已到 0007；2026-10-15 冻结冒烟当时抓到的是 3），默认分类 = 14 个
+结构版本 = 8（2026-10-18 迁移链已到 0008；2026-10-17 到 0007；2026-10-15 冻结冒烟当时抓到的是 3），默认分类 = 14 个
 logs\app.log 里有一行「设置来源：内置默认值（… settings.json 尚不存在）」
 没有 crash.log
 ```
@@ -149,12 +149,14 @@ py -3.11 -m venv .venv
 rapidocr-onnxruntime 1.4.4 requires onnxruntime, which is not installed.
 ```
 
-`requirements/semantic.txt` 属于阶段 6（本地语义搜索与 AI 分类建议），**引擎层已实现但未接通**：
-装了它才有嵌入模型可下载，`SemanticSearchService` / `AIClassifyService` 才起得来；
-但**今天没有任何产品代码往向量库里写向量**（`VectorStore.add*` 零调用点，`jobs` 里的 `"vector"`
- kinds 从未入队，`documents.vector_status` 无人写 —— **ISSUES I63** 丙/丁 仍挂账），
-所以 S1 的「语义搜索」勾选与「AI 推荐分类」按钮在真界面上**都会走到空态提示**
-（"语义搜索无结果（向量库为空或模型不可用）" / "暂无向量数据…"）。不装则其余功能不受影响。
+`requirements/semantic.txt` 属于阶段 6（本地语义搜索与 AI 分类建议），**引擎层与服务层写路径都已接通产品**：
+装了它才有嵌入模型可下载，`SemanticSearchService` / `AIClassifyService` 才起得来；向量库也有写入方了
+—— `services/vector_service.py` 调 `VectorStore.add_batch/delete_by_doc`、把 `documents.vector_status`
+从 `na` 推到 `done/failed/stale`、`"vector"` 任务真能入队并被 worker 调度（**ISSUES I63** 丙/丁 已落地，
+按 **D-061** 只按用户显式点名触发）。但**界面上还没有"建向量"的入口**（没有按钮调 `request_vectors`），
+所以只走 GUI 的用户机上 `vector_status` 仍停在 `na`，S1 的「语义搜索」勾选与「AI 推荐分类」按钮**在真界面上
+都会走到空态提示**（"语义搜索无结果（向量库为空或模型不可用）" / "暂无向量数据…"），直到该入口落地或手工 enqueue。
+不装则其余功能不受影响。
 
 ### B.2 跑起来
 
@@ -181,5 +183,7 @@ set QT_QPA_PLATFORM=offscreen
 不用下载、不用配置。`rapidocr-onnxruntime` 装进环境即带三个 `.onnx` 模型
 （`ch_PP-OCRv4_det_infer` / `ch_PP-OCRv4_rec_infer` / `ch_ppocr_mobile_v2.0_cls_infer`），
 打包时由 `.spec` 收进 `_internal\rapidocr_onnxruntime\models\`，冻结产物里已实测在位。
-语义搜索要的嵌入模型才需要单独下载 —— 推理层已实现（阶段 6），但**向量库还没有写入方**，
-装上模型也仍是空态（同 **ISSUES I63**）。这一步现在只让 `main.py` 起得来、不报"模型不可用"。
+语义搜索要的嵌入模型才需要单独下载 —— 推理层已实现（阶段 6），向量库的写入方也接进了服务层
+（`services/vector_service.py`，**ISSUES I63** 丙/丁 已落地、按 **D-061** 只按用户显式点名触发），
+但界面上还没有"建向量"的入口，所以只走 GUI 时装上模型也仍是空态，要该入口落地或手工 enqueue 才建。
+这一步现在只让 `main.py` 起得来、不报"模型不可用"。

@@ -6,6 +6,60 @@
 
 ---
 
+## 向量写路径轮（十二）—— 2026-10-19 · **不升版本号**，交 D3（I63 丙+丁）与 D4（I80 丙）：语义向量写路径接进产品
+
+按用户「均跟进推荐来」把台账 I74–I93 那批编号方案的推荐项逐条落地。本节记 D3/D4 两件（其余 轮十二 项在台账逐条销账，收尾时并入）。
+
+- **I63 丙+丁 · 语义向量写路径接进产品**（**D-061**）：新增 `services/vector_service.py`（与 `ocr_service.py`
+  同形状），`request_vectors(doc_ids)` 是"用户点名建向量"的唯一入口，沿用 OCR 阶段 5 Q3=甲 的显式点名口径、
+  不做全库自动（一条 embedding 任务对 946 页文件就是 946 次前向，按 D-006 不自动跑）。它给
+  `VectorStore.add_batch/delete_by_doc` 补上产品调用方、经新增的 `documents.set_vector_status/invalidate_vector`
+  把 `vector_status` 从 `na` 推到 `done/failed/stale`、`bootstrap` handlers 接上 `"vector": self.vector.handle`
+  且真能经 `jobs.enqueue_many("vector", …)` 入队被 worker 调度。模型没装写 `failed`+原文绝不伪装 `done`；
+  没可搜正文入场即拒、状态不动；空页跳过；逐页 `monitor.cancelled()` 可取消、中途停留 `stale`。
+  **新测试** `tests/integration/test_vector_write_path.py` **7 passed**。**六条坏法真注入过**（A 不筛空页 /
+  B 摘 `delete_by_doc` / C 伪装成功 / D 放开正文门禁 / E `_why_skipped` 不判正文 / F 摘 vector handler，逐条对应
+  一条测试变红、字节还原后 7 passed）—— 其中**注入 B 证伪出一条假守卫**：原「重嵌不翻倍」删掉 `delete_by_doc`
+  仍绿（`add_batch` 按 `(doc_id,page_no)` 去重本就不翻倍），改成「页变少留孤儿」场景后重注入才真变红。
+  `p10` 反向注入探针 cases #26/#28 的锚点因这行 handler 字典变化而过期，re-point 到新行（保留 vector 段），
+  复跑 **45/45 ALL GREEN**。全量回归 `649 passed / 1 skipped`。残留：服务层写路径在场，但 `ui/` 下还没有
+  "建向量"入口，只走 GUI 时 `vector_status` 仍停在 `na` 直到该入口落地或手工 enqueue —— 该入口按 AGENTS.md
+  要先过线框，另挂待确认项，不属本条范围。
+- **I80 丙 · 备份包含 settings.json + 恢复前 integrity_check**：`BackupService.create_backup()` 从
+  单个 `.db` 改成 `<时间戳>-v<版本>/` 目录（`catalog.db` + `settings.json` 若在场），`list_backups()` 认新目录格式
+  与旧单文件两路，`restore_to_new_dir()` 恢复后跑一次 `PRAGMA integrity_check` 并在坏库时拒绝（Windows 文件锁
+  下清尸是尽力而为）。新 `tests/integration/test_backup_i80.py` **4 passed**，与既有 e2e 3 条合 **7 passed**。
+  残留：清单文件（manifest）未加入 —— 消费者不存在，属 YAGNI，等跨版本迁移校验需要时再补。
+- **I89 丙（真库数据，备份在先）+ I90 乙（真库重写，同一份备份之后）**：详见台账 I89 / I90 的已销账格。
+  备份用 `Connection.backup()` 走 WAL 唯一合法路径，56.7s 完成 11,957,972,992 字节快照，逐表行数对账 15 表 +
+  影子表 `content_fts_docsize` 全等（不跑 `integrity_check` —— `engine.py` 记的 19h+ 天花板，11GB 不可行，
+  以行数替代）。I89 那 6 行 `UPDATE monitored_roots SET root_key=identity_key(root_key) WHERE id=?`，键打在
+  rowid 别名上避开 `ux_roots_key` NOCASE 唯一索引的过渡态碰撞；I90 那 1,310 行走单个事务、逐行
+  `normalize_page_text(body)` 重算 `char_count=len(body)`，靠 `0002_text_and_fts.py:68` 的 `tx_pages_au`
+  触发器同步倒排，不手碰 `content_fts`。只读复测（`mode=ro`）：C13 干净、按根前缀 `like_prefix(root_key)` 命中
+  从**全 0** 变 68｜79｜1967｜5352｜1655｜1856（子树文档合计 10,977，主记录 10,980），NUL 剩 0、
+  `text_pages == content_fts_docsize == 1,972,578`，产品 `match_expression('及数据')` 反查 1,455 命中且被抽的
+  rowid 确在其中 —— 1,310 次 UPDATE 真同步进了 trigram 索引。**备份保留未删**（`…\AppData\Local\Temp\`
+  `pdfarchiver-i89i90-backup\catalog.db`），是这两场真库改动的唯一回退路径。
+- **I5 / I16 · 长压测真机 L4 复跑**：p20 `--only delete` **6 条全绿**（`.probe_work/p20_delete_only2.log`，
+  实测 4s 事件路发现、原路径消失=True、10/10 标缺失、库里 `last_scan_error` 有 `FileNotFoundError: [WinError 3]`
+  原文落点）、p19 整场 **8 条全绿**（`.probe_work/p19_real.log` + `.probe_work/p19_combined_memory_result.json`，
+  组合峰值 C 386.5MiB、单点 OCR 对照 D 359.4MiB，判定档 1,200MiB 余量 +813.5、宽松档 1,228.8MiB 余量 +842.3，
+  m4 分层归因 +27.1MiB，m6 起跑/收摊可用 3717/3648MiB 上屏，m5 核 D 进程未加载 Qt）。rename 那一场是
+  **2026-10-18** I92 乙 落地的读数（`.probe_work/p20_real.log` n5 实测 1,799s ≤ 1,810s 慢路对得上反算，
+  n4 全部 10/10 标缺失），I93 甲 拆的 G12①／②两条口径各带实测数一起写进 `docs/TESTING.md` 与
+  `docs/ROADMAP.md`。**I5 / I16 一起 CLOSED**。复跑过程中改出一条探针侧的门：p20 起点新增
+  `open_index_or_ocr_jobs()` 判 `pending/running` 的 index/ocr 归零才动手 —— 本场首次 rerun 撞了
+  `shutil.rmtree(corpus)` 卡 WinError 32 partial-delete 只 6/10，加上等位门后 n1 转绿且延迟读数可采信
+  （p20 `--inject` 复跑 **12/12 坏法｜8/8 好读数**，判据自身未变）。
+- **台账闭合状态（2026-10-19 收尾时）**：I74–I93 二十条中 **15 条 CLOSED**（I74/I75/I76/I78 未列 I78 是
+  新开的 4 项功能等勾选，暂不 CLOSED；I82/I83/I85/I86/I87/I88/I89/I90/I91/I92/I93 全部 CLOSED 或已销账），
+  **2 条 MITIGATED**（I77 乙未做、I81 乙未做，各自另立线框门），**1 条 OPEN**（I78 阶段 3 四项能力等勾选，
+  与 A5 线框轮同期）。本轮另开两条新账 **I94**（架构守卫两行方向规则扫空目录恒真）与 **I95**（真库里
+  ids 1/2/3 三条手写演示数据），都按 AGENTS「不代勾选」等用户。
+
+---
+
 ## 真根读数轮（十一）—— 2026-10-18 · **不升版本号**，I86 切册 + I81/I84 甲销账 + 真根三场读数，新账 I87–I93
 
 这一轮按用户「按照推荐顺序进行执行」那条，交掉上一轮欠的四件：**I86**（长度线）、**I81 甲**（备份恢复端到端）、

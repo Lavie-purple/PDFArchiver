@@ -74,7 +74,7 @@ CREATE TABLE documents(
   text_status       TEXT NOT NULL,              -- none|native|ocr|mixed|pending|failed
   ocr_status        TEXT NOT NULL,              -- na|pending|running|done|failed|skipped
   fts_status        TEXT NOT NULL,              -- pending|running|done|failed|stale
-  vector_status     TEXT NOT NULL,              -- na|pending|running|done|failed|stale
+  vector_status     TEXT NOT NULL,              -- na|pending|running|done|failed|stale（由 services/vector_service.py 经 documents.set_vector_status 推进，ISSUES I63 丙/丁 · D-061）
   category_confirmed INTEGER NOT NULL DEFAULT 0, -- AI 建议未经确认不得触发文件动作
   last_scanned_at   INTEGER,
   last_indexed_at   INTEGER,
@@ -164,7 +164,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 
 | 口径 | 数 | 怎么来的（可现跑复算，不许抄旧数） |
 | --- | --- | --- |
-| 迁移文件里的 `CREATE TABLE` | 0001 = **12**、0002 = **1**（`text_pages`）+ 1 张 FTS5 虚表 `content_fts`、0003 = **0**、0004–0006 = **0**、0007 = **1**（`vector_meta`） | `grep -c CREATE TABLE src/pdfarchiver/db/migrations/*.py` |
+| 迁移文件里的 `CREATE TABLE` | 0001 = **12**、0002 = **1**（`text_pages`）+ 1 张 FTS5 虚表 `content_fts`、0003 = **0**、0004–0006 = **0**、0007 = **1**（`vector_meta`）、0008 = **0**（只建索引，不建表） | `grep -c CREATE TABLE src/pdfarchiver/db/migrations/*.py` |
 | 空库首启后的"表" | 阶段 1 当时报的 **13** = 上面 12 张 + `schema_version` | `schema_version` 由 `db/migrate.py:20` 的 `SCHEMA_TABLE` 建，**不在任何迁移文件里** |
 | 当前 `sqlite_master` 里 `type='table'` 且非 `sqlite_%` | **20** | = 内容表 15（含 `content_fts` 与 `vector_meta`）+ `schema_version` + FTS5 自动建的 4 张影子表 `content_fts_config / _data / _docsize / _idx` |
 
@@ -176,7 +176,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 **写法规矩**：说"首版几张表"一律带上面哪一行；说"现有几张表"必须现跑现数并写明 `sqlite_master` 那个口径；
 历史阶段报告里的 13 是**它自己时点的读数**，不改写，但今后新文档不许再把它当成当前数。
 
-### 2.6 迁移 0004–0007 实际落地的差异（2026-10-17 补齐，ISSUES I62）
+### 2.6 迁移 0004–0008 实际落地的差异（2026-10-17 补齐，ISSUES I62；2026-10-18 加 0008，ISSUES I77）
 
 §2.3 写了 0002、§2.4 写了 0003，**0004 往后一直没有小节**，结果是 `0004` 加的两个列在整份文档里
 零提及 —— 库里有、文档查不到，照文档写代码的人读不到它们。本节补上这段空白：
@@ -187,6 +187,7 @@ CREATE INDEX ix_documents_missing ON documents(missing_since) WHERE missing_sinc
 | `0005_stage4_vocab` | `file_operations` 加 `job_id`（可空外键 → `processing_jobs`）；`operation_items` **重建**加 `kind` / `state` 的 CHECK | 阶段 4 归档批次与逐文件条目 | D-048 / D-049：一个批次一条总控任务（`doc_id` 留 NULL）；`state ∈ pending\|done\|failed\|skipped`，跳过的项不进 journal。重建靠的是"当时该表零行"，**将来再有 CHECK 变更不许照抄这条路**，得走表重建 + 数据搬运 |
 | `0006_drop_volume_id` | 删 `documents.volume_id` | — | 恒 NULL 的死列（ISSUES I40）。判同盘/跨盘的唯一口径是 0002 的 `device_id` |
 | `0007_vector_meta_and_drop_pdf_version` | 建 **`vector_meta`** + `ix_vector_meta_doc`；删 `documents.pdf_version` | `semantic/vector_store.py` 读写 `vector_meta`；`pdf_version` 无人读写 | **`IF NOT EXISTS` 是给现存库留的路**：0007 之前那张表由 `vector_store.py` 运行时建，已经跑过语义索引的库（含开发机这份真实库）碰 0007 必须是无操作，既不报错也不清空已有元数据行。DDL 与老代码逐字一致，两条路收敛到同一个形状。`pdf_version` 是 I40 那一族的复发：`parsing/pdf.py` 读出过值但从没写进库，现测真实库 0/10,980 行非 NULL。**同笔把 `PdfInfo.pdf_version` 那个零引用字段一起删了** —— 留着就是下一个死列 |
+| `0008_name_ci_index` | 建 **`ix_documents_name_ci`**（`documents(name COLLATE NOCASE)`） | `db/repositories/documents.py` 的 `SORTS["name"]` 走这条排序；`search/service.py:browse_documents` 读 | **纯加索引，不动表、不动列、不动数据**。给浏览那一列的 `ORDER BY name COLLATE NOCASE` 一条匹配的表达索引，8 万份库尾延迟 737 → 13 ms（**58×**，`.probe_work/i77_0008_probe.log`）。`IF NOT EXISTS` 是因为探针在临时库里手动建过同名索引再跑迁移，不能撞 `already exists`；不跑 `ANALYZE` 是因为实测加不加计划都是 `USING INDEX`，而 `ANALYZE` 是 O(库大小) 的慢操作（AGENTS.md：慢操作只许放在显式慢路径）。**不解决虚拟化那一半**：浏览走索引，搜索走 FTS，两件事分开算 |
 
 **这一节的存在本身就是一条断言的落点**：`tests/guards/test_schema_columns.py` 规则 A 的反方向
 "库里有、整份文档查不到"允许列名出现在 §2.1 **或**这一类"实际落地的差异"小节里。新增迁移加了列，
