@@ -27,7 +27,10 @@
 线框 §S1 甲 那一句「只渲染视口内 ~25 行；滚到底再取下一批 50 条」就是这一段的规格。
 批次大小不在本文件里定数 —— 它是检索层 `Criteria.limit` 的默认值，写两处就有第二个口径。
 
-数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`。
+表格底下那一颗「送去识别」（**ISSUES I67** 甲，2026-10-19）是产品里 `request_ocr` 的
+**第一个调用点**：此前 OCR 只能由 `gates/stage5.py` 与测试点名，S7 只有三个读数。
+
+数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`。
 """
 from __future__ import annotations
 
@@ -166,6 +169,21 @@ class LibraryPage(QtWidgets.QWidget):
         # Qt 没有"滚到底"信号，而 `maximum - value ≤ 视口高` 是一次 O(1) 比较。
         self.doc_table.verticalScrollBar().valueChanged.connect(self._on_scrolled)
         center_lay.addWidget(self.doc_table, 1)
+
+        # —— 「送去识别」（**ISSUES I67** 甲 · 2026-10-19 定案，线框 `docs/wireframes/
+        # 2026-10-19-round14-i67-i78.html` §I67-jia）——
+        # 产品里 `request_ocr` 的**第一个调用点**：此前 OCR 只能由 `gates/stage5.py` 与测试
+        # 点名，S7 只有 O1/O2/O3 三个读数，界面上没有任何一处能把一份扫描件排进队列。
+        # 建来是禁用的：没有当前行就没有点名的对象（与 `ai_classify_btn` 同一形状）。
+        ocr_row = QtWidgets.QHBoxLayout()
+        self.ocr_btn = QtWidgets.QPushButton("送去识别")
+        self.ocr_btn.setObjectName("searchBtn")
+        self.ocr_btn.setEnabled(False)
+        self.ocr_btn.setToolTip("把当前这一份排进识别队列（按页幂等，版本没变的页不再推理）")
+        self.ocr_btn.clicked.connect(self._on_ocr_requested)
+        ocr_row.addWidget(self.ocr_btn)
+        ocr_row.addStretch(1)
+        center_lay.addLayout(ocr_row)
 
         # 状态栏
         self.status_label = QtWidgets.QLabel("共 0 份文档")
@@ -605,6 +623,7 @@ class LibraryPage(QtWidgets.QWidget):
         if row < 0:
             self.detail_view.clear()
             self.ai_classify_btn.setEnabled(False)
+            self.ocr_btn.setEnabled(False)
             self.ai_result_label.setText("")
             self._selected_doc_id = None
             return
@@ -614,6 +633,7 @@ class LibraryPage(QtWidgets.QWidget):
         doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
         self._selected_doc_id = doc_id
         self.ai_classify_btn.setEnabled(True)
+        self.ocr_btn.setEnabled(True)
         self.ai_result_label.setText("")
         doc = self.ctx.documents.get(doc_id)
         if not doc:
@@ -650,6 +670,24 @@ class LibraryPage(QtWidgets.QWidget):
 
     def _get_tags_for_doc(self, doc_id: int) -> list:
         return self.ctx.catalog.tags_of(doc_id)
+
+    def _on_ocr_requested(self) -> None:
+        """「送去识别」（**ISSUES I67** 甲）：把当前行排进队列，回执**原样**上屏。
+
+        份数与跳过理由只有后端一个出口（`OcrRequest.describe()` 与 `SKIP_LABELS`），
+        界面不许自己数第六类理由（**ISSUES I67** 销账判定②／**ISSUES I60** 同一条纪律）。
+        新增 0 条时染红：「按了但没进队列」必须在屏幕上看得见（销账判定①③）。
+        排队失败的落点与语义搜索那条同一口径（**ISSUES I84** ③）：染红 + 后端原文，界面不重述原因。
+        """
+        if self._selected_doc_id is None:
+            return
+        try:
+            request = self.ctx.ocr.request_ocr([self._selected_doc_id])
+        except Exception as exc:
+            self._set_status(f"识别排队失败：{exc}", danger=True)
+            return
+        self._set_status(f"{request.describe()}｜{self.ctx.ocr.budget.describe()}",
+                         danger=request.enqueued == 0)
 
     def _on_ai_classify_clicked(self) -> None:
         if self._selected_doc_id is None:

@@ -745,7 +745,9 @@ S3 的模态在这之后不再存在，所以这两套读数在这里少一处�
 
 1. 服务层入口早就交付了：`src/pdfarchiver/services/ocr_service.py:176 request_ocr(doc_ids, *, force=False)`
    返回 `OcrRequest(named, queueable, enqueued, skipped)` —— **点名的份数不等于进队列的份数**，
-   差的那部分带**理由**回来。产品侧**零调用点**（**ISSUES I67**；调用方只在 `gates/stage5.py` 与 `tests/`）。
+   差的那部分带**理由**回来。产品侧**零调用点**（**ISSUES I67**；调用方只在 `gates/stage5.py` 与 `tests/`）——
+   这一句是**画线框当时**（2026-10-19 上午）的读数，当天轮十四 A 落地甲案后已变：`src/` 里现在有一个调用点，
+   就是 S1 表格底下那颗「送去识别」。
 2. 排队写的是 `kind='ocr'` 的任务行（`db/repositories/jobs.py:26 KINDS`），worker **串行**（G9：GPU 只能串行）。
 3. 跳过理由只有这**五类常量**，界面不许自己另造第六种说法：
    `SKIP_BUDGET`（今日页预算跑满）/ `SKIP_ABSENT`（主记录不在了）/ `SKIP_NO_VERDICT`（文字层还没判定）/

@@ -3,9 +3,11 @@
 阶段 5 落的是**本地** OCR（RapidOCR + ONNX Runtime DirectML）。这一份是用户视角的操作手册；
 架构与决策理由在 `docs/ARCHITECTURE.md` 三、`docs/DECISIONS.md` D-006 / D-028 / D-029 / D-030 / D-031 / D-032。
 
-> **先说清一件事**：这一层**没有界面入口**。导航里的 OCR 项点开是"未实现说明页"（AGENTS.md 硬禁令：
-> 线框未经逐屏确认不许写界面代码 → **ISSUES I23**）。能力全部在 `services/ocr_service.py`，
-> 下面的"怎么用"给的是与服务层完全相同的调用路径 —— 它与 `gates/stage5.py` 里跑绿的三条实测是同一条码路，
+> **界面入口（2026-10-19 起，**ISSUES I67** 甲）**：S1 文档库选中一行 → 表格底下那颗「送去识别」，
+> 它调的就是下面这段同一个 `request_ocr()`，回执（点名 / 该跑 / 新增任务 + 没排进去的理由 + 今日预算）
+> 落在状态条那一行。**批量点名面板（乙）还没做**；导航里没有 OCR 这一屏，进度与"跑满即停"的读数在
+> S7 上半区（O1/O2/O3）。能力全部在 `services/ocr_service.py`，
+> 下面的"怎么用"给的是与界面完全相同的调用路径 —— 它与 `gates/stage5.py` 里跑绿的三条实测是同一条码路，
 > 不是设想出来的接口。
 
 ---
@@ -56,7 +58,7 @@
 from pdfarchiver.services.bootstrap import bootstrap
 
 ctx = bootstrap()                      # 不带参数 = 用系统本地应用数据目录
-ids = [12, 13, 14]                     # documents.doc_id；界面没有列表页，先从库里查
+ids = [12, 13, 14]                     # documents.doc_id；界面上等价的做法是 S1 选中一行按「送去识别」
 receipt = ctx.ocr.request_ocr(ids)
 print(receipt.describe())              # 点名 3 份｜该跑 1 份｜新增任务 1 条｜判定为不需要 OCR 2 份
 queue = ctx.start_background()
@@ -64,7 +66,7 @@ queue.wait_until_idle(timeout=3600.0)
 ctx.shutdown()
 ```
 
-`request_ocr()` 只**排队**，不直接跑；跑的是后台 worker。回执的四类理由各指得出具体是哪几份：
+`request_ocr()` 只**排队**，不直接跑；跑的是后台 worker。回执的五类理由各指得出具体是哪几份：
 库里没有这份主记录 / 没有可用的正文判定（先索引） / 判定为不需要 OCR / 已是当前引擎版本 / 今天的页预算已用满。
 **没有"整库自动 OCR"这个入口**：`doc_id` 为空的任务直接判永久失败（D-006 · Q3 甲，注入 ISSUES I12 钉着）。
 

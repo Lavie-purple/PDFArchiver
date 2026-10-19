@@ -7,7 +7,8 @@ AGENTS.md 的规矩是「每写完一条断言，先用能骗过它的坏法真�
   注入后变红      ⇒  这条断言有约束力
 
 跑法：python tests/probes/p9_reverse_injection.py
-末行 VERDICT: ALL GREEN 表示 46 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2）。
+末行 VERDICT: ALL GREEN 表示 49 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2，
+47 是 **ISSUES I94** 的守卫在场性，48–49 是 **ISSUES I67** 甲 那颗「送去识别」的两侧）。
 `node` 可以用空格分隔多个测试节点，要求它们**全部**变红；空格在这里不是测试名的一部分。
 
 两件事先说清，免得结论被误读：
@@ -280,6 +281,21 @@ CASES: list[Case] = [
                '    "diagnostics": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.db"),\n'
                '    "madeup_layer": ("pdfarchiver.ui",),  # 注入：src 下没有这个目录\n}'),
           ]),
+    # —— **ISSUES I67** 甲：S1 那颗「送去识别」（2026-10-19 轮十四 A）———————————
+    # 这条入口的两侧各注一次：禁用态（没有当前行时按不动）与接线（按下去真的调服务）。
+    # 后者同时把「回执由界面自己编」注进去 —— 那正是 **ISSUES I60** 抓过的那类第二个口径。
+    Case("48", "把「送去识别」建成可用态，没有当前行也按得动",
+         "tests/integration/test_ocr_entry_ui.py::test_没有当前行时那颗按钮是禁用的",
+         [Edit("src/pdfarchiver/ui/pages/library_page.py",
+               '        self.ocr_btn.setObjectName("searchBtn")\n        self.ocr_btn.setEnabled(False)',
+               '        self.ocr_btn.setObjectName("searchBtn")')]),
+    Case("49", "按钮还在但不调服务，回执由界面自己编一份",
+         "tests/integration/test_ocr_entry_ui.py::test_按下扫描件后排一条而状态条说得出这一条 "
+         "tests/integration/test_ocr_entry_ui.py::test_request_ocr在产品侧有调用点了",
+         [Edit("src/pdfarchiver/ui/pages/library_page.py",
+               "            request = self.ctx.ocr.request_ocr([self._selected_doc_id])",
+               "            from pdfarchiver.services.ocr_service import OcrRequest\n"
+               "            request = OcrRequest(named=1, queueable=1, enqueued=1)  # 注入：自己数")]),
 ]
 
 
