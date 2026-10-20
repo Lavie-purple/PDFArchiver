@@ -5,7 +5,7 @@
     python gates/final.py                       # 默认段：guards + regression + coldstart + e2e + consistency
     python gates/final.py --list                # 打印每段是什么、实测耗时、该不该并进默认
     python gates/final.py --only package        # 只跑打包段（build.py + 冻结冒烟）
-    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23）
+    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24）
     python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（最慢的一段）
     python gates/final.py --only soak --soak-minutes 4
     python gates/final.py --all --data-root "<要核查的数据根>"
@@ -46,6 +46,7 @@ P18 = "tests/probes/p18_irreversible_source_injection.py"
 P21 = "tests/probes/p21_saved_search_injection.py"
 P22 = "tests/probes/p22_category_export_injection.py"
 P23 = "tests/probes/p23_ocr_batch_injection.py"
+P24 = "tests/probes/p24_tag_merge_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
 
@@ -297,7 +298,9 @@ def segment_injection() -> list[Row]:
                   "r 回执 + f 格式与空值 + g 门 + w 接线）", [sys.executable, P22]),
             _gate("p23 批量点名面板 23 条坏法（U 读数形状 + B 分档接线 + P 预览执行同源 + C 代价 "
                   "+ R 理由行 + G 预算闸门 + N 过期名单 + X 取消 + F 失败上屏 + K 谎报新增 + W 折行）",
-                  [sys.executable, P23])]
+                  [sys.executable, P23]),
+            _gate("p24 标签合并 17 条坏法（a 数据 / b 拒 / c 入口 / d 同源 + w 接线）",
+                  [sys.executable, P24])]
 
 
 def segment_ui_injection() -> list[Row]:
@@ -365,20 +368,17 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["49.6–156.1s"]),
     "coldstart": ("G1 冷启动 + 关窗对账", ["1.0–1.6s"]),
     "e2e": ("新 · 后台生命周期 + 阶段 2 端到端（真 PDF / 真 worker / 真监听）", ["10.1–15.2s"]),
-    # 415.3s 是 2026-10-18 五份探针同段空载的上限；680.5s 是 2026-10-19 p21 入段后的同场实测，
-    # 起跑 CPU 84.9%，那一场 p9 在**基线**就判红 —— 红的是负载绑定的冷启动读数
-    # （`test_进程级冷启动实测符合G1约定`，同一台机器空载 0.737s / 满载 3.13s，**ISSUES I25**），
-    # 不是产品坏了，也不是断言没牙。空载复跑待补，别把 680.5s 当可比读数用。
-    # p22 是 2026-10-19 轮 D 入段的第七份，单跑 **73s**（25 条坏法 + 一次基线，同场实测）；
-    # p23 是 2026-10-20 轮十四 E 入段的第八份（本段第八份；`tests/guards/test_probe_anchors.py`
-    # 那张表里含本段不跑的 p15，是第九份），单跑 **83.4s**（23 条坏法 + 一次基线，同场实测）。
-    # 2026-10-20 八份同场复跑 = **966.3s**，八份全绿（p9 69/69、p10 45/45、p16 8 坏法 + 3 对照、
-    # p17 3、p18 3、p21 24、p22 25、p23 23）；但**这一场不是空载**：起跑 CPU 54.4%、可用内存 3,096MiB、
-    # 最吃内存的进程是 Warframe.x64.exe 1,982MiB。它之所以能算数，是因为负载场里 p9 的**基线**没有像
-    # 2026-10-19 那样判红（**ISSUES I25** 那条负载绑定的冷启动读数这次过了），而 966.3s 与 415.3s
-    # 之间不能直接比 —— 空载那一场仍欠，欠的是读数不是断言，不许为了拿到一个好看的数放宽阈值。
-    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 反向注入（断言到底有没有约束力）",
-                  ["966.3s @CPU 54.4%（2026-10-20，八份同场全绿）｜415.3s（2026-10-18，五份空载）"]),
+    # 415.3s 是 2026-10-18 五份探针空载上限；680.5s（轮十四 p21 入段）与 966.3s（轮十四 E 后八份）
+    # 都是负载场 —— 680.5s 那场 p9 在**基线**就判红，红的是负载绑定的冷启动读数（**ISSUES I25**），
+    # 不是产品坏了，也不是断言没牙。三档负载条件不同，不许互相换算。
+    # p22（轮十四 D）单跑 73s、p23（轮十四 E）单跑 83.4s；p24 是 2026-10-20 轮十五 B 入段的第九份
+    # （`tests/guards/test_probe_anchors.py` 那张表里含本段不跑的 p15，是第十份）。
+    # 2026-10-20 九份同场**空载复跑 = 788.9s**，九份全绿（p9 69/69、p10 45/45、p16 8 坏法 + 3 对照、
+    # p17 3、p18 3、p21 24、p22 25、p23 23、p24 17）；起跑 CPU 26.9%、可用内存 3,186MiB、最吃内存的
+    # 进程 Qoder CN.exe 566MiB。此前 06:07 那场被**系统休眠 5.5h** 拖到 p10 的 1800s 上限而中断，
+    # 那场墙钟作废（不是产品红、不是断言没牙），可比读数只认 788.9s 这一场。阈值一条没放宽。
+    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24 反向注入（断言到底有没有约束力）",
+                  ["788.9s @CPU 26.9%（2026-10-20，九份同场空载全绿）｜966.3s（负载场，八份）"]),
     "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（不进默认段）",
                   ["71.8s（2026-10-18 实测）"]),
     "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["28.4–30.6s"]),
@@ -436,8 +436,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:<12} {cost[0]:>22}  {what}")
         print("  docs-inject           ~1s  交付文档门禁自己的坏法注入")
         print(f"  耗时是 2026-10-18 分段实测（`.probe_work/b1_seg*.log`），"
-              f"injection 那行是 2026-10-20 八份同场（含 p22 / p23）的读数，"
-              f"并保留 2026-10-18 五份空载那条当可比基线 —— 两场负载条件不同，不许互相换算；"
+              f"injection 那行是 2026-10-20 九份同场空载（含 p22 / p23 / p24）的读数，"
+              f"并保留 966.3s（负载场，八份）与 415.3s（2026-10-18，五份）两条历史读数 —— "
+              f"探针数与负载条件都不同，不许互相换算；"
               f"跑临时库的段共用 {GATE_TIMEOUT_SECONDS:.0f}s 那一档，"
               f"带 --data-root 的真根核查单独走 {REAL_ROOT_TIMEOUT:.0f}s 那一档（I91）")
         return 0
