@@ -45,6 +45,10 @@ BUILD_REPORT = REPO / ".probe_work" / "packaging_build_report.json"
 RESULT = REPO / ".probe_work" / "frozen_smoke_result.json"
 PHRASE = "冷链物流温度记录仪校准规程"      # 只有真抽取或真识别才得到的一串字
 BULK_DOCS = 150                         # 杀进程那一阶段要让队列里真有活：几份 PDF 一秒就排空了
+#: 点 × 之前等窗口出来的上限。原先是拍死 `time.sleep(6.0)`，2026-10-21 整链那场
+#: 首启实测 window.ready 在 7.838s、G20 拿到「退出码 1｜优雅关闭=False（30.36s）」——
+#: WM_CLOSE 打给了一个还没有窗口的进程。判据没变，变的是点 × 的时刻。
+FIRST_READY_TIMEOUT = 60.0
 
 
 @dataclass
@@ -171,6 +175,17 @@ def force_kill_tree(proc: subprocess.Popen[str]) -> tuple[bool, str]:
 def state_size(data_dir: Path) -> int:
     path = data_dir / "logs" / "state.log"
     return path.stat().st_size if path.is_file() else 0
+
+
+def wait_for_window_ready(data_dir: Path, since_bytes: int, timeout: float) -> tuple[bool, float]:
+    """等窗口真的交出来再点 ×：事件来自产品自己写的 state.log，不猜启动时长。
+    窗口一直没出现 = 「起得来」这条不成立，G20 必须红，不能靠强杀后的退出码蒙混。"""
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < timeout:
+        if any(e["event"] == "window.ready" for e in state_events(data_dir, since_bytes)):
+            return True, round(time.perf_counter() - t0, 2)
+        time.sleep(0.2)
+    return False, round(time.perf_counter() - t0, 2)
 
 
 def state_events(data_dir: Path, since_bytes: int) -> list[dict]:
@@ -311,15 +326,16 @@ def phase_first_launch(exe: Path, data_dir: Path, run_dir: Path) -> list[Row]:
     marker = state_size(data_dir)
     proc = launch(exe, data_dir, run_dir, offscreen=False)   # 真桌面，关 I17 的一半
     sampler = Sampler(proc).start()
-    time.sleep(6.0)
+    ready, ready_seconds = wait_for_window_ready(data_dir, marker, FIRST_READY_TIMEOUT)
     reading = sampler.stop()
     graceful, close_seconds = close_gracefully(proc)
     events = state_events(data_dir, marker)
     names = [e["event"] for e in events]
 
     rows.append(Row("G20 冻结产物在真桌面（非 offscreen）起得来、点 × 关得掉",
-                    graceful and proc.returncode == 0,
-                    f"退出码 {proc.returncode}｜优雅关闭={graceful}（{close_seconds}s）｜{reading}"))
+                    ready and graceful and proc.returncode == 0,
+                    f"退出码 {proc.returncode}｜优雅关闭={graceful}（{close_seconds}s）｜"
+                    f"等窗口 {ready_seconds}s（window.ready {'到' if ready else '未到'}）｜{reading}"))
 
     tree = {"data/catalog.db": (data_dir / "data" / "catalog.db").is_file(),
             "data/backups/": (data_dir / "data" / "backups").is_dir(),

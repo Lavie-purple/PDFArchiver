@@ -595,7 +595,7 @@ def test_右键菜单上就那五项而选中跟着右键走(window, ctx, qapp, 
     """「改父类 / 合并」这两个动作在产品里只有这一个入口（**ISSUES I78** 甲的补法），
     菜单少一项就是功能没入口；多一项就是**未接线的按钮**（**ISSUES I79** 那一类）——
     所以第五项「导出此分类清单…」（**ISSUES I78** 丙，轮 D）进这张清单的同时，
-    `test_category_export_ui.py::test_菜单上那一项按下去真的把弹层开起来` 必须在场，
+    `category_export/test_ui.py::test_菜单上那一项按下去真的把弹层开起来` 必须在场，
     否则这一条形状断言只是在给一颗空动作盖章。
 
     第二条钉的是 `_show_category_menu` 里那句 `setCurrentItem` —— 菜单上的五个动作全读

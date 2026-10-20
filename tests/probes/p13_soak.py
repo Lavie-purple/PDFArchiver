@@ -293,7 +293,7 @@ def v_logs(logs_dir: Path, keep_files: int, lines: int) -> Row:
 
 
 def v_consistency(rc: int | None, tail: str) -> Row:
-    gate = "S9 长跑现场通过 p12 一致性核查（13 条全绿 0 未验）"
+    gate = "S9 长跑现场通过 p12 一致性核查（14 条全绿 0 未验）"
     return Row(gate, rc == 0 and "未验 0 条" in tail and "ALL GREEN" in tail,
                tail.replace("\n", " ") or "p12 没有输出")
 

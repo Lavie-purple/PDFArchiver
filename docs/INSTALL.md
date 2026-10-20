@@ -170,8 +170,8 @@ rapidocr-onnxruntime 1.4.4 requires onnxruntime, which is not installed.
 set QT_QPA_PLATFORM=offscreen
 .venv\Scripts\python.exe -m pytest tests -q            :: 全量回归，本机实测 355 passed / 0 failed / 1 skipped（两次独立读数 49.6s / 55.7s）
 .venv\Scripts\python.exe gates\stage5.py               :: 阶段 5 全链门禁（含 OCR 真推理与反向注入）
-.venv\Scripts\python.exe gates\final.py --list         :: 交付链共 9 段各是什么、实测耗时、默认跑哪五段
-.venv\Scripts\python.exe tests\probes\p12_consistency.py --inject   :: 一致性探针自检，期望 17/17
+.venv\Scripts\python.exe gates\final.py --list         :: 交付链共 11 段各是什么、实测耗时、默认跑哪五段
+.venv\Scripts\python.exe tests\probes\p12_consistency.py --inject   :: 一致性探针自检，期望 21/21 + 口径边界 1/1
 ```
 
 **门禁阈值是负载绑定的**：G1/G2 那两条冷启动（≤1.5s）在机器忙的时候必判 RED，那不是产品坏了

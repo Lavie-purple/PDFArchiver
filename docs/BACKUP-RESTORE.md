@@ -50,7 +50,7 @@
 ### 实测清单（冻结产物冒烟留下的现场，273 份文档）
 
 ```
-  绿  C11  每份备份快照都真能打开并读出版本
+  绿  C11  最新快照整库体检，其余快照开库读版本
         快照 3 份｜pre-migration-0001-20261015T032946.db 8KiB@v0 ｜
         pre-migration-0002-20261015T032946.db 120KiB@v1 ｜
         pre-migration-0003-20261015T032947.db 148KiB@v2
@@ -217,7 +217,7 @@ Backup API 覆盖完成｜dst 大小 = 864256 字节｜journal_mode = wal
         running 0（必须为 0，否则上次退出没回收）｜各状态分布 {'done': 276}｜干净
   绿  C10  分类树自洽（父链可达 / 无环 / name_path 与父链一致）
         分类 14 个（默认模板算出来是 14 个）｜四项全部自洽
-  绿  C11  每份备份快照都真能打开并读出版本
+  绿  C11  最新快照整库体检，其余快照开库读版本
         快照 3 份｜pre-migration-0001-...db 8KiB@v0 ｜ pre-migration-0002-...db 120KiB@v1 ｜ pre-migration-0003-...db 148KiB@v2
   绿  C12  正文页页码不超过库里记的页数
         超页 0｜页码 <1 0｜同页重复 0（page_count 的口径来自解析器，不是人工填的；页码越界=正文与文件对不上）
@@ -229,7 +229,7 @@ VERDICT: ALL GREEN
 
 ```
 .venv\Scripts\python.exe tests\probes\p12_consistency.py --inject
-→ 17/17 条坏法被抓到
+→ 抓到 21/21 条坏法｜口径边界 1/1 明写
 ```
 
 两条使用注意：

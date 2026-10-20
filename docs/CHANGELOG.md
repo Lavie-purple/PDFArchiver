@@ -6,6 +6,62 @@
 
 ---
 
+## 勾选轮（十六）—— 2026-10-20 ~ 2026-10-21 · **不升版本号**，把真根一致性从 3 红推到 **19/19 全绿**，并用一条命令跑完整链
+
+轮十五收尾后台账 OPEN 只剩 **I97**（真根 C0 / C3·D / C5 三条红）。本轮按「做未完成的，跟进你推荐的」
+依次做掉五件事：**I97 乙**（用产品迁移器升真库）、**C3·D 补索引**、**C5 清空正文**、**I98 乙**（C11
+只体检最新快照）、**I99**（G20 首启竞态）；随后第一次把**真机写路径**与**整链**两件证据同时拿到。
+
+- **A · I97 乙 · 真库迁移 0008（2026-10-20 12:21）** —— 用产品自己的迁移器把真库 v7 → v8，
+  `version_before = 7｜version_after = [(8,)]`，新增 `ix_documents_name_ci`；迁移前经
+  `Connection.backup()` 留快照 `pre-migration-0008-20261020T122144.db`（**11,967,422,464 B**，与源库同字节）；
+  重跑同一迁移器 `did_anything=False applied=[] 0.018s`（幂等）。证据 `.probe_work/i97_migrate.log`。
+- **B · I97 乙 · C3·D 两批共补索引 10 份（15:00 / 次日 02:15–02:24）** —— 全部走**产品路径**
+  （扫描 → 解析 → 正文），不手写 `documents`：doc **10981–10985**（448/432 页等）与
+  **10986–10990**（33 / 352 / 458 / 342 / 407 页）。**C5** 的 1 行空正文来自一份 20 页扫描件
+  （`parse=ok text=none ocr=pending fts=done`），删其 1 行 `text_pages` 后重索引为 20 页。
+  收尾现数：`documents 10,987｜text_pages 1,975,216｜empty_bodies 0｜jobs_pending 0`
+  （`.probe_work/i97_fix_roots_1456.log` / `i97_fix_roots2.log`）。真库累计 10,977 → 10,987。
+- **C · I98 乙 · C11 只体检最新快照** —— 旧口径对主库 + 0007 + 0008 三份 12GB 级库各跑一次
+  `integrity_check`（单份约 44 分钟），真根 p12 被抬到 **8,730s**；改成「最新一份整库体检、
+  其余 7 份开库读版本」，并把「旧快照内部损坏不在本口径内」逐字印成边界行。注入 **21/21 + 边界 1/1**。
+  读数：r16 **5,502.8s** / r16c **2,323.3s**（同代码，差 2.37 倍，原因未查明，按慢的预告）。
+- **D · 真根 p12 首次全绿（2026-10-21）** —— `.probe_work/p12_real_root.json` **19 条 `ok:true`、
+  `unverified:false`**：C0 v8 + 8 个迁移、C1 `integrity_check=ok`、C2 主记录 10,987 两项一致、
+  C3 六根 68/89/1967/5352/1655/1856 各相等且已标缺失 0、C4 正文与花名册各 1,975,216、C5 六项自洽、
+  C6 全合法、C7/C8/C9/C12 干净、C10 分类 14、C13 六根 `root_key == identity_key`、C11 最新快照 ok。
+  **I97 / I98 同时 CLOSED**；门禁那一行的 700 字截断另行定位（任务 #168），读数本身没红。
+- **E · I99 · G20 首启竞态** —— `packaging/frozen_smoke.py` 原来 `time.sleep(6.0)` 后直接发 WM_CLOSE，
+  机器慢时窗口还没 ready 就被关掉：坏法真注入 `退出码 1｜优雅关闭=False（30.42s）｜等窗口 0.2s
+  （window.ready 未到）｜峰值 RSS 2.1MiB｜句柄 3｜线程 1`（`.probe_work/g20_inject_red_r16.log`）。
+  改成 `wait_for_window_ready()` 等 `state.log` 的 `window.ready`（上限 `FIRST_READY_TIMEOUT = 60.0`），
+  复跑 `退出码 0｜优雅关闭=True（0.71s）｜等窗口 8.95s（window.ready 到）｜峰值 RSS 136.0MiB`
+  （`.probe_work/g20_green_r16.log`），整链内同一行 **0.27s / 4.44s**。
+- **F · 真机写路径 27/27** —— `QT_QPA_PLATFORM` 未设（`platform: windows`）跑六屏截图 1280×800：
+  `27 checks, 0 fail`，`verdict: ALL GREEN`，含并入对话框 3 份、导出 4 行 5 列 CSV、OCR 面板
+  「点名 2 份｜该跑 1 份」、归档 3 项、撤销批次 #2；工作目录 `work_dir_removed: true`
+  （`.probe_work/real_ui_1020/report.json`）。这是轮十五欠的「真机手点证据」的自动版本。
+- **G · 整链一条命令 ALL GREEN（2026-10-21 02:59:47 → 04:06:53）** —— `--all --data-root` 12 段
+  **4,023.1s**，`合计判定 34 条｜本次未跑 0 段`，末行 `VERDICT: ALL GREEN`；起跑
+  **CPU 43.6%｜可用内存 7,071MiB**。回归 **782 passed / 1 skipped（236.8s）**；injection 九份 **793.9s**；
+  package **238.1s、400.0MiB、273/273**；G2 **P95 299.0ms**（同日前两场 652.0 / 1,055.0ms，
+  三条必须一起引，**ISSUES I25**）；soak S6 排空仍 **0.0s**（I32 维持 MITIGATED）。
+  证据 `.probe_work/final_chain_r16c.log`。
+- **H · 收尾与口径同步** —— 两场未计入的尝试如实留档：r16（7,652.3s、3 红：p12 旧口径 /
+  G20 / G2 负载）与 r16b（CPU 99.8% 下 G1 假红、e2e 后中止）。代码侧把三处标签改成实现现数：
+  `gates/final.py` p22 **33 条**、`--list` 耗时补 2026-10-21 整链读数、`--all` 帮助 23 → **67 分钟**；
+  `tests/probes/p13_soak.py` S9 **14 条**；`p12_consistency.py` docstring **十四条**。
+  台账现读 **99 行｜CLOSED 77｜MITIGATED 21｜OPEN 0｜WONTFIX 1**。逐字读数见
+  `docs/VERIFICATION-RUNLOGS.md` §4.26。
+
+**本轮仍欠**：① 安装包与代码签名未交付（用户输入依赖）；② 隐私问题按用户口径「以后再处理」；
+③ 真机证据是自动断言 27 条 + 六张截图，仍不是人眼逐屏核对（**ISSUES I17** 的残余）；
+④ 长跑仍是 4 分钟 / S6 排空 0.0s（**ISSUES I32** MITIGATED）；⑤ C11 旧快照只开库读版本，
+其内部损坏不在口径内（边界已明写）；⑥ 真根一致性 5,502.8s 与 2,323.3s 的 2.37 倍分散未查明；
+⑦ **下一步轮十七**：版本升 `1.0.0` 并重打包（用户已勾选，等本轮推完再做）。
+
+---
+
 ## 勾选轮（十五）—— 2026-10-20 · **不升版本号**，按「都跟进你的推荐来执行」把轮十四留下的五条一次做完：I96 甲 / `merge_tags` 入口 /「已归档」口径 / 线框措辞 / I95 乙
 
 轮十四收尾时台账 OPEN 只剩 **I95**（真库三条手写演示数据）与 **I96**（`library_page.py` 只剩 5 行），

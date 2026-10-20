@@ -1,12 +1,12 @@
 """最终交付门禁：把全部阶段的闸门、一致性核查、长跑采样与打包冒烟串成可分段的链。
 
-跑法（**这条链总时长超过一个终端命令的舒适区，所以按段跑**）：
+跑法（2026-10-21 实测单命令跑完 12 段 4,023.1s，后台命令时限给到 ≥4,200s 即可；分段跑仍可用）：
 
     python gates/final.py                       # 默认段：guards + regression + coldstart + e2e + consistency
     python gates/final.py --list                # 打印每段是什么、实测耗时、该不该并进默认
     python gates/final.py --only package        # 只跑打包段（build.py + 冻结冒烟）
     python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24）
-    python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（最慢的一段）
+    python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（2026-10-21 整链 61.2s）
     python gates/final.py --only soak --soak-minutes 4
     python gates/final.py --all --data-root "<要核查的数据根>"
 
@@ -49,14 +49,22 @@ P23 = "tests/probes/p23_ocr_batch_injection.py"
 P24 = "tests/probes/p24_tag_merge_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
+#: 真根 p12 的完整 19 条落在这里。链里每行现场只留最后 900 字（`row.note[:900]`），
+#: 2026-10-21 那场唯一的红行就被截掉了 —— 读的人只看见「RED（1 条未过）」却不知道红在哪。
+#: 有了这份 JSON，红行永远可回查；路径写在每行的「实测」里，不会被截断。
+P12_REAL_OUT = REPO / ".probe_work" / "p12_real_root.json"
 
 #: 带 `--data-root` 的一致性核查单独那一档超时。**按实测反算，不是拍的**：
 #: 2026-10-18 真根（10,977 份 / 202 万页语料）p12 一场跑了 **3,661.7s**
-#: （`.probe_work/serial_run_status.json`），全链共享的 1,800s 比它小一半，于是
-#: `consistency` 段在真库上结构性恒红 —— 红的是闸门不是产品（**ISSUES I91** 甲）。
-#: 取 **2× 实测**（留一倍余量给机器负载，同 I17 那轮「慢探针会因负载整批作废」的教训）≈ 7,300s。
-#: 小库/临时根路径**不动**，仍走 `GATE_TIMEOUT_SECONDS = 1800`。
-REAL_ROOT_TIMEOUT = 7300.0
+#: （`.probe_work/serial_run_status.json`）—— 那时 `backups/` 里只有 KB 级快照。
+#: 2026-10-20 真库升 v8 后多了 12GB 的 0008 快照，当时 C11 对**每份**快照跑
+#: `_health()`，三份 12GB 级库（主库 + 0007 + 0008）各一次 `integrity_check`，
+#: 同一场 p12 实测 **8,730s**（12:26:08→14:51:38，`.probe_work/p12_i97_after.log`）。
+#: 此后按 **ISSUES I98 乙** 把 C11 改成「整库体检只跑最新一份快照，其余只开库读版本」，
+#: 真根的成本上限压成 2 次 12GB 体检（主库 C1 + 最新快照 C11）；17,460s 仍按那场
+#: 8,730s 的 **2×** 保留，作为迁移 0009 之前的保守天花板 —— 0009 再加一份 12GB 快照时
+#: 先复测，再按同一规则重算（C11 的线性增长已被 I98 乙切断，剩下的是主库体量在涨）。
+REAL_ROOT_TIMEOUT = 17460.0
 
 USER_DOCS = ["docs/INSTALL.md", "docs/USAGE.md", "docs/BACKUP-RESTORE.md", "docs/TROUBLESHOOTING.md"]
 REPORT_GLOB = "docs/stage-reports/最终交付报告.md"
@@ -294,7 +302,7 @@ def segment_injection() -> list[Row]:
                   [sys.executable, P18]),
             _gate("p21 智能集合 24 条坏法（a/b/c/d/e/n 五条硬断言 + k chips 接线 + s S8 那一栏 + "
                   "p 两张表漂移 + g 分档算术 + h1 结构性写）", [sys.executable, P21]),
-            _gate("p22 分类清单导出 25 条坏法（a/b/c/d/e 五条线框硬断言 + u 口径来源 + n 落盘纪律 + "
+            _gate("p22 分类清单导出 33 条坏法（a/b/c/d/e 五条线框硬断言 + u 口径来源 + n 落盘纪律 + "
                   "r 回执 + f 格式与空值 + g 门 + w 接线）", [sys.executable, P22]),
             _gate("p23 批量点名面板 23 条坏法（U 读数形状 + B 分档接线 + P 预览执行同源 + C 代价 "
                   "+ R 理由行 + G 预算闸门 + N 过期名单 + X 取消 + F 失败上屏 + K 谎报新增 + W 折行）",
@@ -315,15 +323,18 @@ def segment_ocr() -> list[Row]:
 
 
 def segment_consistency(data_root: str | None) -> list[Row]:
-    rows = [_gate("一致性探针 p12 反向注入自检（17 条坏法）",
+    rows = [_gate("一致性探针 p12 反向注入自检（坏法逐条真注入 + C11 口径边界明写）",
                   [sys.executable, P12, "--inject"], hint=""),
             # G10 的判据本身也要被验一次：p14 把四种坏法各造一遍，看哪几种口径能看见（I8 的出处）
             _gate("FTS 一致性仪表有没有牙 p14（四种坏法 × 五种口径实测）",
                   [sys.executable, P14], hint="")]
     if data_root:
-        rows.append(_gate(f"一致性核查 p12 对指定数据根（{data_root}）",
-                          [sys.executable, P12, "--data-root", data_root],
-                          timeout=REAL_ROOT_TIMEOUT))
+        row = _gate(f"一致性核查 p12 对指定数据根（{data_root}）",
+                    [sys.executable, P12, "--data-root", data_root,
+                     "--out", str(P12_REAL_OUT)],
+                    timeout=REAL_ROOT_TIMEOUT)
+        row.measured += f"｜完整 19 条见 {P12_REAL_OUT.relative_to(REPO)}"
+        rows.append(row)
     else:
         # 这句原来写死「默认数据根 %LOCALAPPDATA%\PdfArchiver 在本机不存在」—— 那是阶段 0/1 的
         # 事实，真语料首扫之后就过期了。机器的状态不许抄成常量：改成现场数一遍，
@@ -364,9 +375,9 @@ def segment_g2() -> list[Row]:
 
 
 SEGMENTS: dict[str, tuple[str, list[str]]] = {
-    "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["1.4–1.6s"]),
-    "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["49.6–156.1s"]),
-    "coldstart": ("G1 冷启动 + 关窗对账", ["1.0–1.6s"]),
+    "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["1.4–2.8s"]),
+    "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["49.6–236.8s（2026-10-21 782 条）"]),
+    "coldstart": ("G1 冷启动 + 关窗对账", ["1.0–2.0s"]),
     "e2e": ("新 · 后台生命周期 + 阶段 2 端到端（真 PDF / 真 worker / 真监听）", ["10.1–15.2s"]),
     # 415.3s 是 2026-10-18 五份探针空载上限；680.5s（轮十四 p21 入段）与 966.3s（轮十四 E 后八份）
     # 都是负载场 —— 680.5s 那场 p9 在**基线**就判红，红的是负载绑定的冷启动读数（**ISSUES I25**），
@@ -377,16 +388,18 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     # p17 3、p18 3、p21 24、p22 25、p23 23、p24 17）；起跑 CPU 26.9%、可用内存 3,186MiB、最吃内存的
     # 进程 Qoder CN.exe 566MiB。此前 06:07 那场被**系统休眠 5.5h** 拖到 p10 的 1800s 上限而中断，
     # 那场墙钟作废（不是产品红、不是断言没牙），可比读数只认 788.9s 这一场。阈值一条没放宽。
+    # 2026-10-21 整链内（r16c）**793.9s** 同量级，p22 此时已是 33/33。三条空载读数（788.9 / 793.9）
+    # 与负载场 966.3s、五份时代 415.3s 并列展示，不互相换算。
     "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24 反向注入（断言到底有没有约束力）",
-                  ["788.9s @CPU 26.9%（2026-10-20，九份同场空载全绿）｜966.3s（负载场，八份）"]),
+                  ["788.9s / 793.9s（空载，2026-10-20 / 21，九份全绿）｜966.3s（负载场，八份）"]),
     "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（不进默认段）",
-                  ["71.8s（2026-10-18 实测）"]),
+                  ["71.8s（2026-10-18）｜61.2s（2026-10-21 整链内）"]),
     "ocr": ("阶段 5 三条：产品路径实测 / 预算真停机 / 真引擎套件不许 skip", ["28.4–30.6s"]),
     "consistency": ("p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场",
-                    ["3.5–5.7s ＋真根另加 3,661.7s"]),
-    "soak": ("p13 注入自检 + 真长跑采样", ["288.8–289.3s @4 分钟"]),
-    "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["241.9–255.0s"]),
-    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["83.9s"]),
+                    ["3.5–5.7s ＋真根另加 2,323.3s（r16c）／5,502.8s（r16）"]),
+    "soak": ("p13 注入自检 + 真长跑采样", ["288.8–289.6s @4 分钟"]),
+    "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["241.9–255.0s｜238.1s（2026-10-21）"]),
+    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["83.9s（2026-10-18）｜33.7s（2026-10-21 整链内）"]),
 }
 DEFAULT_ORDER = ["guards", "regression", "coldstart", "e2e", "consistency"]
 
@@ -424,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", action="append", default=None, choices=list(SEGMENTS) + ["docs-inject"],
                     help="只跑指定段，可重复")
     ap.add_argument("--all", action="store_true",
-                    help="全链（按 --list 每段标称相加约 23 分钟，超过多数 CI 单命令上限）")
+                    help="全链（2026-10-21 实测 4,023.1s ≈ 67 分钟；需后台时限 ≥4,200s）")
     ap.add_argument("--data-root", default=None, help="要核查一致性并写进交付报告的数据根")
     ap.add_argument("--soak-minutes", type=float, default=4.0, help="长跑采样时长（默认 4 分钟）")
     ap.add_argument("--list", action="store_true", help="列出每段是什么与耗时量级")
@@ -435,8 +448,9 @@ def main(argv: list[str] | None = None) -> int:
         for name, (what, cost) in SEGMENTS.items():
             print(f"  {name:<12} {cost[0]:>22}  {what}")
         print("  docs-inject           ~1s  交付文档门禁自己的坏法注入")
-        print(f"  耗时是 2026-10-18 分段实测（`.probe_work/b1_seg*.log`），"
-              f"injection 那行是 2026-10-20 九份同场空载（含 p22 / p23 / p24）的读数，"
+        print(f"  耗时是 2026-10-18 分段实测（`.probe_work/b1_seg*.log`）＋ 2026-10-21 整链实测"
+              f"（`.probe_work/final_chain_r16c.log`，4,023.1s 全链），"
+              f"injection 那几行是九份同场空载（含 p22 / p23 / p24）的读数，"
               f"并保留 966.3s（负载场，八份）与 415.3s（2026-10-18，五份）两条历史读数 —— "
               f"探针数与负载条件都不同，不许互相换算；"
               f"跑临时库的段共用 {GATE_TIMEOUT_SECONDS:.0f}s 那一档，"
@@ -462,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {'PASS' if row.ok else 'RED '}  {row.gate}")
             print(f"        实测：{row.measured}")
             if row.note:
-                print(f"        现场：{row.note[:700]}")
+                print(f"        现场：{row.note[:900]}")
         checks += rows
 
     for s in skipped:

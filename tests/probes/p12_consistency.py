@@ -19,7 +19,7 @@
    队列残留检查、一份快照都没有的备份目录）都显式印成「未验」，并让整场门禁变红。
    这个调子是阶段 5 定下的：跳过的真引擎测试一条也没验。
 
-十三条对账：
+十四条对账：
 
     C0  水位停在迁移目录里的最新版          C6  状态列取值都在口径内
     C1  库自身健康（integrity / fk_check）   C7  向量状态取值都在口径内（产品里没人推进它）
@@ -27,19 +27,22 @@
     C3  盘上文件 ↔ 库里主记录 双向对账       C9  无进程时队列里不许有 running 残留
     C4  正文表 ↔ 索引花名册 双向对账       C10 分类树父链可达、无环、name_path 一致
                                           （倒排幽灵免词测不到，见 c4_fts 说明）
-    C5  正文页自洽（字数/来源/OCR 版本）     C11 每份备份快照都真能打开并读出版本
+    C5  正文页自洽（字数/来源/OCR 版本）     C11 最新快照整库体检，其余快照开库读版本
     C12 正文页页码不超过库里记的页数         C13 监测根根键与 identity_key 同口径
 
 C7/C8 是反伪装用的：阶段 6 已交付（C7 换成真口径，见 `c7_vector_domain` 注释），阶段 4 已交付
 （C8 换成真口径，见 `c8_op_domain` 注释）。这两条在对应阶段真交付时同步改成了该阶段的口径。
 
-耗时提示：C3 要真走一遍目录树（真实语料 7,768 份/202 万页那次是分钟级），C11 对每份快照跑
-`integrity_check`（与库大小同量级）。想快就先 `--no-file-walk`，但那时它不算验过。
+耗时提示：C3 要真走一遍目录树（真实语料 7,768 份/202 万页那次是分钟级），C11 的整库
+`integrity_check`（与库大小同量级）只跑最新一份快照，其余快照只开库读版本 —— 每次迁移都会多一份
+12GB 级快照，逐份体检会把真根核查从分钟级抬到小时级（**ISSUES I98**）。想快就先
+`--no-file-walk`，但那时它不算验过。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -400,11 +403,15 @@ def c11_backups(data_root: Path) -> Row:
     backup_dir = AppPaths.resolve(data_root).backups_dir
     snaps = sorted(backup_dir.glob("*.db")) if backup_dir.is_dir() else []
     if not snaps:
-        return Row("C11", "每份备份快照都真能打开并读出版本", False,
+        return Row("C11", "最新快照整库体检，其余快照开库读版本", False,
                    "backups/ 里一份快照都没有 —— 从没跑过迁移就不会有，但交付时不能拿「没有」当「验过」",
                    unverified=True)
+    # ISSUES I98 乙：最新一份才是真正的回滚点，整库 _health 只跑它；其余快照仍要打开 + 读版本。
+    # 逐份 integrity_check 的代价随迁移次数线性增长（每迁移一次多一份 12GB 级快照）。
+    newest = max(snaps, key=lambda p: (p.stat().st_mtime_ns, p.name))
     bad: list[str] = []
     detail: list[str] = []
+    health = ""
     for snap in snaps:
         size = snap.stat().st_size
         if size == 0:
@@ -416,20 +423,24 @@ def c11_backups(data_root: Path) -> Row:
             bad.append(f"{snap.name} 打不开：{type(exc).__name__}: {exc}")
             continue
         try:
-            ok, measured = _health(conn, snap.name)
             # 迁移前的第一份快照来自空库：那时连 schema_version 都还没有，v0 是它的正当取值
             version = int(_scalar(conn, "SELECT coalesce(max(version), 0) FROM schema_version")) \
                 if conn.execute("SELECT count(*) FROM sqlite_master WHERE name='schema_version'"
                                 " AND type='table'").fetchone()[0] else 0
             detail.append(f"{snap.name} {round(size / 1024)}KiB@v{version}")
-            if not ok:
-                bad.append(measured)
+            if snap == newest:
+                ok, measured = _health(conn, snap.name)
+                health = f"最新一份整库体检 {measured}"
+                if not ok:
+                    bad.append(measured)
         except sqlite3.DatabaseError as exc:
             bad.append(f"{snap.name} 读不动：{type(exc).__name__}: {exc}")
         finally:
             conn.close()
-    return Row("C11", "每份备份快照都真能打开并读出版本", not bad,
-               f"快照 {len(snaps)} 份｜{_brief(detail, 4)}"
+    scope = (f"整库体检只跑最新一份，其余 {len(snaps) - 1} 份仅开库读版本"
+             f"（旧快照内部损坏不在本口径内，ISSUES I98）")
+    return Row("C11", "最新快照整库体检，其余快照开库读版本", not bad,
+               f"快照 {len(snaps)} 份｜{_brief(detail, 4)}｜{health}｜{scope}"
                + ("" if not bad else " ── " + "；".join(bad)))
 
 
@@ -498,6 +509,8 @@ def _app_running() -> tuple[bool, str]:
 # 每条坏法都是"能骗过对应断言的写法"，逐条打进现场搭出来的临时数据根，看那一条会不会红。
 # 红 = 断言有约束力；不红 = 这条断言是摆设，按 AGENTS.md 直接删或改写。
 # C1 的坏法不单独注入：毁主库等于毁整个前提，而 C11 用的是同一个 _health()，那里注入就够。
+# C11 的「旧快照能打开但内部损坏」不是坏法，而是 I98 乙的口径边界：它必须保持绿，
+# 且 C11 的 measured 必须明写这件事 —— 由 inject_mode 末尾的 _c11_scope_case 单独守。
 
 INJECTIONS: list[tuple[str, str, str]] = [
     ("C0", "库停在旧版本，迁移目录却已经更靠前",
@@ -539,8 +552,12 @@ INJECTIONS: list[tuple[str, str, str]] = [
      "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'running', 1);"),
     ("C10", "分类 name_path 与父链不一致",
      "UPDATE categories SET name_path='胡说' WHERE parent_id IS NOT NULL;"),
-    ("C11", "备份快照被写成打不开的样子",
+    ("C11", "最新快照能打开、版本读得动，但整库结构坏了（体检那条路必须红）",
+     "__corrupt_newest_internals__"),
+    ("C11", "最新快照被写成打不开的样子",
      "__corrupt_backup__"),
+    ("C11", "旧快照被写成打不开的样子（每份仍要开库读版本）",
+     "__corrupt_old_backup__"),
     ("C12", "库里记的页数比实际入库页码还小",
      "UPDATE documents SET page_count=1 WHERE id=1;"),
     # ISSUES I89 丙：首字母大写 → identity_key(root_key) 对不上，C13 必须点名。
@@ -597,13 +614,40 @@ def _fixture(root: Path) -> Path:
     return data_root
 
 
+def _break_rootpage(db: Path) -> None:
+    """让库仍能打开、schema_version 仍读得动，但 integrity_check 必报错：
+    把 documents 的根页指到 categories 的根页（同一页被两处引用）。"""
+    conn = sqlite3.connect(str(db))
+    try:
+        donor = conn.execute("SELECT rootpage FROM sqlite_master"
+                             " WHERE type='table' AND name='categories'").fetchone()[0]
+        conn.execute("PRAGMA writable_schema=ON")
+        conn.execute("UPDATE sqlite_master SET rootpage=? WHERE type='table' AND name='documents'",
+                     (donor,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _apply(name: str, sql: str, data_root: Path) -> str:
-    """把一条坏法打进副本。三种需要动文件系统的坏法在这里处理，返回注入说明。"""
+    """把一条坏法打进副本。需要动文件系统的坏法在这里处理，返回注入说明。"""
     corpus = data_root.parent / "corpus"
     if sql == "__corrupt_backup__":
-        victim = sorted(AppPaths.resolve(data_root).backups_dir.glob("*.db"))[0]
+        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
+                     key=lambda p: (p.stat().st_mtime_ns, p.name))
         victim.write_bytes(b"this is not a sqlite database at all" * 40)
-        return f"（把 {victim.name} 写成非 sqlite 内容）"
+        return f"（把最新快照 {victim.name} 写成非 sqlite 内容）"
+    if sql == "__corrupt_newest_internals__":
+        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
+                     key=lambda p: (p.stat().st_mtime_ns, p.name))
+        _break_rootpage(victim)
+        return f"（把 {victim.name} 的 documents 根页指到 categories，库仍能打开）"
+    if sql == "__corrupt_old_backup__":
+        ordered = sorted(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
+                         key=lambda p: (p.stat().st_mtime_ns, p.name))
+        victim = ordered[-2]  # 最新一份（fixture-snapshot.db）不动，只毁次新
+        victim.write_bytes(b"this is not a sqlite database at all" * 40)
+        return f"（把旧快照 {victim.name} 写成非 sqlite 内容，最新一份不动）"
     if sql == "__add_file_on_disk__":
         (corpus / "漏索引新文件.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         return "（盘上新增一份 PDF，库里没有）"
@@ -624,6 +668,30 @@ def _by_code(rows: list[Row]) -> dict[str, list[Row]]:
     for row in rows:
         out.setdefault(row.code.split("·")[0], []).append(row)
     return out
+
+
+def _c11_scope_case(root: Path) -> tuple[bool, str]:
+    """I98 乙的口径边界：旧快照「能打开但内部损坏」不再整库体检（成本封顶的代价）。
+    要求 C11 绿的同时明写这件事 —— 删掉那句披露，这一条就红。"""
+    data_root = _fixture(root)
+    backups = AppPaths.resolve(data_root).backups_dir
+    newest = max(backups.glob("*.db"), key=lambda p: (p.stat().st_mtime_ns, p.name))
+    old = backups / "older-snapshot.db"
+    old.write_bytes(newest.read_bytes())
+    _break_rootpage(old)
+    # 必须放在 _break_rootpage 之后：写库会把 mtime 刷成现在，否则它会被当成「最新一份」
+    stamp = newest.stat().st_mtime - 60
+    os.utime(old, (stamp, stamp))
+    conn = _ro(old)
+    try:
+        damaged, _ = _health(conn, old.name)
+    finally:
+        conn.close()
+    row = c11_backups(data_root)
+    disclosed = "仅开库读版本" in row.measured and "I98" in row.measured
+    ok = row.ok and damaged is False and disclosed
+    return ok, (f"旧快照 integrity_check={'红' if damaged is False else '绿（注入没生效）'}"
+                f"｜C11={'绿' if row.ok else '红'}｜明写={disclosed}")
 
 
 def inject_mode(out: Path | None) -> int:
@@ -651,18 +719,27 @@ def inject_mode(out: Path | None) -> int:
             if not hit:
                 print("        注入后该条仍是："
                       + _brief([r.measured for r in rows.get(code, [])] or ["（这条根本没跑）"]))
+        scope_ok, scope_note = _c11_scope_case(work / "scope")
+        print(f"  {'明写' if scope_ok else '漏写'}  口径边界 ← 旧快照内部损坏不做整库体检 "
+              f"{scope_note}")
         total = len(INJECTIONS)
-        print(f"\n  注入自检：抓到 {len(caught)}/{total} 条坏法")
+        print(f"\n  注入自检：抓到 {len(caught)}/{total} 条坏法｜"
+              f"口径边界 {1 if scope_ok else 0}/1 明写")
         if missed:
             print("  没抓到的断言（没有约束力，该删或改写）：" + "；".join(missed))
+        if not scope_ok:
+            print("  口径边界没明写：旧快照内部损坏会静默漏检 —— 必须把这条写进 C11 的 measured")
         if out:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps({"caught": caught, "missed": missed, "total": total},
+            out.write_text(json.dumps({"caught": caught, "missed": missed, "total": total,
+                                       "c11_scope_disclosed": scope_ok},
                                       ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"  INFO 结果已写出 {out}")
-        print("VERDICT: " + (f"ALL GREEN（{len(caught)}/{total}）" if not missed and caught
-                             else f"RED（漏了 {len(missed)} 条坏法）"))
-        return 0 if not missed and caught else 1
+        print("VERDICT: " + (f"ALL GREEN（{len(caught)}/{total} + 口径边界 1/1）"
+                             if not missed and caught and scope_ok
+                             else f"RED（漏了 {len(missed)} 条坏法"
+                                  + ("" if scope_ok else "，口径边界没明写") + "）"))
+        return 0 if not missed and caught and scope_ok else 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

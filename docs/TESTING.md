@@ -130,12 +130,12 @@ OCR 断言合计 **92 条**（六个文件 18/22/6/34/8/4，`--collect-only` 逐
 | 这一轮新增的判据 | 落在哪 | 现在能不能常驻 |
 | --- | --- | --- |
 | 交付文档在场性（四份用户文档 + 报告五分栏 + 无占位符 + 每份引用当次实测） | `gates/final.py::gate_docs()`，在 `guards` 段里 | ✅ 常驻，且 `docs-inject` 那条证明它会被残缺报告与 `TBD` 文档打红 |
-| 盘 ↔ 库一致性十三条（C0–C12） | `tests/probes/p12_consistency.py`，`consistency` 段 | ✅ 常驻（17 条坏法自检全过）；**「对真实数据根那行本次未跑」这句到 2026-10-18 还在，但它的原因是错的**：本表 2026-10-15 写的「因为默认数据根在本机不存在」是一句**已经过期的本机状态** —— 2026-10-18 现读默认根 `C:\Users\lavie\AppData\Local\PdfArchiver` **在场**（`.probe_work/i87_else_branch.txt`，**ISSUES I87**）。今天未跑的真实原因是门禁不默认去碰真库（要显式 `--data-root`），而第一次给就撞满 1800s 上限（`.probe_work/b1_1018_seg1_reallll.log`）→ 那一档已单独提到 7300s（**ISSUES I91**）。不许读成"真实现场已核" |
-| 长跑九条（S1–S9，进程树采样） | `tests/probes/p13_soak.py`，`soak` 段 | ⚠ 常驻但**证据有界**：`--minutes` 默认 4 分钟，且 S6 那次排空 0.0s —— **ISSUES I32** OPEN |
+| 盘 ↔ 库一致性十四条（C0–C13；C3 按六个根展开后共 19 行） | `tests/probes/p12_consistency.py`，`consistency` 段 | ✅ 常驻（坏法逐条真注入全过，C11 口径边界明写）；**2026-10-21 首次拿到真根绿读数**：`.probe_work/p12_real_root.json` **19 条全绿、未验 0 条**（C3 六根 68/89/1967/5352/1655/1856 各相等、C4 1,975,216 对齐、C11 最新快照体检 ok）。此前挡住它的不是「默认根在本机不存在」（那句已过期，**ISSUES I87**），而是 I89 / I90 / I95 / I97 四条真缺陷，均已 CLOSED；2026-10-18 的 3,597.1s/红 9 是历史读数。C11 只对最新一份快照跑整库体检、其余 7 份仅开库读版本（**ISSUES I98**） |
+| 长跑九条（S1–S9，进程树采样） | `tests/probes/p13_soak.py`，`soak` 段 | ⚠ 常驻但**证据有界**：`--minutes` 默认 4 分钟，S6 排空仍是 **0.0s**（2026-10-21 整链读数）—— **ISSUES I32** MITIGATED |
 | G10 那几种口径谁能看见哪一种坏法（10 条） | `tests/probes/p14_fts_instrument.py`，`consistency` 段 | ✅ 常驻；⑤ 与第 10 条现在走**产品入口** `IndexService.rebuild_fts()`，摘掉补救会红（**ISSUES I33**） |
 | 探针自己的 SQL 传感器与产品口径对齐 | `tests/integration/test_probe_sql_sensors.py`（2 条，进 `regression`） | ✅ 常驻（静态 `ast` 核对 + 一条等式） |
-| 冻结产物内容与干净目录冒烟 | `packaging/build.py` + `packaging/frozen_smoke.py`，`package` 段 | ⚠ 在链里，但要 `--only package` 点名（**约 255s**），默认段不含它 |
-| G2 搜索 P95 ≤500ms、G3 首建 ≤6h、L4 ×10 档 | —— | ❌ **不在最终链里**：这一轮当时没有新增任何这类读数（**ISSUES I16** / **ISSUES I20**）。**2026-10-17 G2 单独实测判 RED**，入口是一次性脚本 `scripts/g2_search_benchmark.py`（真库绑定读数；常驻入口 2026-10-18 补上了 —— `gates/final.py --only g2`，`SEGMENTS` 在场、`DEFAULT_ORDER` 不含它），读数见 `docs/VERIFICATION.md` §4.15、处置等勾选见 **ISSUES I59**；G3 与 L4 ×10 照旧未实测 |
+| 冻结产物内容与干净目录冒烟 | `packaging/build.py` + `packaging/frozen_smoke.py`，`package` 段 | ⚠ 在链里，但要 `--only package` 点名（**238.1s**，2026-10-21 整链读数），默认段不含它 |
+| G2 搜索 P95 ≤500ms、G3 首建 ≤6h、L4 ×10 档 | `gates/final.py` 的 `g2` 段（`scripts/g2_search_benchmark.py`） | ✅ **G2 在链里**（`SEGMENTS` 有它，`--all` 会跑；2026-10-21 整链内 **33.7s、P95 299.0ms**，100 样本、`text_pages 1,975,216`）。同日三次读数 **652.0 / 1,055.0 / 299.0ms** 必须一起引 —— 判据随机器负载漂移（**ISSUES I25**），单引 299ms 会把它说成"永远达标"。❌ **G3 首建 ≤6h、L4 ×10 档仍无实测**（**ISSUES I16** / **I20**） |
 
 `gates/final.py` 的两条口径值得单独说清，因为它们最容易被后来人写坏：
 
@@ -392,23 +392,29 @@ subprocess.TimeoutExpired: Command '['H:\\AI project\\demo19\\.venv\\Scripts\\py
 | injection | **170.9–415.3s** ← 跑临时库时最慢的一段 | `.probe_work/b1_seg2_injection.log` |
 | consistency **带 `--data-root`** | **3,661.7s**（真根 10,977 份 / 202 万页。**这一场是探针独立跑，不经门禁** ⇒ 18 条全出、红 9；同一时刻经门禁的那一场是在 1,800s 被整条杀掉，见上面那段 traceback） | `.probe_work/serial_run_status.json`＋`.probe_work/p12_real_root.log` |
 | consistency **带 `--data-root`，经门禁新档复跑** | **3,597.1s**（2026-10-18 15:07，`── 段 consistency（3597.1s）`，**未验 0 条** ⇒ 这一场没有任何一条是"闸门时间到"） | `.probe_work/b1_seg1d_consistency_real.log` |
+| consistency **带 `--data-root`（v8 + 两份 12GB 快照）** | **8,730s**（2026-10-20 12:26:08→14:51:38；C11 对主库、0007、0008 三份 12GB 级库各跑一次 `integrity_check`，单份约 44 分钟；本场与一次全量回归重叠前 15 分钟，属偏保守读数） | `.probe_work/p12_i97_after.log`＋`.probe_work/p12_i97_after.json` |
+| consistency **带 `--data-root`（r16c，整链内，19 条全绿）** | **2,323.3s**（2026-10-21 03:45–04:24；C11 只体检最新一份快照） | `.probe_work/final_chain_r16c.log`＋`.probe_work/p12_real_root.json` |
+| consistency **带 `--data-root`（r16，整链内）** | **5,502.8s**（同日同代码；与上一行差 **2.37 倍**，原因未查明 —— 预告按慢的那场算） | `.probe_work/final_chain_r16.log` |
+| injection（九份探针，含 p24） | **793.9s**（同日空载场 **788.9s**；415.3s 是五份时代的读数，不可换算） | `.probe_work/final_chain_r16c.log`＋`.probe_work/final_injection_r15b.log` |
+| package（构建 + 冒烟） | **238.1s**（构建 96.8s｜冒烟 137.3s｜400.0MiB｜273/273 在册） | `.probe_work/final_chain_r16c.log`＋`.probe_work/frozen_smoke_result.json` |
+| **整链 12 段（含真根与 package / g2）** | **4,023.1s ≈ 67.1 分钟**，`合计判定 34 条｜本次未跑 0 段`、`VERDICT: ALL GREEN` | `.probe_work/final_chain_r16c.log` |
 
 | 超时档 | 值 | 覆盖谁 | 来源 |
 | --- | --- | --- | --- |
 | `GATE_TIMEOUT_SECONDS` | **1,800s** | 链里所有跑**临时小库**的段 | **[约定]** = 最慢实测 415.3s（injection）× **4.3** 取整；不是反算，因为这条档没有库量级输入 |
-| `REAL_ROOT_TIMEOUT` | **7,300s** | 只给 `--data-root` 那一条核查 | **[反算]** = 实测 **3,661.7s × 2**；2026-10-18 经门禁复跑实测 **3,597.1s**，用掉这一档的 **49%**（余量 2.03 倍）⇒ 这一档不再是断言 |
+| `REAL_ROOT_TIMEOUT` | **17,460s** | 只给 `--data-root` 那一条核查 | **[反算]** = 2026-10-20 实测 **8,730s × 2**（`.probe_work/p12_i97_after.log`）。旧值 7,300s 来自 2026-10-18 的 3,661.7s，那时 `backups/` 只有 KB 级快照。v8 迁移新增 12GB 的 0008 快照后，C11 曾对三份 12GB 级库各跑一次 `integrity_check`；**2026-10-20 已按 ISSUES I98 乙 改成「最新一份整库体检、其余快照开库读版本」**，成本封顶为 **2 次** 12GB 级体检（主库 C1 + 最新快照 C11），新读数见 §4.26。17,460s 维持为 **≥2× 实测**的保守上限（对 r16 的 5,502.8s 留 3.17 倍、对 r16c 的 2,323.3s 留 7.5 倍）；下一次迁移 0009 落地后复测（**ISSUES I98**，2026-10-21 CLOSED） |
 
-要预先告诉人的三句话：
+要预先告诉人的三句话（2026-10-21 现读）：
 
-1. **默认链很快**：`DEFAULT_ORDER` 五段实测相加约 **175s**。
-2. **全链（不含真根）约 1,308s ≈ 21.8 分钟**，与 `--all` 帮助里那句"约 23 分钟"同量级
-   —— 注意这数是把上表各段实测**相加**得到的，各段来自不同场次，不是一场连续跑出来的读数。
-   它超过 Bash 单命令 600s 上限，所以整链必须分段跑（**ISSUES I91** 之外另记 B1 那条）。
-3. **真根那条一致性是量级跳跃**：临时库 5.7s → 真根 3,661.7s（约 **640 倍**），带 `--data-root`
-   跑全链要按 **≈82 分钟** 预告（2026-10-18 经门禁复跑那一场是 **3,597.1s**，与独立跑的 3,661.7s
-   差 64.6s，不改量级）。**同族近失**：`p20_root_selfheal` 真根一场实测 **1,809.6s**，
-   比共享那档只多 **9.6s** —— 它目前不在链里（离线跑）所以没炸，但这就是"1,800s 不是随便哪个
-   现场都兜得住"的证据；将来把它排进常驻段时必须同时给它那一档。
+1. **默认链很快**：`DEFAULT_ORDER` 五段实测相加约 **175s**（不含 `package` / `g2` / 真根那条一致性）。
+2. **全链 12 段 2026-10-21 已单命令跑完**：**4,023.1s ≈ 67.1 分钟**，`合计判定 34 条｜本次未跑 0 段`、
+   末行 `VERDICT: ALL GREEN`（`.probe_work/final_chain_r16c.log`）。所以早先那句"整链必须分段跑"
+   是旧现场（当时按各段不同场次相加估 1,308s 且不含真根）；现在只要后台命令时限给到 **≥ 4,200s** 就能一条跑完。
+3. **真根那条一致性仍是量级跳跃**：临时库 3.5–5.7s → 真根 **2,323.3s**（r16c，19 条全绿）／
+   **5,502.8s**（r16，同日同代码，原因未查明）。带 `--data-root` 跑全链按 **≈ 67–110 分钟**预告，
+   慢的那场口径优先；`REAL_ROOT_TIMEOUT` 17,460s 对 5,502.8s 留 3.17 倍。**同族近失**：
+   `p20_root_selfheal` 真根一场实测 **1,809.6s**，比共享那档只多 **9.6s** —— 它目前不在链里（离线跑）
+   所以没炸，但这就是"1,800s 不是随便哪个现场都兜得住"的证据；将来把它排进常驻段时必须同时给它那一档。
 
 ---
 

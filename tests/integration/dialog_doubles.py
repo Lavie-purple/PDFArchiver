@@ -7,8 +7,8 @@
 （**ISSUES I58** 丙 定下的"共享夹具/替身搬进一个非 `test_` 前缀的 helpers 模块"）。
 
 **刻意没并进来的两份**：`test_archive_execute_ui.py`（只截 information/warning，`question`
-回 `Ok`）与 `test_category_export_ui.py`（`question` 的答复由它自己那份 `answers` 决定，
-要演"按 No 就不写"）。它们要回的按钮本来就不同，并成一个带开关的替身只会把"这一句到底
+回 `Ok`）与 `tests/integration/category_export/conftest.py`（`question` 的答复由它自己那份
+`answers` 决定，要演"按 No 就不写"）。它们要回的按钮本来就不同，并成一个带开关的替身只会把"这一句到底
 按了什么"读得更含糊 —— 并进来的两份是**逐字相同**的那两份，不是"差不多"的那两份。
 
 `stub_message_boxes` 里 `question` 一律回 `Yes`：这一份只服务"确认了就写"的主路，
