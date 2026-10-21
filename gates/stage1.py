@@ -82,8 +82,18 @@ def gate_regression() -> Row:
     passed = _num(PYTEST_PASSED_RE, out)
     skipped = _num(PYTEST_SKIPPED_RE, out)
     summary = f"{passed} passed / {failed} failed / {errored} error / {skipped} skipped"
-    return Row("全量回归", p.returncode == 0 and failed == 0 and errored == 0, summary,
-               "" if p.returncode == 0 else out[-1500:])
+    if p.returncode == 0 and failed == 0 and errored == 0:
+        return Row("全量回归", True, summary)
+    # 链里每行现场只留 900 字，900 字经常只够到测试源码的一半（2026-10-21 轮十七实测：
+    # G1 那一红只剩 fixture 路径 + 函数头，断言原文被截掉）。完整输出必须落盘，
+    # 失败节点名顶到实测里 —— 与 p12 真根 `.probe_work/p12_real_root.json` 同一个做法。
+    dest = REPO / ".probe_work" / "regression_full.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(out, encoding="utf-8")
+    failed_nodes = re.search(r"=+ short test summary info =+\n(.*?)(?:\n=+|\Z)", out, re.S)
+    block = failed_nodes.group(1).strip() if failed_nodes else "(没有 short test summary 段)"
+    return Row("全量回归", False, f"{summary}｜完整输出：{dest}",
+               f"{block}\n--- 末尾 ---\n{out[-1200:]}")
 
 
 def gate_injection() -> Row:

@@ -54,6 +54,13 @@ SMOKE = "packaging/frozen_smoke.py"
 #: 有了这份 JSON，红行永远可回查；路径写在每行的「实测」里，不会被截断。
 P12_REAL_OUT = REPO / ".probe_work" / "p12_real_root.json"
 
+#: 注入段的「进行中」标记。探针都是先改源码/文档、跑一次、再在 `finally` 里还原；
+#: 被强杀（TaskStop / 超时杀子进程）时 `finally` 不会跑，坏法就留在工作区。
+#: 2026-10-21 实测：p17 的 H3 残留（只核对 archive）让 job_queue 的正常断言变成
+#: `DID NOT RAISE`，下一场全量回归把注入残留读成了产品缺陷。标记在起跑前检查，
+#: 在场就拒绝起跑 —— 宁可让人去还原，也不许再产出这种假红。
+INJECTION_INFLIGHT = REPO / ".probe_work" / "injection_inflight"
+
 #: 带 `--data-root` 的一致性核查单独那一档超时。**按实测反算，不是拍的**：
 #: 2026-10-18 真根（10,977 份 / 202 万页语料）p12 一场跑了 **3,661.7s**
 #: （`.probe_work/serial_run_status.json`）—— 那时 `backups/` 里只有 KB 级快照。
@@ -294,7 +301,15 @@ def segment_injection() -> list[Row]:
     只红不点名（崩溃冒充断言）算漏。p15 那一族覆盖归档界面与磁盘链路，单开一段（见 `segment_ui_injection`）。"""
     from stage1 import gate_injection  # noqa: PLC0415
     from stage5 import gate_ocr_injection  # noqa: PLC0415
-    return [gate_injection(), gate_ocr_injection(),
+    INJECTION_INFLIGHT.parent.mkdir(parents=True, exist_ok=True)
+    INJECTION_INFLIGHT.write_text(
+        "坏法注入段进行中。这个文件还在 = 上一次没走到收尾，源码/文档可能残留坏法。\n"
+        "先按各探针说明还原工作区，再删除本文件；不要直接重跑门禁。\n",
+        encoding="utf-8")
+    # 只有整段全绿才删标记：红行可能是探针没还原完，超时更是直接杀了子进程。
+    # 被强杀时这里不会执行，下一次起跑会在 preflight 拒绝 —— 宁可挡住重跑，也不许误判。
+    try:
+        rows = [gate_injection(), gate_ocr_injection(),
             _gate("p16 文档指针守卫：四档空指 + 台账旧名上限（P1–P6 + 反向对照）", [sys.executable, P16]),
             _gate("p17 队列处理函数形状核对：三条坏法（H1 少收参数 / H2 吞异常 / H3 只盯一种）",
                   [sys.executable, P17]),
@@ -309,6 +324,12 @@ def segment_injection() -> list[Row]:
                   [sys.executable, P23]),
             _gate("p24 标签合并 17 条坏法（a 数据 / b 拒 / c 入口 / d 同源 + w 接线）",
                   [sys.executable, P24])]
+        if all(r.ok for r in rows):
+            INJECTION_INFLIGHT.unlink(missing_ok=True)
+        return rows
+    except BaseException:
+        # 标记必须留给下一次起跑看：异常路径下没人能保证探针的 finally 跑过
+        raise
 
 
 def segment_ui_injection() -> list[Row]:
@@ -432,6 +453,21 @@ def build(name: str, args: argparse.Namespace) -> list[Row]:
     raise SystemExit(f"未知段 {name}")
 
 
+def preflight_injection_residue() -> Row | None:
+    """注入段被强杀时标记会留下：源码/文档可能还带着探针写进去的坏法。
+
+    这时任何一段的读数都不可信，直接拒绝起跑。2026-10-21 轮十七实测过一次：
+    p17 的 H3 残留（只核对 archive）让 job_queue 的正常断言变成 `DID NOT RAISE`，
+    下一场全量回归把注入残留读成了产品缺陷。
+    """
+    if not INJECTION_INFLIGHT.exists():
+        return None
+    return Row("上一次坏法注入段没有收尾", False,
+               f"标记还在：{INJECTION_INFLIGHT.relative_to(REPO)}",
+               "src/ 或 docs/ 可能残留探针写进去的坏法；先按各探针说明还原工作区，"
+               "再删除这个标记。标记在场时门禁拒绝起跑，避免把注入残留误判成产品缺陷。")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="gates/final.py", description="最终交付门禁（分段链）")
     ap.add_argument("--only", action="append", default=None, choices=list(SEGMENTS) + ["docs-inject"],
@@ -456,6 +492,16 @@ def main(argv: list[str] | None = None) -> int:
               f"跑临时库的段共用 {GATE_TIMEOUT_SECONDS:.0f}s 那一档，"
               f"带 --data-root 的真根核查单独走 {REAL_ROOT_TIMEOUT:.0f}s 那一档（I91）")
         return 0
+
+    residue = preflight_injection_residue()
+    if residue is not None:
+        print(f"门禁运行于 {REPO}｜python {sys.version.split()[0]}")
+        print(f"  RED   {residue.gate}")
+        print(f"        实测：{residue.measured}")
+        print(f"        现场：{residue.note[:900]}")
+        print("  合计判定 1 条｜本次未跑 0 段")
+        print("VERDICT: RED（1 条未过）")
+        return 1
 
     order = list(SEGMENTS) if args.all else (args.only or DEFAULT_ORDER)
     if args.all:
