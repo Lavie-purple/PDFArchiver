@@ -112,7 +112,10 @@ PY_TEMPLATES = ("NNNN_slug.py", "stageN.py")
 #: `test_archive.py`，加共享的 `_helpers.py` 与 `conftest.py`）。台账里 7 处旧文件名按
 #: 「不改历史」留着原样（CHANGELOG ×2、ISSUES I78 ×1、RUNLOGS ×3、阶段3交付报告 ×1），
 #: 逐条追注见 **ISSUES I82** 2026-10-20 那一段。
-PY_STALE_CAP = 35
+#: 37 = 2026-10-22 现数：轮十八收尾清临时文件时删掉了 `launch_p12_r18.py` 与
+#: `tmp_patch_i103.py`，而 RUNLOGS §4.28 的「临时文件」段必须留着当时清掉的名单
+#: （历史不改写），这两处就从「在场」变成了「今天已不存在」。
+PY_STALE_CAP = 37
 
 #: 第 6 档：现在时的**机器状态**断言必须带读数日期（**ISSUES I87** 丙）。
 #: 「本机不存在 / 未安装 / 没建过」这类句子说的是**这台机器今天什么样**，不是产品逻辑；

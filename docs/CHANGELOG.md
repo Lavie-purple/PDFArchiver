@@ -6,6 +6,55 @@
 
 ---
 
+## 勾选轮（十九）—— 2026-10-22 · **三笔欠账收口**：2 小时 soak（I32 销账）/ G2 90s 重试分支三向真触发 / 真桌面 10 张截图；途中逮到并修掉 I104、I105 两条真缺陷
+
+用户把「30 分钟 soak 上限（I32）、G2 重试分支未真触发、真机证据仍为自动断言」三笔勾成「均根据你推荐来」。
+执行途中在产品路径上逮到两条真缺陷：归档失败在 Windows 上会留下重复副本（I104）、判重 `done + total=0`
+仍显示忙碌条与「还没数出来」（I105），均先修、再注入坏法、再拿真桌面截图复核。第一场 2 小时 soak 被本机
+休眠打断，按「休眠场读数不作数」弃用并修探针；第二场连续 **9/9 全绿**。收尾回归另暴露一处计数守卫到期
+（台账旧文件名 37 > 35），按守卫自己的规矩逐条写明来由后把上限记到 37。
+
+- **A · I32 CLOSED · 2 小时连续 soak** —— `--minutes 120`（后台、`--keep`、探针侧 `SetThreadExecutionState`
+  防休眠；`PYTHONIOENCODING=utf-8`）：**9/9 全绿**、采样 **3,550 点｜跨度 7,198.5s｜最大采样空洞 2.1s**、
+  480 轮 churn。S1 rc=0；S2 `crash.log 0 字节 / Traceback 0`；S3 **12→12**（峰 17）；S4 **321→321**（峰 323）；
+  S5 **111.8 → 103.7MiB（-8.1）**、全程 68.1–114.7、G8 余量 1,085.3；S6 **峰值 34 / 排空 2.0s / `{'done': 2078}`**；
+  S7 **1010/1010**（已标缺失 110）；S8 **1 份 579KiB / 2,575 行**；S9 p12 14 条 0 红、未验 0
+  （`.probe_work/round19_soak_120min.log` / `round19_soak_120min_result.json` / `round19_soak_120min_app.log` /
+  `round19_soak_120min_state.log`）。`state.log` 记 `startup.done` 00:12:26 → `shutdown` 02:13:41（7,275s）。
+  **第一场（22:05 → 00:05）作废**：本机休眠 36.2 + 13.7 分钟，采样空洞 **2,170.4s / 822.4s**，应用收尾写入落空，
+  S1/S6/S7/S9 连带红；探针本身也因 GBK 无法编码 U+2212 死在打印阶段（库已跑完，结果没打出来）。
+- **B · I25 补证 · G2 90s 重试分支三向真触发** —— 只替换 `scripts/g2_search_benchmark.py` 为替身（门禁代码一行不改），
+  用调用序列控制：`(3,0)` → **rc 0**（90.5s，首次负载场、重试转绿）；`(3,3)` → **rc 2「环境不合格」**（90.4s，两次都忙，
+  不算产品红）；`(3,1)` → **rc 1 RED**（90.3s，重试后仍不达标必须红）。三次都在同一分钟内真等满 90s；
+  替身文件 sha256 前后一致、已逐字节还原（`.probe_work/round18_g2_retry.log`）。G2 判据 ≤500ms 一个字没动。
+- **C · I17 补证 · 真桌面 10 张截图包** —— 去掉 `offscreen`，`platform=windows`；10 张 **1400×880**（含暗色）、
+  14 项检查 ALL GREEN（`seed_documents`／`dedup_group_found`／`dedup_done_total_zero`／`dedup_progress_truthful`／
+  `archive_files_landed`／`ten_shots_nonblank_and_distinct` 等），每张图带字节数与 md5
+  （`.probe_work/screens_r18/report.json`、`r19_screens_after_fix.log`）。我逐张看过 S1/S4/S5/S8；
+  **仍是自动断言 + 我的眼睛，不是你本人逐屏** —— I17 的残余不变。
+- **D · I104 CLOSED · 归档失败回滚目标副本** —— `_execute_item` 搬运前记 `dst_existed`；move/copy 失败与 copy 的
+  `src.unlink()` 失败都走 `_rollback_created_dst`：只删「本次新建、源仍在、逐字节一致」的目标副本，并写
+  `item_rollback` journal；回滚自身失败只记 `item_rollback_failed`，不盖原异常。复现：真实 `CreateFileW`
+  占住源 PDF（不含 `FILE_SHARE_DELETE`）→ 修复后批次 `partially_done 3/2/1`、LANDED 只有 2 份、HB-001 源仍在
+  5,032B、journal `item_start → item_rollback → item_failed`（`.probe_work/r19_archive_repro_after_fix.log`）。
+  回归 `TestI104RollbackWhenSourceLocked` 同盘 move / 跨盘 copy 两条；坏法删回滚 → 2 条精确红。
+- **E · I105 CLOSED · 判重 `total=0` 终结态不再装忙** —— `reload_progress` 只有 `queued/running/paused` 的
+  `total=0` 显示不定进度条；`done` 显示「没有要算的份数」并收起进度条；`failed/cancelled` 显示状态词 +
+  `last_error` 原文。真桌面截图断言 `dedup_done_total_zero=('done', 0)`、`dedup_progress_truthful`；
+  回归 done / failed 两条；坏法把终态退回避忙分支 → 2 条精确红（`.probe_work/r19_i104_i105_injection.log`，
+  sha256 前后一致）。
+- **F · 探针与收尾** —— `tests/probes/p13_soak.py`：`log()` 遇 GBK 无法编码时降级替换继续打印（不再把跑完的
+  结果丢在打印阶段）；S1 新增「最大采样空洞 >10s 判本机休眠/冻结、读数不作数」+ 62s 空洞坏法；新增
+  `_prevent_sleep()`。注入自检 **13/13 坏法 + 4/4 好读数**，并在 `PYTHONIOENCODING=gbk` 下真跑通过
+  （`.probe_work/round19_p13_inject_gbk.log`）。收尾：全量回归 **789 passed / 1 skipped / 0 failed / 0 error（245.38s）**；
+  `docs-inject + guards` **9 条 ALL GREEN**；台账 **105 行｜I1–I105 连续｜CLOSED 84｜MITIGATED 20｜WONTFIX 1｜
+  结构不合格 1 行（上限 1）：I35**；`PY_STALE_CAP 35 → 37`（轮十八清掉的 `launch_p12_r18.py` 与
+  `tmp_patch_i103.py` 在 RUNLOGS §4.28 的临时文件段里必须留名）。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① 安装包与代码签名仍未交付；② 隐私按用户口径「以后再处理」；
+③ soak 只到 **2 小时**，天级/通宵未测（I32 已按「小时级已验」销账，边界不变）；④ C11 旧快照内部损坏不在口径内
+（I98 乙）；⑤ consistency / injection 跨轮快慢仍未查明；⑥ 真机证据仍是自动断言 + 我看图，不是你本人逐屏（I17 残余）。
+
 ## 勾选轮（十八）—— 2026-10-21 · **七条欠账收口**：p13 积压可观测 / G2 负载分流 / 逐条计时 / 冷启动相位与 30 场 / 30 分钟 soak / 备份保留信息项 / 整链 r18（34/35，C3·D 真数据漂移 → 产品路径补索引后定点复核 19/19）
 
 轮十七收尾的「仍欠」清单里，用户把 ③–⑦ 一次勾成「均跟进你推荐来执行」：③ 甲 p13 积压种入、③ 乙 30 分钟 soak、

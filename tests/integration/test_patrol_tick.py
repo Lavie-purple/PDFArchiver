@@ -95,6 +95,35 @@ def test_判重进度块显示的是那一行的真份数不是假数(window, ct
     assert not page.progress_bar.isTextVisible(), "百分比文字压在 accent 进度块上，两主题都不过 AA"
 
 
+def test_判重已完成却一份都没算时不许留忙碌条与还没数出来的文案(window, ctx, qapp) -> None:
+    """**ISSUES I105**：轮十九真机截图 S5 逮到 `state=done, total=0` 的任务仍显示忙碌条 +
+    「判重完成：待算份数还没数出来」。任务已经结束，这句话与状态栏的"完成"互相矛盾；
+    全库都已算过哈希时这是常态，不是理论分支。"""
+    page = _show_dedup(window, qapp)
+    job = ctx.jobs.enqueue("dedup", doc_id=None, priority=5)
+    ctx.jobs.claim(("dedup",))
+    ctx.jobs.succeed(job.id)          # 没调过 set_progress，total 仍是 NULL
+    page.reload_progress()
+
+    assert not page.progress_bar.isVisible(), "任务已经 done，还挂着忙碌条就是在说它还在算"
+    text = page.lbl_progress.text()
+    assert "判重完成" in text and "没有要算的份数" in text, text
+    assert "还没数出来" not in text, f"任务已终结却说份数还没数出来：{text}"
+
+
+def test_判重没数出份数就失败时显示故障原文而不是数数文案(window, ctx, qapp) -> None:
+    page = _show_dedup(window, qapp)
+    job = ctx.jobs.enqueue("dedup", doc_id=None, priority=5)
+    ctx.jobs.claim(("dedup",))
+    ctx.jobs.finish_as(job.id, "failed", error="磁盘被拔掉了")
+    page.reload_progress()
+
+    assert not page.progress_bar.isVisible(), "终结态的任务不该再显示忙碌条"
+    text = page.lbl_progress.text()
+    assert "判重失败" in text and "磁盘被拔掉了" in text, text
+    assert "还没数出来" not in text, f"任务已失败却不报原文：{text}"
+
+
 def test_判重任务行没了以后进度块必须整个收起(window, ctx, qapp) -> None:
     """进度块只认 `latest_of_kind` 那一行，所以**那一行没了它就得跟着没**。
 

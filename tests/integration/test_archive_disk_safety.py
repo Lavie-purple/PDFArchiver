@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -594,3 +596,76 @@ class TestBatchTaskLinkage:
         env["jobs"].enqueue("archive", priority=3)
         job = env["jobs"].latest_of_kind("archive")
         env["svc"].handle(job, ProgressMonitor(env["jobs"], int(job.id), threading.Event()))
+
+
+@contextmanager
+def _opened_without_delete_share(path: Path):
+    """以「别人能读、但不能改名/删除」的方式占住文件。
+
+    这正是 PDF 阅读器（PyMuPDF）打开文件时 Windows 给的共享模式：`shutil.move` 的
+    rename 会失败，回退成 copy2 + unlink 后 unlink 再失败 —— **ISSUES I104** 的现场。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    generic_read, open_existing = 0x80000000, 3
+    share_read_write = 0x00000001 | 0x00000002
+    handle = kernel32.CreateFileW(str(path), generic_read, share_read_write,
+                                  None, open_existing, 0, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise OSError(ctypes.get_last_error(), f"CreateFileW 失败：{path}")
+    try:
+        yield
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="共享模式导致的删源失败只在 Windows 上成立")
+class TestI104RollbackWhenSourceLocked:
+    """**ISSUES I104**：搬运失败后不许把同一份文件留成两份。
+
+    轮十九真机截图 S4 逮到 `partially_done 3/2/1`：阅读器开着 HB-001 时执行归档，
+    `shutil.move` 的 rename 被占用 → copy2 成功 → unlink 源抛 WinError 32，目标目录里
+    留下一份一模一样的副本，台账只写"那一项失败了"。源还在 ⇒ 撤掉刚造的目标副本，
+    失败项才真的等于"什么都没发生"。
+    """
+
+    def test_同盘move删源被占用时撤回目标副本(self, env):
+        doc_id = _seed(env, "被阅读器打开.pdf", category="财务")
+        op = env["svc"].submit([doc_id], str(env["dst_dir"]), DEFAULT_TEMPLATE)
+        item = env["ops"].list_items(op.id)[0]
+        src, dst = Path(item.src_path), Path(item.dst_path)
+
+        with _opened_without_delete_share(src):
+            final = _run(env, op.id)
+
+        assert final.status == "failed"
+        assert src.exists(), "源被别的进程占着，本来就不该删掉"
+        assert not dst.exists(), "源还在、目标也留着一份 = 同一份文件变两份（I104 的现场）"
+        events = [e["event"] for e in _journal_events(env, op.id)]
+        assert "item_rollback" in events, f"回滚没留下痕迹：{events}"
+        assert events.index("item_rollback") < events.index("item_failed")
+
+    def test_跨盘copy删源被占用时撤回目标副本(self, env):
+        doc_id = _seed(env, "跨盘被打开.pdf", category="财务",
+                       device_id=os.stat(env["dst_dir"]).st_dev + 7)
+        op = env["svc"].submit([doc_id], str(env["dst_dir"]), DEFAULT_TEMPLATE)
+        item = env["ops"].list_items(op.id)[0]
+        assert item.kind == "copy", "用例前提：跨盘项走 copy + 验完再删源那条链"
+        src, dst = Path(item.src_path), Path(item.dst_path)
+
+        with _opened_without_delete_share(src):
+            final = _run(env, op.id)
+
+        assert final.status == "failed"
+        assert src.exists()
+        assert not dst.exists(), "copy 验证完但删源失败时同样要把目标副本撤回"
+        events = [e["event"] for e in _journal_events(env, op.id)]
+        assert "dst_verified" in events and "src_removed" not in events, \
+            f"删源失败却写了 src_removed，journal 与磁盘对不上：{events}"
+        assert "item_rollback" in events, f"回滚没留下痕迹：{events}"

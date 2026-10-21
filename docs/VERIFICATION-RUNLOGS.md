@@ -966,3 +966,33 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 > 本册 +33、CHANGELOG +86、ISSUES +1，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（十七）按 §4.27 保留为历史、不动）。
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段的「台账与守卫」。
 > 现册里带 `**本册末行现数**` 标题的块共 **9 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七））+ 本轮这块**活的**。
+
+### 4.29 勾选轮（十九）收尾读数（2026-10-21 21:50 → 2026-10-22 02:40，销账 **I32**，修 **I104 / I105**，另修探针两处）
+
+**起止（墙钟，不折算成单一“活跃”数）**：轮十八最后一条 commit `463140a` **2026-10-21 21:50:47** → 本块落笔 **2026-10-22 02:40** = **4.82 h**。其中两场 2 小时 soak 的等待占 ≈3.95 h（第一场 22:05–00:05 作废；第二场 00:12:26–02:13:41），有效工作约 **0.9 h**。节点：G2 三向 21:54–21:59｜真桌面截图 22:00–22:09｜I104 复现与修复 22:02–22:15｜I105 修复与断言 22:14–22:20｜第一场 soak 22:05–00:05（休眠打断，弃用）｜探针诊断与修复 00:05–00:12｜第二场 soak 00:12–02:13｜回归与门禁 02:14–02:29｜文档 02:29–02:40。会话日志（本环境 `usage.*` 恒 0，只能拿体积当代理）：**279,036,598 B｜89,633 行**（轮十八基线 271,349,026 B / 87,595 行 ⇒ **+7,687,572 B｜+2,038 行**；2026-10-22 02:26 取数）。
+
+**A · I32 CLOSED · 2 小时连续 soak（第二场，00:12:26 → 02:13:41）**：`--minutes 120 --keep`，探针侧 `SetThreadExecutionState` 防休眠。**9/9 全绿**、采样 **3,550 点｜跨度 7,198.5s｜最大采样空洞 2.1s**、480 轮 churn、`{'done': 2078}`。S1 rc=0；S2 `crash.log 0 字节 / Traceback 0`；S3 **12→12**（峰 17）；S4 **321→321**（峰 323）；S5 **111.8 → 103.7MiB（-8.1）**、全程 68.1–114.7、G8 余量 1,085.3；S6 **峰值 34 / 排空 2.0s**；S7 **1010/1010**（已标缺失 110）；S8 **1 份 579KiB / 2,575 行**；S9 p12 **14 条 0 红 0 未验**（逐条 C0 13ms／C1 16ms／C2 130ms／C3·corpus 429ms／C4 1ms／C5 3ms／C11 26ms，合计 <1s）。`state.log`：`startup.begin` 00:12:26.408 → `background.started` 00:12:26.518（threads 1 / watched 1）→ `shutdown` 02:13:41.716，7,275.3s（`.probe_work/round19_soak_120min.log` / `round19_soak_120min_result.json` / `round19_soak_120min_app.log` / `round19_soak_120min_state.log`）。**边界**：2 小时是本条验到的上限，天级/通宵仍未测。
+
+**A′ · 第一场 2 小时作废（22:05 → 00:05）—— 休眠 + 探针编码两处真事故**：结果 JSON 的采样 `t` 出现 **2,170.4s（96795.1→98965.5）** 与 **822.4s（101002.8→101825.2）** 两个空洞，同时 `S1` 报 `NoSuchProcess: pid 19136 及其子进程都不在了`、S6 峰值 0、S7 盘上 702／库里 670、S9 14 条红 1 —— 应用在积压种入前已退，三条连带红不是产品坏。探针随后在打印 S5 时 `UnicodeEncodeError: 'gbk' codec can't encode character '\u2212'`（`p13_soak.py:594`），**库已跑完、结果没打出来**（`.probe_work/round18_soak_120min.log`）。处置：按「休眠场读数不作数」弃用；修 `log()` 编码兜底、加采样空洞判据（>10s 判读数不作数）与防休眠请求，再起第二场。
+
+**B · I25 补证 · G2 90s 重试分支三向真触发**：只把 `scripts/g2_search_benchmark.py` 换成替身、门禁代码一行不改，用 `.probe_work/g2_stub_seq.txt` 控制序列：`(3,0)` → **rc 0**（段耗时 **90.5s**，首跑负载场、重试转绿）；`(3,3)` → **rc 2「环境不合格」**（**90.4s**，两次都忙，不算产品红）；`(3,1)` → **rc 1 RED**（**90.3s**，重试后仍不达标必须红）。三次都真等满 90s；替身 sha256 前后一致 `5c306992…`、逐字节还原（`.probe_work/round18_g2_retry.log`）。**口径**：这三场证明的是「分支会走、三种出口各自正确」，不是在真实负载场里恰好撞上重试；G2 判据 ≤500ms 一个字没动。
+
+**C · I17 补证 · 真桌面 10 张截图包**：去掉 `offscreen`，`platform=windows`，10 张 **1400×880**（含暗色），14 项检查 ALL GREEN；每张带字节数与 md5（`.probe_work/screens_r18/report.json`、`r19_screens_after_fix.log`）：`seed_documents`／`dedup_group_found`／`backup_created`／`library_search_rows`／`reader_page_open`／`categories_tags`／`dedup_table_groups`／`dedup_done_total_zero`／`dedup_progress_truthful`／`backup_table_rows`／`archive_preview_picked`／`archive_files_landed`／`operations_rows`／`ten_shots_nonblank_and_distinct`。我逐张看过 S1（库）／S4（分类）／S5（判重）／S8（归档预览）。**仍未销 I17**：这是自动断言 + 我的眼睛，不是用户本人逐屏。
+
+**D · I104 CLOSED · 归档失败回滚目标副本**：`_execute_item` 搬运前记 `dst_existed`，move/copy 失败与 copy 的 `src.unlink()` 失败都走 `_rollback_created_dst` —— 只删「本次新建、源仍在、逐字节一致」的目标副本，并写 `item_rollback`；回滚自身失败只记 `item_rollback_failed`，不盖原异常。真复现（真实 `CreateFileW` 占住源 PDF，不含 `FILE_SHARE_DELETE`）：修复前 `failed` 且目标目录多一份与源同字节的副本；修复后 `partially_done 3/2/1`、LANDED 只有 2 份、HB-001 源仍在 5,032B、journal `item_start → item_rollback → item_failed`（`.probe_work/r19_archive_repro_after_fix.log`）。回归 `TestI104RollbackWhenSourceLocked`：同盘 move / 跨盘 copy 两条；坏法删回滚 → 2 条精确红、还原 sha256 一致（`.probe_work/r19_i104_i105_injection.log`）。
+
+**E · I105 CLOSED · 判重 `total=0` 终结态不装忙**：只有 `queued/running/paused` 的 `total=0` 显示不定进度条；`done` 收起进度条并显示「没有要算的份数」；`failed/cancelled` 显示状态词 + `last_error` 原文。真桌面截图断言 `dedup_done_total_zero=('done', 0)`、`dedup_progress_truthful` 通过；回归 done / failed 两条；坏法把终态退回避忙分支 → 2 条精确红（同一份注入日志）。
+
+**F · 探针修复与自检**：`tests/probes/p13_soak.py` 三处 —— `log()` 编码兜底（GBK 下 `−` 降级成 `?`，不再崩）；S1 采样空洞判据 `SAMPLE_GAP_MAX = 10.0`（坏法 62s 空洞真注入）；`_prevent_sleep()` / `_allow_sleep()`。注入自检 **13/13 坏法 + 4/4 好读数**，并在 `PYTHONIOENCODING=gbk` 下真跑通过、2 分钟实跑 **9/9 ALL GREEN**（`.probe_work/round19_p13_inject_gbk.log` / `_utf8.log`、`round19_soak_smoke_2min.log`）。
+
+**G · 回归 / 门禁 / 台账**：第一次全量回归 **788 passed / 1 failed / 1 skipped** —— 红的是 `test_doc_pointers.py::test_台账旧文件名不超过上限`（**37 > 35**：轮十八清掉的 `launch_p12_r18.py`、`tmp_patch_i103.py` 在 RUNLOGS §4.28 里必须留名）。按守卫自己的规矩逐条写明来由，`PY_STALE_CAP 35 → 37`；复跑 **789 passed / 1 skipped / 0 failed / 0 error（245.38s）**（`round19_regression.log` / `round19_regression2.log` / `round19_doc_pointers.log`）。`docs-inject + guards` **9 条 ALL GREEN、本次未跑 10 段**（`round19_docs_guards.log`）；台账 **105 行｜I1–I105 连续｜CLOSED 84｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，本轮 **I32 / I104 / I105 均 CLOSED**。文件长度守卫：`扫了 212 个 .py 与 31 个 .md｜临近线（余量 ≤100 行）6 份`，最紧 `p12_consistency.py` **800（余 0）**、`p13_soak.py` **771（余 29）**。
+
+**临时文件**：`.probe_work/` **478 项 / 851 MiB**（承重保留：本轮的 `round19_soak_120min.log` / `_result.json` / `_app.log` / `_state.log`、`round18_soak_120min.log`（作废场）、`round18_g2_retry.log`、`screens_r18/`（10 张 + `report.json`）、`r19_screens_after_fix.log`、`r19_archive_repro_after_fix.log`、`r19_i104_i105_injection.log`、`round19_p13_inject_gbk.log` / `_utf8.log`、`round19_soak_smoke_2min.log`、`round19_regression*.log`、`round19_docs_guards.log`、`round19_doc_pointers.log`）。清理：一次性脚本与备份 `tmp_fix_g2_log.py`、`tmp_g2_fixed_stdout.txt`、`round18_g2_retry_fixed.txt`、`r19_mutate.py`、`_i104_backup.py`、`_i105_backup.py`、`g2_real_backup.py` 全部 truncate 为 0（备份与产品文件 sha256 已逐份核对一致）；`%TEMP%\p13_soak_cddtrfhl`（第二场现场，8.5MiB，app.log 已复制）与 `%TEMP%\p13_soak_1yi2rw_8`（轮十七承重）保留；第一场的临时根已由探针自清理；`frozen_smoke_1015_*` 未动。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① 安装包与代码签名未交付；② 隐私以后再处理；③ soak 只到 2 小时，天级/通宵未测；④ C11 旧快照内部损坏不在口径内（I98 乙）；⑤ consistency / injection 跨轮快慢仍未查明；⑥ 真机证据仍是自动断言 + 我看图，不是用户本人逐屏（I17 残余）。
+
+> **本册末行现数（2026-10-22 勾选轮（十九）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 998｜CHANGELOG 645｜ISSUES 143` —— 轮十八 968 / 596 / 141 ⇒
+> 本册 +30、CHANGELOG +49、ISSUES +2，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（十八）按 §4.28 保留为历史、不动）。
+> `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段的「台账与守卫」。
+> 现册里带 `**本册末行现数**` 标题的块共 **10 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八））+ 本轮这块**活的**。

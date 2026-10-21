@@ -475,6 +475,11 @@ class ArchiveService:
 
         搬完之后必须 `documents.adopt_path`：路径是主记录的一部分，改了盘不改库的话
         下一次扫描只会把它标成 missing，而分类/标签/正文全都挂在旧行上。
+
+        搬运/删源失败且源还在时，刚生成的那份目标副本要被撤回（**ISSUES I104**）：
+        Windows 上 `shutil.move` 的兜底是 copy2 + unlink，rename 被占用后 copy2 会成功、
+        unlink 源被占用抛 WinError 32 —— 不撤目标就会把同一份文件留成两份，
+        而台账只写"那一项失败了"。
         """
         src = Path(item.src_path)
         dst = Path(item.dst_path) if item.dst_path else None
@@ -492,26 +497,38 @@ class ArchiveService:
             raise FileNotFoundError(f"源文件不存在：{src}")
         src_sha = self._sha256(src)
         dst.parent.mkdir(parents=True, exist_ok=True)
+        # plan() 会跳过目标已存在的项，所以这里正常是 False；真有人在这两步之间把文件
+        # 放到目标位上时，那份不是我们造的，回滚不许删它。
+        dst_existed = dst.exists()
 
         # G19：跨盘移动绝不先删源
-        if item.kind == "move":
-            shutil.move(str(src), str(dst))
-        elif item.kind == "copy":
-            shutil.copy2(str(src), str(dst))
-        else:
-            raise ValueError(f"未知操作类型：{item.kind}")
+        try:
+            if item.kind == "move":
+                shutil.move(str(src), str(dst))
+            elif item.kind == "copy":
+                shutil.copy2(str(src), str(dst))
+            else:
+                raise ValueError(f"未知操作类型：{item.kind}")
+        except Exception:
+            self._rollback_created_dst(item, journal_path, src, dst, dst_existed, src_sha)
+            raise
 
         if not dst.exists():
             raise RuntimeError(f"目标文件未生成：{dst}")
         dst_sha = self._sha256(dst)
         if src_sha != dst_sha:
+            # 内容对不上时两边都不删：这是 DATABASE §5.2 的 orphan_dst，留给人看。
             raise RuntimeError(f"SHA256 不匹配：src={src_sha}, dst={dst_sha}")
 
         # 跨盘 copy：验证成功后才删源（SPEC 3.6 / G19）
         if item.kind == "copy":
             self.ops.write_journal(journal_path, {
                 "event": "dst_verified", "item_id": item.id, "dst_sha256": dst_sha})
-            src.unlink()
+            try:
+                src.unlink()
+            except OSError:
+                self._rollback_created_dst(item, journal_path, src, dst, dst_existed, dst_sha)
+                raise
             self.ops.write_journal(journal_path, {"event": "src_removed", "item_id": item.id})
 
         if item.doc_id is not None:
@@ -520,6 +537,34 @@ class ArchiveService:
         self.ops.update_item_state(item.id, "done", dst_sha256=dst_sha, src_sha256=src_sha)
         self.ops.write_journal(journal_path, {
             "event": "item_done", "item_id": item.id, "dst_sha256": dst_sha})
+
+    def _rollback_created_dst(self, item, journal_path: str, src: Path, dst: Path,
+                              dst_existed: bool, expected_sha: str) -> None:
+        """撤回本次新生成的目标副本；只撤「源还在、内容逐字节一致」的那一份。
+
+        源还在 ⇒ 数据没丢，删目标才是把失败项还原成"什么都没发生"；源已不在
+        （同盘 rename 已成功）时目标是唯一一份，绝不能删。内容对不上时不删：
+        DATABASE §5.2 的 orphan_dst 要留给人看，与 G19 那条断言同一口径。
+        回滚本身失败只记日志与 journal，绝不盖掉调用方原来要抛的那个异常。
+        """
+        if dst_existed or not src.exists() or not dst.exists():
+            return
+        try:
+            if self._sha256(dst) != expected_sha:
+                return
+        except OSError:
+            return
+        try:
+            dst.unlink()
+        except OSError as exc:
+            log.warning("回滚删除目标失败 item_id=%s dst=%s: %s", item.id, dst, exc)
+            self.ops.write_journal(journal_path, {
+                "event": "item_rollback_failed", "item_id": item.id,
+                "dst": str(dst), "error": str(exc)})
+            return
+        self.ops.write_journal(journal_path, {
+            "event": "item_rollback", "item_id": item.id, "dst": str(dst),
+            "reason": "搬运失败且源仍在，撤回刚生成的目标副本"})
 
     def _adopt_into_library(self, doc_id: int, dst: Path) -> None:
         """搬完之后把新位置写回 documents（id 不变 ⇒ 分类、标签、正文、集合关系全部原地保留）。"""

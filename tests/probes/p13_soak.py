@@ -49,6 +49,7 @@ P12 = "tests/probes/p12_consistency.py"
 RESULT = REPO / ".probe_work" / "p13_soak_result.json"
 
 SAMPLE_SECONDS = 2.0        # 采样间隔：再密就变成采样本身在吃 CPU，读数不再说明被测对象
+SAMPLE_GAP_MAX = 10.0       # 相邻采样点最大允许间隔；超过说明本机睡过/被冻结，读数不再是连续观测
 CHURN_EVERY = 15.0          # 每 15 秒投放一批文件变更；短于此会被周期校验（默认 30 分钟）掩盖
 CHURN_ADD = 3               # 每轮新增几份、改一份、删一份 —— 三条路都要在长跑里反复走
 BULK_SEED = 20              # 起跑前库里先有多少份
@@ -73,7 +74,14 @@ class Row:
 
 
 def log(msg: str) -> None:
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        # 2026-10-22 的真事故：stdout 重定向到文件时控制台编码是 GBK，S5 读数里的 U+2212
+        # 直接把探针打死在打印阶段（库已跑完 2 小时，结果却没打出来）。降级成可编码字符继续打。
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        sys.stdout.write(msg.encode(enc, "replace").decode(enc) + "\n")
+        sys.stdout.flush()
 
 
 # ───────────────────────────── 造现场 ─────────────────────────────
@@ -254,6 +262,16 @@ def _median(values: list[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
 
 
+def _max_gap(samples: list[dict[str, float]]) -> tuple[float, float]:
+    """相邻采样点之间最大的时间空洞（秒）与它起点的 t。
+
+    本机休眠 / 进程被冻结时，`Sampler` 的等待计时跟着停，醒来后只会在 `t` 上留下一个大洞。
+    采样点数可能仍然达标，但那段空洞里产品完全没被观测 —— 不能当连续长跑读数用。
+    """
+    gaps = [(b["t"] - a["t"], a["t"]) for a, b in zip(samples, samples[1:])]
+    return max(gaps, default=(0.0, 0.0))
+
+
 def _split(samples: list[dict[str, float]], key: str) -> tuple[list[float], list[float]]:
     """取同一段读数的首段与末段（各 1/3），中位数对比才抗单点毛刺。"""
     vals = [float(s[key]) for s in samples if key in s]
@@ -269,9 +287,13 @@ def v_alive(rc: int | None, samples: list[dict[str, float]], expected_seconds: f
     if rc is None:
         return Row(gate, False, f"进程没等到退出，soak {expected_seconds:.0f}s 仍在跑")
     med = _median([s["rss_mib"] for s in samples])
-    return Row(gate, rc == 0 and len(samples) >= expected_seconds / SAMPLE_SECONDS * 0.7,
+    gap, gap_at = _max_gap(samples)
+    continuous = gap <= SAMPLE_GAP_MAX
+    return Row(gate, rc == 0 and len(samples) >= expected_seconds / SAMPLE_SECONDS * 0.7 and continuous,
                f"退出码 {rc}｜采样 {len(samples)} 点（预期约 {expected_seconds / SAMPLE_SECONDS:.0f} 点）"
-               f"｜采样间隔内 RSS 中位 {med:.1f}MiB"
+               f"｜最大采样空洞 {gap:.1f}s｜采样间隔内 RSS 中位 {med:.1f}MiB"
+               + ("" if continuous else
+                  f" ── 本机休眠/冻结过（{gap_at:.1f}s 处起空 {gap:.1f}s），这段没被观测，读数不作数")
                + ("" if not early_errors else " ── 采样中断：" + early_errors[0]))
 
 
@@ -385,6 +407,13 @@ def inject() -> int:
     # 坏法 1：进程被 --exit-after 之外的原因杀掉（退出码非 0）→ S1 必须红
     bad.append((v_alive(2, good_samples, 120.0, []),
                 "启动失败退出码 2 —— 真实成因：装配抛异常（bootstrap 返回 EXIT_BOOTSTRAP_FAILED）"))
+    # 坏法 1b：采样点数达标，但中间睡了 60 秒 → S1 必须红（真实成因：2026-10-22 那场 2 小时
+    #           soak，本机休眠 36.2 + 13.7 分钟，采样却只剩空洞两侧的点，差点被当成连续观测）
+    holey = [{"t": i * SAMPLE_SECONDS, "rss_mib": 300.0, "cpu": 1.0,
+              "threads": 5, "handles": 700}
+             for i in range(350) if not 120 <= i < 150]
+    bad.append((v_alive(0, holey, 700.0, []),
+                "本机休眠 60s：采样 320 点仍过数量线，但中间有 62s 空洞"))
     # 坏法 2：crash.log 有内容 → S2 必须红（真实成因：worker 线程里没接住的异常）
     bad.append((v_no_crash(1024, 3, "Traceback (most recent call last): ..."),
                 "crash.log 1024 字节 + 3 处 Traceback"))
@@ -441,7 +470,8 @@ def inject() -> int:
                  (v_logs(_mk_logs(root, "leaky", 9), 5, 5000), "轮转份数 9 > keep+1（handler 没装轮转）")]
         good = [v_docs_match(root, 12),
                 v_logs(_mk_logs(root, "neat", 6), 5, 5000),
-                v_backlog(True, 12.0, {"done": 68, "failed": 3}, peak_open=41)]
+                v_backlog(True, 12.0, {"done": 68, "failed": 3}, peak_open=41),
+                v_alive(0, good_samples, 120.0, [])]
         for row, why in extra:
             log(f"  {'红' if not row.ok else '绿（← 这条判据没有牙）'}  {row.gate}\n"
                 f"        坏法：{why}\n        读数：{row.measured}")
@@ -502,6 +532,29 @@ def _bootstrap_and_seed(data_root: Path, corpus: Path) -> None:
     seed_library(data_root, corpus)
 
 
+def _prevent_sleep() -> None:
+    """长跑期间向系统要一个「别睡」的请求，避免再次把休眠场错当连续观测。
+
+    2026-10-22 那场 2 小时 soak 就是被本机休眠打断的：睡了约 36.2 + 13.7 分钟，进程被冻结，
+    采样出现 2,170s / 822s 两个空洞，收尾的积压种入落空，S6/S7/S9 连带假红。
+    请求按线程生效，探针退出即自动失效；非 Windows 上是空操作。
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    es_continuous, es_system_required = 0x80000000, 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | es_system_required)
+
+
+def _allow_sleep() -> None:
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)  # ES_CONTINUOUS
+
+
 def run(minutes: float, keep: bool) -> int:
     soak = minutes * 60.0
     work = Path(tempfile.mkdtemp(prefix="p13_soak_"))
@@ -509,6 +562,7 @@ def run(minutes: float, keep: bool) -> int:
     log(f"现场：{work}｜soak {soak:.0f}s｜采样 {SAMPLE_SECONDS}s｜投放每 {CHURN_EVERY:.0f}s")
     rows: list[Row] = []
     proc: subprocess.Popen[str] | None = None
+    _prevent_sleep()
     try:
         made = build_corpus(corpus)
         _bootstrap_and_seed(data_root, corpus)
@@ -582,6 +636,7 @@ def run(minutes: float, keep: bool) -> int:
                                      ensure_ascii=False, indent=2), encoding="utf-8")
         log(f"读数已写：{RESULT}")
     finally:
+        _allow_sleep()
         if proc and proc.poll() is None:
             proc.kill()
         if keep:

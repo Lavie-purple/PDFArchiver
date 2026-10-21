@@ -184,17 +184,29 @@ class DedupPage(QWidget):
             return
         head = _STATE_READING[job.state]
         if not job.total:
-            # `set_total` 还没跑到（刚排队、还没数出待算份数）：区间给 0..0 是 Qt 的忙碌条，
-            # 说的是"在干了，总量还不知道"；硬撑一个 0% 的满量程条反而像卡死。
-            self.progress_bar.setRange(0, 0)
-            self.lbl_progress.setText(f"{head}：待算份数还没数出来")
-        else:
-            self.progress_bar.setRange(0, job.total)
-            self.progress_bar.setValue(job.done)
-            text = f"{head}：第 {job.done:,}/{job.total:,} 份"
-            if job.last_error:
-                text += f"｜故障原文：{job.last_error}"
-            self.lbl_progress.setText(text)
+            if job.state in _LIVE_STATES:
+                # `set_total` 还没跑到（刚排队、还没数出待算份数）：区间给 0..0 是 Qt 的忙碌条，
+                # 说的是"在干了，总量还不知道"；硬撑一个 0% 的满量程条反而像卡死。
+                self.progress_bar.setVisible(True)
+                self.progress_bar.setRange(0, 0)
+                self.lbl_progress.setText(f"{head}：待算份数还没数出来")
+            else:
+                # 任务已经终结而 total 仍是 0：一份都没算过，也就没有"份数"可报。
+                # 还挂忙碌条 +「还没数出来」是在说任务仍在干，与状态栏的终结态直接矛盾
+                # （**ISSUES I105**：轮十九真机截图 S5 上逮到的就是这一句）。
+                self.progress_bar.setVisible(False)
+                text = f"{head}：没有要算的份数" if job.state == "done" else head
+                if job.state != "done" and job.last_error:
+                    text += f"｜故障原文：{job.last_error}"
+                self.lbl_progress.setText(text)
+            self.lbl_progress.setVisible(True)
+            return
+        self.progress_bar.setRange(0, job.total)
+        self.progress_bar.setValue(job.done)
+        text = f"{head}：第 {job.done:,}/{job.total:,} 份"
+        if job.last_error:
+            text += f"｜故障原文：{job.last_error}"
+        self.lbl_progress.setText(text)
         self.progress_bar.setVisible(True)
         self.lbl_progress.setVisible(True)
 
