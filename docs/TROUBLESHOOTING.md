@@ -193,7 +193,7 @@
 3. 界面「运行状态与自检」那一屏的**全文**（可以直接从 `QPlainTextEdit` 里选中复制）。
 4. 数据根路径 + `(来源=…)` 那一行。
 5. 你运行的到底是哪个产物：`PdfArchiver.exe`（冻结）还是 `python -m pdfarchiver.app`（源码），
-   以及 `--version` 输出（当前 `PdfArchiver 0.5.0`）。
+   以及 `--version` 输出（当前 `PdfArchiver 1.0.0`）。
 6. 一条只读核查结果：`p12_consistency.py --data-root "<数据根>"` 的完整输出。
 7. 出问题时的机器负载（任务管理器：CPU 占用、可用内存），因为 §九 那批红是这个原因。
 

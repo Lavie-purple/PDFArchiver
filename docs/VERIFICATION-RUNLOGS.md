@@ -845,3 +845,91 @@ S8 1 份 28KiB／124 行；S9 临时 p12 **14 条红 0**。**S6 的 0.0s 仍是 
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近 6 份，原先 791 行的那份界面测试已按主题
 > 拆成 `tests/integration/category_export/`（最大一份的现数见守卫打印）。
 > 现册里带 `**本册末行现数**` 标题的块共 **7 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五））+ 本轮这块**活的**。
+
+### 4.27 版本收口轮（十七）收尾读数（2026-10-21 04:21:42 → 14:17:32，销账 **I100** / **I101**，**I102** 维持 MITIGATED）
+
+**起止（墙钟，不折算成单一“活跃”数）**：轮十六最后一条 commit `4aa5dcf` **04:21:42** → 整链 r17c `rc=0`
+**14:17:32** = **9.93 h**。其中 **05:58 → 12:08 本机休眠约 6.17 h**（05:58 修后 soak 收尾、12:08 重新开工），
+**有效工作约 3.76 h**。会话日志（本环境 `usage.*` 恒 0，只能拿体积当代理）：**261,079,061 B / 85,179 行**
+（14:18 取），比轮十六收尾的 **255,010,699 B / 83,617 行** 是 **+6,068,362 B / +1,562 行**（跨 9.93 h，含休眠与 summary 压缩）。
+
+**版本与产物（`1.0.0` 的物证）**：`src/pdfarchiver/__init__.py` 为 `__version__ = "1.0.0"`；源码运行
+`python -m pdfarchiver.app --version` → `PdfArchiver 1.0.0`。整链 package 段用 1.0.0 源码重建：构建 **142.8s**、
+整包 **400.0 MiB**、迁移 **8/8**、OCR DLL **3**、`.dist-info` **6**。链后复跑
+`dist\PdfArchiver\PdfArchiver.exe --version` → **`PdfArchiver 1.0.0`**、**退出码 0**、stderr **0 字节**
+（stdout 首行 `fitz` 弃用警告是预期；`.probe_work/exe_version_r17c_out.txt` / `_err.txt`）。
+
+**三场链，只有最后一场作数**：
+- **r17（第一次，`.probe_work/final_chain_r17.log`）**：12 段全跑完，**RED 1 条** —— 只有 `长跑采样 p13` 红 5 条：
+  采样 **0 点**、S3–S5“没有读数”、S4 还写着“非 Windows”。同场 S6–S9 全绿、应用干净关闭。定位为 **I100**：
+  探针在自己进程里调产品 `bootstrap()`（装进程级 excepthook），`Sampler` 线程在 venv launcher 交接时抛
+  `NoSuchProcess`，被写进被测应用的 `crash.log`（**2,127 字节**），采样线程随即静默死掉。
+- **I100 修复后（`.probe_work/soak_r17_fixed.log`）**：`Sampler` 改逐进程 BFS + `marker` 兜底、采样异常写进
+  `errors`、`bootstrap_without_hooks()` 还原两个钩子；守卫 `test_probe_sampler.py` **3** 条（坏法 **3 failed**
+  → 还原 **3 passed in 3.56s**）。同代码复跑 4 分钟 soak：**9 条全绿**、采样 **118** 点、`crash.log 0 字节`、
+  S3 **15 → 12**、S4 **321 → 321**、S5 **111.7 → 111.8MiB（+0.1）**。
+- **r17b（`.probe_work/final_chain_r17b.log`，中止）**：regression 判 `784 passed / 1 failed / 0 error / 1 skipped`，
+  红在 `test_进程级冷启动实测符合G1约定`；门禁现场只留 900 字，断言原文被截掉，pytest 临时根随后被轮换删除，
+  无法回查（**I102**，单条复跑 2.09s 绿、`test_app_shell.py` 10/10 绿，未复现）。我主动停链后，p17 的 H3 坏法
+  （`if kind != "archive": continue`）因 `finally` 没跑到而留在 `src/pdfarchiver/jobs/queue.py`，下一场全量回归把它
+  读成 `DID NOT RAISE ValueError`（**I101**）。还原后单条 **0.20s** 过、整套 **785 passed / 1 skipped in 210.76s**
+  （`.probe_work/regression_r17_repro.log` / `regression_r17_clean.log`）。
+- **两条修法都做了坏法对照**：`gates/final.py` 新增 `INJECTION_INFLIGHT` 标记 + 起跑前 `preflight_injection_residue()`，
+  手工造标记 → `RED 上一次坏法注入段没有收尾` 且 guards 一条没跑；删标记 → **8 条 ALL GREEN**。
+  `gates/stage1.py::gate_regression` 失败时把完整 pytest 输出写进 `.probe_work/regression_full.txt`，并把
+  `short test summary` 的失败节点名顶到「实测」里 —— 下一次同类红不必再靠猜。
+
+**终场 12 段整链（`.probe_work/final_chain_r17c.log`，唯一作数的一场）**：12 段、**34 条判定、本次未跑 0 段**、
+`rc=0`、末行 **`VERDICT: ALL GREEN`**。起跑 **CPU 21.2%｜可用内存 4,530MiB｜最吃内存 MemCompression 842MiB**。
+墙钟 **12:33:34 → 14:17:32 = 6,238s（103.97 分钟）**。各段：docs-inject 0.0s／guards 1.7s／
+regression **213.5s（785 passed / 0 failed / 0 error / 1 skipped）**／coldstart 1.5s（冷启动 **0.858s**、
+进程总耗时 1.476s、关窗对账 1 条）／e2e 13.1s（后台生命周期冷启动 0.802s、11 条端到端、6 行真实检索）／
+injection **1,414.7s**（p9 **69/69**、p10 **45/45**、p16 **8 坏法 + 3 对照**、p17 3、p18 3、p21 24/24、
+p22 33/33、p23 23/23、p24 17/17 ⇒ **225 条坏法**）／ui-inject 68.8s（p15 **36/36**）／ocr 29.9s
+（6 页 / 9 项判定 0 未过；预算 2 页真停机；真引擎套件 **4 passed**）／consistency **3,824.2s**
+（p12 注入 **21/21 + 边界 1/1**、p14 10/10、真根 **19/19**）／soak 303.4s／package **319.1s**／g2 45.5s。
+**段耗时相加 6,235.4s**，与墙钟差 2.6s（段间开销）。
+
+**比轮十六同规模链慢 2,212s，慢在哪要一起看**：r16c **4,023.1s** → r17c **6,235.4s**；增加的大头是
+consistency **2,323.3 → 3,824.2s（+1,500.9）** 与 injection **793.9 → 1,414.7s（+620.8）**，其余段合计只差约 +90s。
+同一天 r17 第一场的 injection 是 **858.7s**、consistency **3,041.4s**，同一份代码三场分散（injection 858.7 / 1,414.7
+差 **1.65 倍**；consistency 跨轮 3,041.4 / 3,824.2 / 5,502.8 / 2,323.3）。起跑负载三场都不高，**原因未查明，不编原因，
+也不拿快的读数去缩 `REAL_ROOT_TIMEOUT = 17,460s`**（对 3,824.2s 仍有 **4.57 倍**余量，对 5,502.8s 是 **3.17 倍**）。
+
+**真根 p12（19/19，第二次全绿）**：`.probe_work/p12_real_root.json`（`source=显式参数`、`walk=true`）——
+C0 v8 且 8 段迁移全在；C1 `integrity_check=ok｜foreign_key_check 0 条`；C2 主记录 **10,987** 两项一致；
+C3 六根 **68/68、89/89、1967/1967、5352/5352、1655/1655、1856/1856**（已标缺失各 0）；
+C4 **1,975,216/1,975,216/0/0**；C9 `running 0`（`{'done': 10941, 'failed': 75}`）；C10 分类 14；
+C11 **8 份快照，只对最新一份跑整库体检**（`integrity_check=ok｜foreign_key_check 0 条`），其余 7 份开库读版本；
+C12 0/0/0；C13 六根 `root_key == identity_key`。本次最新快照是 `pre-migration-0004-20261021T140627.db`
+（soak 那场留下的 148KiB@v3），p12 自检 **21/21 + 口径边界 1/1**。
+
+**soak（4 分钟，`.probe_work/final_chain_r17c.log` 段内）**：注入自检 **11/11 坏法 + 3/3 好读数**；真跑 **9 条全绿** ——
+S5 **111.2 → 111.3MiB（+0.1）**、S6 排空 **0.0s**（`{'done': 88}`）、S7 盘上 52／库里 52／已标缺失 10、
+S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字裁剪把 S1–S4 只留了“峰值 319”；
+同代码独立场的完整读数见上（118 点、crash.log 0 字节、S3 15→12、S4 321→321）。
+**S6 的 0.0s 仍是 ISSUES I32 的已知口径边界，不许写“排空已验证”**。
+
+**package（400.0 MiB）**：构建 **142.8s**；冻结冒烟 **152.1s**、**273/273** 在册、`schema_version=8`、分类 14、
+事件 `['startup.begin','startup.done','window.ready','background.started','shutdown']`、无开发机路径、临时目录已清理。
+**G20 那一行是真桌面（非 offscreen）**：`退出码 0｜优雅关闭=True（0.5s）｜等窗口 6.89s（window.ready 到）｜
+峰值 RSS 162.9MiB｜峰值句柄 829｜峰值线程 14｜采样 14 次`；冻结进程首次 `window.ready` 的
+`cold_start_seconds=4.936`（`.probe_work/frozen_smoke_result.json`）。
+
+**G2 同一天两个读数，必须一起读**：**340.0ms**（`.probe_work/final_chain_r17.log`，r17 第一场）／
+**422.0ms**（`.probe_work/final_chain_r17c.log`，P50 196.0／P99 491.0／max 491.0「发票」；100 样本、
+`text_pages=1,975,216`）。判据 ≤500ms 一个字没动；**G2 仍是负载绑定读数（ISSUES I25）**，
+绿的那场只能说“这一次在 500ms 内”。同日另外两场 299.0ms（r16c）与 652.0ms（r16）一并作背景，不互相换算。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① 安装包与代码签名**仍未交付**（冻结目录能跑 ≠ 可分发安装包）；
+② 隐私按用户口径“以后再处理”；③ soak 只有 4 分钟，小时级没跑（I32）；④ G2 仍是负载绑定的单场绿（I25）；
+⑤ 旧快照**内部损坏**不在 C11 口径内（I98 乙 明写边界）；⑥ **I102 未销账** —— r17b 那条 G1 红没有复现，
+只补了“下次能读到断言原文”，没有拿到根因；⑦ 真机证据仍是自动断言，不是人眼逐屏（I17 残余）。
+
+> **本册末行现数（2026-10-21 版本收口轮（十七）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 935｜CHANGELOG 510｜ISSUES 140`（`wc -l`＝`splitlines()`＝守卫判定那条口径；
+> 上一块轮（十六）按 §4.26 保留为历史、不动。本轮本册 847 → 935（+88 = §4.27 自身）；CHANGELOG 460 → 510
+> （+50 = 轮（十七）那一整块）；ISSUES 137 → 140（+3：I100/I101/I102，现读 **102 行｜CLOSED 79｜MITIGATED 22｜
+> WONTFIX 1**）；DECISIONS / VERIFICATION 主册未动 —— 本轮没开新决策。
+> `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近 5 份，最紧 `p12_consistency.py` 799（余 1）。
+> 现册里带 `**本册末行现数**` 标题的块共 **8 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六））+ 本轮这块**活的**。

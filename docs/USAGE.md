@@ -36,7 +36,7 @@
 PdfArchiver.exe                        # 双击或命令行，正常退出码 0
 PdfArchiver.exe --data-dir D:\我的归档库   # 换数据根目录（搬家、多库、测试都用它）
 PdfArchiver.exe --exit-after 20        # 起来 20 秒后自己关（冒烟验证用）
-PdfArchiver.exe --version              # PdfArchiver 0.5.0
+PdfArchiver.exe --version              # PdfArchiver 1.0.0
 ```
 
 源码运行时把 `PdfArchiver.exe` 换成 `.venv\Scripts\python.exe -m pdfarchiver.app`。

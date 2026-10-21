@@ -550,7 +550,8 @@ VERDICT: ALL GREEN
   （`DirectML.dll` / `onnxruntime.dll` / `onnxruntime_providers_shared.dll`）、
   版本指纹要读的 `.dist-info` 6 份（含 `onnxruntime_directml-1.20.1`、`rapidocr_onnxruntime-1.4.4`）、
   迁移脚本按 `.py` 进包且与源目录清单一致、构建日志 `ERROR` 行 **0 条**；
-  产物自报版本：`dist\PdfArchiver\PdfArchiver.exe --version` → **`PdfArchiver 0.5.0`**（退出码 0）。
+  产物自报版本：`dist\PdfArchiver\PdfArchiver.exe --version` → **`PdfArchiver 0.5.0`**（退出码 0；2026-10-15 读数，
+  轮十七重打包后为 `1.0.0`，见 `docs/VERIFICATION-RUNLOGS.md` §4.27）。
 - 冻结产物冒烟 29 行全过，关键几条：干净目录首启退出码 0、优雅关闭 True（0.35s）、峰值 RSS 108.8MiB、
   采样 12 次；`crash.log` **0 个**；`schema_version=3`、默认分类 14；两批语料 **273/273** 在册；
   正文 **304 行**、`text_pages − content_fts = 0`（这两个数是在**第一批 153 份**抽完正文时量的，

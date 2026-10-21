@@ -6,6 +6,56 @@
 
 ---
 
+## 勾选轮（十七）—— 2026-10-21 · **版本升 `1.0.0` 并重打包**：阶段 0–7 发布门禁全绿后的版本收口；顺带修掉探针自伤（I100）与注入残留（I101）
+
+轮十六收尾时台账 OPEN 为 0，用户勾选的唯一未做项是「1 直接做（版本升 1.0.0 + 重打包）」。本轮按这条走：
+先把 `__version__` 从 `0.5.0` 升到 `1.0.0`，同步**当前版本口径**的文档，重打包并实测 `--version`，再跑一场
+12 段整链作为 1.0.0 的发布读数。整链共跑三场才拿到绿：第一场 soak 红 5 条，定位为 **p13 探针自伤（I100）**；
+修后第二场（r17b）regression 的 G1 单场红且断言原文被截断（**I102**），我停链时又留下 p17 的注入残留（**I101**）；
+第三场（r17c）**34 条判定全绿**，才是 1.0.0 的发布读数。
+
+- **A · 版本号 1.0.0** —— `src/pdfarchiver/__init__.py` 改成 `__version__ = "1.0.0"`，注释写明“阶段 0–7
+  全部走完且发布门禁 2026-10-21 全绿”；源码运行 `python -m pdfarchiver.app --version` → `PdfArchiver 1.0.0`。
+  只同步**当前版本口径**的文档：`docs/USAGE.md`（`--version` 预期输出）、`docs/TROUBLESHOOTING.md`
+  （反馈时要求贴的版本）、`docs/ROADMAP.md`（轮十六“仍是 0.5.0”的下一轮动作改成已完成）、
+  `docs/VERIFICATION.md`（旧 0.5.0 读数保留并注明轮十七重打包后为 1.0.0）、
+  `docs/stage-reports/最终交付报告.md`（追记 + §七 第 1 步预期输出）。历史读数不追溯改写。
+- **B · 重打包 + 产物自报** —— 整链 package 段用 1.0.0 源码重建冻结产物，`dist\PdfArchiver\PdfArchiver.exe --version`
+  → `PdfArchiver 1.0.0`、退出码 0（终场链后复核：`.probe_work/exe_version_r17c_out.txt` / `_err.txt`；stdout 里那行
+  `fitz` 弃用警告是预期，stderr 为 0 字节）。包体、内容断言与冒烟行数见 §E。
+- **C · 整链 r17 第一次：soak 红 5 条** —— 11/12 段绿，只有 `长跑采样 p13` 红：采样 0 点、S3–S5“没有读数”、
+  S4 还写着“非 Windows”。同场 S6–S9 全绿、应用干净关闭。定位为 **I100**：探针在自己的进程里调产品
+  `bootstrap()`（装进程级 excepthook），`Sampler` 线程在 venv launcher 交接时抛 `NoSuchProcess`，被写进
+  被测应用的 `crash.log`（2,127 字节），采样线程随即静默死掉。证据 `.probe_work/final_chain_r17.log`。
+- **D · I100 修复** —— `Sampler` 改成逐进程 BFS（`children(recursive=False)`）+ `marker` 兜底；采样线程的
+  异常写进 `errors` 不再静默；`bootstrap_without_hooks()` 装完立刻还两个钩子并摘掉 `_pdfarchiver_owned`
+  handler；空读数文案如实说“采样线程先退出了”。守卫 `tests/integration/test_probe_sampler.py` **3** 条，
+  坏法注入 **3 failed** → 还原 **3 passed in 3.56s**。同代码复跑 4 分钟 soak：
+  `合计 9 条｜红 0 条 / VERDICT: ALL GREEN`、采样 **118** 点、`crash.log 0 字节`、S3 `15 → 12`、
+  S4 `321 → 321`、S5 `111.7 → 111.8MiB（+0.1）`（`.probe_work/soak_r17_fixed.log`）。
+  **这次红不能按需复现**（`.probe_work/soak_r17_repro.log` 同代码全绿），修法依据是崩溃原文与线程名，不是概率。
+- **E · 终场 12 段整链 r17c（唯一作数的一场）** —— `gates/final.py --all --data-root …` 12 段
+  **34 条判定｜本次未跑 0 段｜VERDICT: ALL GREEN｜rc=0**；墙钟 12:33:34 → 14:17:32 = **6,238s（103.97 分钟）**，
+  起跑 **CPU 21.2%｜可用内存 4,530MiB**。回归 **785 passed / 0 failed / 0 error / 1 skipped（213.5s）**；
+  injection **1,414.7s / 225 条坏法**；ui-inject 36/36；consistency **3,824.2s**（真根 19/19）；soak 303.4s；
+  package **319.1s / 400.0MiB / 273-273**；G2 **P95 422.0ms**；冷启动 **0.858s**。逐字读数见
+  `docs/VERIFICATION-RUNLOGS.md` §4.27 与 `.probe_work/final_chain_r17c.log`。比 r16c 慢 2,212s，大头在
+  consistency（+1,500.9）与 injection（+620.8）；同代码同日分散，原因未查明，**不缩超时**。
+- **F · 收尾逮到的两条账（I101 / I102）** —— ① r17b 的 regression 红在 G1（`784 passed / 1 failed / 0 error /
+  1 skipped`），900 字截断 + pytest 临时根轮换 ⇒ 断言原文不可回查；单条复跑 2.09s 绿、未复现，**I102
+  MITIGATED**。`gate_regression` 已改成失败时把完整输出写进 `.probe_work/regression_full.txt` 并把失败节点名
+  顶到「实测」。② 停链时 p17 的 H3 坏法留在 `queue.py`，下一场回归把它读成 `DID NOT RAISE ValueError`
+  （**I101**）；还原后 **785 passed / 1 skipped（210.76s）**。`gates/final.py` 新增 `INJECTION_INFLIGHT`
+  标记 + 起跑前预检：有标记 → 门禁拒绝起跑（实测 `RED` 且 guards 一条没跑），无标记 → 8 条 ALL GREEN。
+
+**本轮仍欠**：① 安装包与代码签名未交付（用户输入依赖）；② 隐私按用户口径“以后再处理”；③ 长跑仍 4 分钟 /
+S6 排空 0.0s（**ISSUES I32** MITIGATED）；④ G2 判据随机器负载漂移（**ISSUES I25**）；⑤ C11 旧快照只开库
+读版本，内部损坏不在口径内（**ISSUES I98** 边界）；⑥ 真根一致性 5,502.8s / 3,824.2s / 3,041.4s / 2,323.3s
+与 injection 1,414.7s / 858.7s 的分散均未查明；⑦ 真机证据仍是自动断言 27 条，不是人眼逐屏（**ISSUES I17** 残余）；
+⑧ **I102 未销账** —— r17b 那条 G1 红没有复现，只补了“下次能读到断言原文”，根因未拿到。
+
+---
+
 ## 勾选轮（十六）—— 2026-10-20 ~ 2026-10-21 · **不升版本号**，把真根一致性从 3 红推到 **19/19 全绿**，并用一条命令跑完整链
 
 轮十五收尾后台账 OPEN 只剩 **I97**（真根 C0 / C3·D / C5 三条红）。本轮按「做未完成的，跟进你推荐的」
