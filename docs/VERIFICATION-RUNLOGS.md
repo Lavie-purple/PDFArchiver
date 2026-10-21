@@ -933,3 +933,36 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 > WONTFIX 1**）；DECISIONS / VERIFICATION 主册未动 —— 本轮没开新决策。
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近 5 份，最紧 `p12_consistency.py` 799（余 1）。
 > 现册里带 `**本册末行现数**` 标题的块共 **8 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六））+ 本轮这块**活的**。
+
+### 4.28 勾选轮（十八）收尾读数（2026-10-21 14:22 → 21:43，销账 **I102**、入账 **I103**，r18 34/35 后定点 19/19）
+
+**起止（墙钟，不折算成单一“活跃”数）**：轮十七最后一条 commit `3c759e7` **14:21:58** → 本块落笔 **21:43** = **7.35 h**。其中 **15:47 → 18:32 本机休眠约 2.75 h**（30 分钟 soak 跑到第 30 分钟时被冻结），**有效工作约 4.60 h**。会话日志（本环境 `usage.*` 恒 0，只能拿体积当代理）：**271,349,026 B｜87,595 行**（轮十七基线 261,079,061 B / 85,179 行 ⇒ **+10,269,965 B｜+2,416 行**；2026-10-21 21:41:56 取数）。
+
+**A · I32 甲 · p13 S6 真观测到积压，不再空转**：`tests/probes/p13_soak.py` 加 `BURST_ADD = 30`（一页 PDF 种进 `corpus/burst`）、`BURST_OBSERVE_MAX = 30.0s`、`BURST_OBSERVE_POLL = 0.25s`；判据改成 `drained and peak_open > 0`，观察不到非终态积压判未验。注入自检 **12/12 坏法 + 3/3 好读数**（坏法 7c `peak_open=0` 必红）。真跑 4 分钟：**S6 峰值 35 / 排空 1.0s / `{'done': 123}`**（`.probe_work/soak_r18.log`，118 点、S5 +0.1MiB、S3 15→12、S4 321→321）；30 分钟：**峰值 34 / 1.0s / `{'done': 592}`**。
+
+**B · I25 乙 · G2 负载场与产品红分开**：`scripts/g2_search_benchmark.py::classify(p95_ms, cpu_pct, avail_mib)`，`LOAD_CPU_BUSY = 60.0`、`LOAD_AVAIL_MIN_MIB = 1536`；绿只有一条：**P95 ≤ 500ms**（忙不参与绿条件）；不达标且忙 → rc=3，不达标且不忙 → 红。`gates/final.py` g2 段遇 rc=3 等 **90s** 重试一次，仍 rc=3 以「环境不合格」收尾（rc=2）。分类自检六组真实历史读数 **6/6**（`.probe_work/round18_g2_inject.log`）。整链真跑 **P95 372ms**（P50 155 / P99 417 / max 417「engineering」；CPU 46.8%、可用 3,619MiB；100 样本、`text_pages=1,975,216`）。**残留**：90s 重试分支未在真负载场活过。
+
+**C · ⑥ 甲 · 逐条计时**：`tests/probes/_timed.py` 的 `timed()` / `breakdown()`；p12 每条 Row 挂 `ms`、末尾「逐条计时」、JSON 带 `ms`；`gates/stage1.py` / `stage5.py` 的注入行带 `｜耗时`。整链：injection **674.0s**（p9 187.6 / p10 115.7 / p16 133.6 / p17 5.7 / p18 6.8 / p21 58.1 / p22 69.6 / p23 55.7 / p24 41.4）；consistency **4,057.0s** = 5.4 + 1.0 + 4,050.6。真根逐条：C1 **1,045.9s**、C3 六根共用一次 walk **713.1s**、C4 **192.5s**、C5 **1,181.0s**、C11 **910.1s**，五项 **4,042.5s = 99.8%**；其余合计 ≈6.5s。跨轮快慢仍未查明。
+
+**D · I102 CLOSED · 冷启动三相 + 30 场**：`window.ready` 带 `phases`（import／装配／建窗）。30 场（warmup + 30，全 rc=0）：**min 1.221 / 中位 1.373 / max 2.289s，8/30 超 1.5s**；超线八场 CPU 63.3–87.3%，CPU ≤62.7% 四场全 ≤1.33s；负载 CPU 58.1–87.3%、可用 4,448–4,563MiB；最强场 import 2.019s = cold 的 **88%**，30 场 import 占 80–88%，assemble 39–77ms、window 104–256ms（`.probe_work/round18_i102_30x.log` / `i102_coldstart_30x.json`）。完整断言原文取到：`AssertionError: G1 [约定] ≤1.5s，实测 1.95s` + `assert 1.95 <= 1.5` + `test_app_shell.py:183` + `1 failed, 63 passed in 34.50s`（`.probe_work/round18_stage1_inject_note.log`；那场 p9 基线段负载真红，注入结论不作数）。**G1 1.5s 一处没动**。
+
+**E · I32 乙 · 30 分钟 soak**：`--soak-seconds 1800`；**9/9 全绿**、885 点、120 轮、**1,801.8s**。S1 rc=0 / RSS 中位 111.6MiB；S2 crash.log 0B / Traceback 0；S3 12→12（峰 17）；S4 321→321；S5 **111.5→112.6MiB（+1.1）**、109.8–113.8、G8 余量 1,086.2；S6 **34 / 1.0s / `{'done': 592}`**；S7 290/290（缺 64）；S8 1 份 164KiB / 729 行；S9 14 条 0 红（`.probe_work/round18_soak_30min.log`）。**口径**：15:17:25 起跑、15:47 休眠、18:32 恢复、18:33:24 落盘；30 分钟是进程实际运行时间，不是连续墙钟。窗口内与 #172/#178 的轻量验证并行（G2 分类自检、p9 聚焦单条），不是空载场。I32 仍未销账（小时级没跑）。
+
+**F · I103 OPEN · 备份保留信息项**：2026-10-21 只读现数 —— 8 份快照 ≈22.3GiB（六小合计 757,760B；两大 11,957,972,992B + 11,967,422,464B）；主库 11,992,088,576B ≈11.17GiB；合计 ≈33.4GiB；每份带 -shm 32KiB / -wal 0B 伴生。甲/乙/丙三案，推荐乙（留最近 2 份，可释放 ≈11.14GiB，删除须用户在场逐份验开）；**一份没动**。
+
+**G · 整链 r18（34/35）+ C3·D 真数据漂移 + 定点 p12**：18:34:06 → 20:09:28.949 = **5,722.8s（95.38 分钟）**；起跑 CPU 29.7% / 可用 4,609MiB / MemCompression 654MiB；**35 条判定、0 段未跑、34 绿 / 1 红、CHAIN_EXIT=1**。红 = 真根 p12 **C3·D 盘上 90 / 库里 89**，漏 `d:/wechat files/…/2026-10/2026年中国电竞行业研究报告.pdf`（链跑期间真数据新增；红 JSON 另存 `.probe_work/p12_real_root_chain_r18_red.json`）。产品路径补入 **doc 10991 / 21 页 / native / fts=done**；真库 **10,987 → 10,988**、`text_pages 1,975,216 → 1,975,237`、空正文 0、待办 0（`.probe_work/r18_index_wx_pdf.log`；2026-10-21 只读复核 `missing_since=NULL`、正文 21 页）。随后定点复跑 p12：**19 条全绿、未验 0 条**（20:29:44 → 21:40:10 = **4,226s**；C1 1,048.6s / C3 763.7s / C4 196.3s / C5 1,249.7s / C11 965.2s）；C2 **10,988**；C3 六根 **68/90/1967/5352/1655/1856** 各相等；C4 **1,975,237/1,975,237、漏 0/残留 0**；C5 1,975,237 页六项自洽；C9 **running 0**（done 10,941 / failed 75）；C11 8 份、最新 `integrity_check=ok` / FK 0；C12 0/0/0；C13 六根一致（`.probe_work/p12_real_root_r18_after_index.log` / `p12_real_root.json`）。**首启 20:15 那场被会话生命周期回收（日志 0 字节、无产出），读数取 20:29 重启的这场**。**这不是整链全绿** —— 链是 34/35，复跑只替换那一行。
+段读数：docs-inject 0.0 / guards 3.1 / regression **215.2（785 passed / 0 failed / 0 error / 1 skipped）** / coldstart 1.4（**0.831s**）/ e2e 12.0（冷 0.830s、11 条、6 行真实检索）/ injection **674.0（225 条坏法）** / ui-inject 58.8（36/36）/ ocr 29.7（9 条 0 失败、预算停 2 页、真引擎 4 passed）/ consistency **4,057.0** / soak 320.8（9/9；S6 29 / 1.0s / `{'done': 123}`）/ package 289.9（构建 147.1 + 冒烟 142.8、400.0MiB、273/273；G20 真桌面 `优雅关闭=True（0.4s）｜窗口 5.67s｜RSS 174.5MiB｜句柄 859｜线程 17`）/ g2 58.1（6/6 + **P95 372ms**）。段和 **5,720.0s**，墙钟差 **2.8s**。
+
+**H · p9 #13 锚点修复（#178，先修再跑链）**：#174 把 `state_event(...)` 改成四行，p9 #13 整行锚点失配；`tests/guards/test_probe_anchors.py` 先报 **259 条锚点 / 1 条失配**。锚点改成精确四行（替换体 `pass`），守卫 **51 passed in 58.98s**；聚焦坏法删 `phases` → `AssertionError: 没有 window.ready 事件` 在 `tests/integration/test_app_shell.py:181`，**1 failed / 0 passed**（`.probe_work/round18_p9_case13_check.log`）。完整 p9 没单跑（基线段含负载敏感 G1），整链里 **69/69**。
+
+**台账与守卫**：guards 段现读 **103 行｜I1–I103 连续｜CLOSED 80｜MITIGATED 21｜OPEN 1｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**；本轮 **I102 CLOSED**、**I103 OPEN**。链后复跑 docs-inject + guards：**9 条 ALL GREEN（docs-inject 0.0s + guards 2.4s，rc=0；`.probe_work/final_docs_guards_r18.log`）**。文件长度守卫：`扫了 212 个 .py 与 31 个 .md｜临近线（余量 ≤100 行）6 份`，最紧 `tests/probes/p12_consistency.py` **800（余 0）**（另有 `test_job_queue.py 766`、`p19_combined_memory.py 742`、`theme.py 717`、`p13_soak.py 716`、`test_saved_search_ui.py 707`）。
+
+**临时文件**：`.probe_work/` **438 项 / 848 MiB**（承重保留：`final_chain_r18.log`、`p12_real_root_chain_r18_red.json`、`p12_real_root.json`、`p12_real_root_r18_before_index.json`（补索引前 18/19 现场）、`p12_real_root_r18_after_index.log`、`final_docs_guards_r18.log`、`r18_index_wx_pdf.*`、`round18_soak_30min.log` / `p13_soak_30min_result.json`、`soak_r18.log`、`round18_i102_30x.log` / `i102_coldstart_30x.json`、`round18_g2_inject.log`、`round18_stage1_inject_note.log`、`round18_p9_case13_check.*`、`frozen_smoke_result.json`、`packaging_build_report.json`）。清理：`tmp_p12_timed/`（本轮计时用的临时数据根，30 个文件）清空；一份 10-18 遗留的一次性脚本与本轮的 `launch_p12_r18.py` 一并清空；`%TEMP%\p13_soak_1yi2rw_8` 是轮十七承重现场，保留；30 分钟与 4 分钟 soak 的临时根均已自清理；`frozen_smoke_1015_*` 是 10-15 遗留，未动。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① 安装包与代码签名未交付；② 隐私以后再处理；③ soak 只到 30 分钟（I32 未销账）；④ G2 90s 重试分支未活过；⑤ C11 旧快照内部损坏不在口径内（I98 乙）；⑥ consistency / injection 跨轮快慢未查明；⑦ I103 等勾选；⑧ 真机证据仍是自动断言（I17 残余）；⑨ 整链 r18 是 34/35，定点 p12 19/19 不是整链重跑。
+
+> **本册末行现数（2026-10-21 勾选轮（十八）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 968｜CHANGELOG 592｜ISSUES 141` —— 轮十七 935 / 510 / 140 ⇒
+> 本册 +33、CHANGELOG +82、ISSUES +1，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（十七）按 §4.27 保留为历史、不动）。
+> `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段的「台账与守卫」。
+> 现册里带 `**本册末行现数**` 标题的块共 **9 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七））+ 本轮这块**活的**。
