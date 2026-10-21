@@ -551,7 +551,8 @@ def run(keep: bool) -> int:
                                  "--data-dir", str(data_root), "--exit-after", "900"],
                                 cwd=str(work), env=env,
                                 stdout=fh, stderr=subprocess.STDOUT, text=True)
-        sampler = p13_soak.Sampler(proc, interval=SAMPLE_SECONDS).start()
+        sampler = p13_soak.Sampler(proc, interval=SAMPLE_SECONDS,
+                                   marker=str(data_root)).start()
 
         # ── 窗口 A：只有界面，队列空着 ──
         time.sleep(IDLE_SECONDS)
@@ -711,10 +712,14 @@ def run(keep: bool) -> int:
 
 
 def bootstrap_warm(data_root: Path):
-    """只为了把库建出来（迁移 + 默认分类），建完就关 —— 应用进程自己再装配一遍。"""
-    from pdfarchiver.services.bootstrap import bootstrap
+    """只为了把库建出来（迁移 + 默认分类），建完就关 —— 应用进程自己再装配一遍。
 
-    ctx = bootstrap(data_root)
+    走 p13 的 `bootstrap_without_hooks`：本探针自己的采样线程异常不许写进被测应用的
+    crash.log（`tests/probes/p13_soak.py` 那一段的由来见 **ISSUES I100**）。
+    """
+    import p13_soak
+
+    ctx = p13_soak.bootstrap_without_hooks(data_root)
     ctx.shutdown()
     return data_root
 

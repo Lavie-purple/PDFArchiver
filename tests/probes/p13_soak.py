@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -135,11 +136,13 @@ class Sampler:
     """
 
     def __init__(self, proc: subprocess.Popen[str],
-                 interval: float = SAMPLE_SECONDS) -> None:
+                 interval: float = SAMPLE_SECONDS, marker: str = "") -> None:
         self.proc = proc
         # interval 是给「同一棵树要量峰值而不是趋势」的探针（p19）留的口子：2s 采趋势够用，
         # 但一次几秒就完成的内存尖峰会被 2s 网格整个漏掉。默认值不变，p13 的读数口径不变。
         self.interval = interval
+        # 启动壳先退时靠它找回真正的应用进程：命令行里带着数据根目录这条现场标记
+        self.marker = marker
         self.samples: list[dict[str, float]] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -151,30 +154,87 @@ class Sampler:
         return self
 
     def _loop(self) -> None:
+        """采样线程一死，S3–S5 就全变成"没有读数"——异常原文必须留在 errors 里。
+
+        2026-10-21 轮十七的真 soak 踩过：`root.children(recursive=True)` 在启动壳退出的瞬间
+        抛 NoSuchProcess，线程静默结束、0 个采样点，读数里只剩三句"没有读数"，看不出是产品
+        没线程还是传感器先死了（`docs/ISSUES.md` **I100**）。
+        """
         import psutil
 
-        root = psutil.Process(self.proc.pid)
-        while not self._stop.wait(self.interval):
-            # 树里一个进程都没剩 = 应用真的死了，这才算失败；启动壳先退、子进程还活着不算
-            procs = [root] + root.children(recursive=True)
-            live = []
-            for p in procs:
+        try:
+            while not self._stop.wait(self.interval):
+                live = self._live_tree(psutil)
+                if not live:
+                    self.errors.append(
+                        f"NoSuchProcess: pid {self.proc.pid} 及其子进程都不在了"
+                        + (f"（现场标记 {self.marker} 也没找到）" if self.marker else ""))
+                    return
+                row = {"t": round(time.monotonic(), 1), "rss_mib": 0.0, "cpu": 0.0,
+                       "threads": 0, "pids": len(live)}
+                handles = 0
+                has_handles = False
+                for p in live:
+                    try:
+                        row["rss_mib"] += p.memory_info().rss / 1048576.0
+                    except psutil.Error:
+                        continue
+                    try:
+                        row["cpu"] += p.cpu_percent()
+                        row["threads"] += p.num_threads()
+                    except psutil.Error:
+                        pass
+                    if hasattr(p, "num_handles"):      # 只有 Windows 有这一项
+                        try:
+                            handles += p.num_handles()
+                            has_handles = True
+                        except psutil.Error:
+                            pass
+                row["rss_mib"] = round(row["rss_mib"], 1)
+                row["cpu"] = round(row["cpu"], 1)
+                if has_handles:
+                    row["handles"] = handles
+                self.samples.append(row)
+        except Exception as exc:  # noqa: BLE001 - 线程自己炸了也要留下原文，不能静默退出
+            self.errors.append(f"{type(exc).__name__}: {exc}")
+
+    def _live_tree(self, psutil) -> list:
+        """从 Popen 的 pid 起逐个子进程往下走；启动壳不在了就按现场标记找真身。
+
+        `children(recursive=True)` 是"一次性走完整棵树"，任何一个子进程在遍历途中消失都会
+        让整次解析抛异常 —— 所以这里改成逐层 BFS，每个 pid 的读取各自兜住。
+        """
+        roots = []
+        try:
+            roots.append(psutil.Process(self.proc.pid))
+        except psutil.Error:
+            pass
+        if not roots and self.marker:
+            for p in psutil.process_iter(["pid", "cmdline"]):
                 try:
-                    p.memory_info()
-                    live.append(p)
-                except (psutil.NoSuchProcess, OSError):
+                    cmdline = p.info.get("cmdline") or []
+                except psutil.Error:
                     continue
-            if not live:
-                self.errors.append(f"NoSuchProcess: pid {self.proc.pid} 及其子进程都不在了")
-                return
-            row = {"t": round(time.monotonic(), 1),
-                   "rss_mib": round(sum(p.memory_info().rss for p in live) / 1048576.0, 1),
-                   "cpu": round(sum(p.cpu_percent() for p in live), 1),
-                   "threads": sum(p.num_threads() for p in live),
-                   "pids": len(live)}
-            if hasattr(root, "num_handles"):          # 只有 Windows 有这一项
-                row["handles"] = sum(p.num_handles() for p in live)
-            self.samples.append(row)
+                if any(self.marker in str(part) for part in cmdline):
+                    roots.append(p)
+        live: list = []
+        seen: set[int] = set()
+        queue = list(roots)
+        while queue:
+            p = queue.pop()
+            if p.pid in seen:
+                continue
+            seen.add(p.pid)
+            try:
+                p.memory_info()
+            except psutil.Error:
+                continue
+            live.append(p)
+            try:
+                queue.extend(p.children(recursive=False))
+            except psutil.Error:
+                continue
+        return live
 
     def stop(self) -> list[dict[str, float]]:
         self._stop.set()
@@ -221,8 +281,10 @@ def v_no_crash(crash_bytes: int, traceback_count: int, log_tail: str) -> Row:
 
 def v_threads(samples: list[dict[str, float]]) -> Row:
     gate = f"S3 线程不泄漏（末段中位 − 首段中位 ≤ {THREAD_LEAK_MAX}）"
-    if not samples or "threads" not in samples[0]:
-        return Row(gate, False, "没有线程数读数")
+    if not samples:
+        return Row(gate, False, "一个采样点都没拿到（采样线程先退出了，原因见 S1 的采样中断说明）")
+    if "threads" not in samples[0]:
+        return Row(gate, False, "采样里没有 threads 列（传感器缺列，不是产品没线程）")
     head, tail = _split(samples, "threads")
     delta = _median(tail) - _median(head)
     worst = max(float(s["threads"]) for s in samples)
@@ -233,19 +295,21 @@ def v_threads(samples: list[dict[str, float]]) -> Row:
 
 def v_handles(samples: list[dict[str, float]]) -> Row:
     gate = f"S4 句柄不泄漏（末段中位 − 首段中位 ≤ {HANDLE_LEAK_MAX}）"
-    if not samples or "handles" not in samples[0]:
+    if not samples:
+        return Row(gate, False, "一个采样点都没拿到（采样线程先退出了，原因见 S1 的采样中断说明）")
+    if not any("handles" in s for s in samples):
         return Row(gate, False, "本机 psutil 没有 num_handles 读数（非 Windows）")
     head, tail = _split(samples, "handles")
     delta = _median(tail) - _median(head)
     return Row(gate, delta <= HANDLE_LEAK_MAX,
                f"首段中位 {_median(head):.0f} → 末段中位 {_median(tail):.0f}（差 {delta:+.0f}）"
-               f"｜全程峰值 {max(float(s['handles']) for s in samples):.0f}")
+               f"｜全程峰值 {max(float(s['handles']) for s in samples if 'handles' in s):.0f}")
 
 
 def v_memory(samples: list[dict[str, float]]) -> Row:
     gate = f"S5 内存增长有界（末段中位 − 首段中位 ≤ {RSS_GROWTH_MAX_MIB}MiB，且不越 G8 {G8_LIMIT_MIB:.0f}MiB [约定]）"
     if not samples:
-        return Row(gate, False, "没有内存读数")
+        return Row(gate, False, "一个采样点都没拿到（采样线程先退出了，原因见 S1 的采样中断说明）")
     head, tail = _split(samples, "rss_mib")
     growth = _median(tail) - _median(head)
     peak = max(float(s["rss_mib"]) for s in samples)
@@ -395,6 +459,35 @@ def _mk_logs(root: Path, name: str, how_many: int) -> Path:
 
 # ───────────────────────────── 主流程 ─────────────────────────────
 
+def bootstrap_without_hooks(data_root: Path):
+    """在探针进程里装配一次产品运行时，返回 ctx；把 excepthook 与日志 handler 立刻还回去。
+
+    `bootstrap()` 装的是**进程级** excepthook，落点是本次数据根目录的 `crash.log`。探针
+    自己要接着跑（采样线程、p12 子进程都在探针进程里），所以装完必须立刻还：2026-10-21
+    轮十七的真 soak 里，采样线程的 NoSuchProcess 被写进了**被测应用**的 crash.log
+    （S2 假红 2,127 字节），采样线程同时静默退出（S3–S5 全成"没有读数"）。
+    日志 handler 也一起摘掉，否则探针后续的 logging 还会往被测进程的 app.log 里写。
+    """
+    from pdfarchiver.services.bootstrap import bootstrap
+
+    hooks = (sys.excepthook, threading.excepthook)
+    try:
+        return bootstrap(data_root)
+    finally:
+        sys.excepthook, threading.excepthook = hooks
+        logger = logging.getLogger("pdfarchiver")
+        for handler in [h for h in logger.handlers if getattr(h, "_pdfarchiver_owned", False)]:
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def _bootstrap_and_seed(data_root: Path, corpus: Path) -> None:
+    """先把库装配出来（迁移、默认分类、登记监测根、排一条全量扫描），再起真应用进程。"""
+    warm = bootstrap_without_hooks(data_root)
+    warm.shutdown()
+    seed_library(data_root, corpus)
+
+
 def run(minutes: float, keep: bool) -> int:
     soak = minutes * 60.0
     work = Path(tempfile.mkdtemp(prefix="p13_soak_"))
@@ -404,11 +497,7 @@ def run(minutes: float, keep: bool) -> int:
     proc: subprocess.Popen[str] | None = None
     try:
         made = build_corpus(corpus)
-        # 先把库装配出来（迁移、默认分类、登记监测根、排一条全量扫描），再起真应用进程
-        from pdfarchiver.services.bootstrap import bootstrap
-        warm = bootstrap(data_root)
-        warm.shutdown()
-        seed_library(data_root, corpus)
+        _bootstrap_and_seed(data_root, corpus)
 
         env = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "PYTHONIOENCODING": "utf-8",
                "PYTHONPATH": str(REPO / "src")}
@@ -422,7 +511,7 @@ def run(minutes: float, keep: bool) -> int:
                                  "--exit-after", str(int(soak + 45))],
                                 cwd=str(work), env=env,
                                 stdout=fh, stderr=subprocess.STDOUT, text=True)
-        sampler = Sampler(proc).start()
+        sampler = Sampler(proc, marker=str(data_root)).start()
         t0 = time.monotonic()
         churned = 0
         while time.monotonic() - t0 < soak:
