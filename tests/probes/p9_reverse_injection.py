@@ -103,7 +103,10 @@ CASES: list[Case] = [
     Case("13", "不往 state.log 写 window.ready（门禁就没有数字可读）",
          "tests/integration/test_app_shell.py::test_进程级冷启动实测符合G1约定",
          [Edit("src/pdfarchiver/app.py",
-               '        state_event(ctx.paths.logs_dir, "window.ready", cold_start_seconds=round(cold, 3))',
+               '        state_event(ctx.paths.logs_dir, "window.ready", cold_start_seconds=round(cold, 3),\n'
+               '                    phases={"import_to_run_s": round(t_entry - process_started_at, 3),\n'
+               '                            "assemble_s": round(t_assembled - t_entry, 3),\n'
+               '                            "window_s": round(t_shown - t_assembled, 3)})',
                "        pass")]),
     Case("14", "把 G1 阈值调到不可能达到，验证实测数字真的在参与判定",
          "tests/integration/test_app_shell.py::test_进程级冷启动实测符合G1约定",

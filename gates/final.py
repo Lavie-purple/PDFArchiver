@@ -163,7 +163,10 @@ def _gate(name: str, cmd: list[str], *, hint: str = "",
 
     超时那一档现在会自己说明自己：原先 `TimeoutExpired` 直接把整段炸掉，读的人分不清
     「产品坏了」与「闸门时间到」，而真根一致性恰恰只有后者（**ISSUES I91**）。
+    每条实测尾巴上都带「耗时」（轮十八 ⑥）：consistency / injection 段的耗时要读得出分布，
+    不靠事后猜哪一段慢。
     """
+    t0 = time.perf_counter()
     try:
         p = _run(cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -173,7 +176,8 @@ def _gate(name: str, cmd: list[str], *, hint: str = "",
                    hint)
     text = (p.stdout or "") + (p.stderr or "")
     green = p.returncode == 0 and "VERDICT: ALL GREEN" in text
-    return Row(name, green, _last_line(p), hint or text[-900:])
+    return Row(name, green,
+               f"{_last_line(p)}｜耗时 {time.perf_counter() - t0:.1f}s", hint or text[-900:])
 
 
 def gate_docs() -> list[Row]:
@@ -387,12 +391,43 @@ def segment_package() -> list[Row]:
 
 
 G2_BENCH = "scripts/g2_search_benchmark.py"
+G2_BENCH_NAME = "G2 搜索 P95 真库实测（20 查询 × 5 reps，P95 ≤ 500ms）"
+G2_LOAD_RETRY_WAIT = 90.0
+
+
+def _g2_run() -> subprocess.CompletedProcess[str]:
+    return _run([sys.executable, G2_BENCH])
 
 
 def segment_g2() -> list[Row]:
-    """G2 搜索 P95 真库实测（默认不进全链，需 --only g2 显式跑）。"""
-    return [_gate("G2 搜索 P95 真库实测（20 查询 × 5 reps，P95 ≤ 500ms）",
-                  [sys.executable, G2_BENCH])]
+    """G2 搜索 P95 真库实测（绑定真库；`--all` 会跑它，`--only g2` 也跑）。
+
+    负载场与产品红分开（**ISSUES I25**，2026-10-21 轮十八）：探针自己采起跑负载，
+    超 500ms 且机器忙时以退出码 3 收场 —— 判据一个字没放宽，只是别再把负载场读成
+    "产品坏了"。这里遇到 3 等 90s 重试一次；两次都忙就记「环境不合格」，
+    main() 的末行与产品红分开（`VERDICT: 环境不合格（不作数，重跑）`）。
+    """
+    inject = _gate("G2 负载分类自检（真实历史读数喂 classify）",
+                   [sys.executable, G2_BENCH, "--inject"])
+    first = _g2_run()
+    if first.returncode == 0 and "VERDICT: ALL GREEN" in (first.stdout or ""):
+        return [inject, Row(G2_BENCH_NAME, True, _last_line(first), "")]
+    if first.returncode != 3:
+        return [inject, Row(G2_BENCH_NAME, False, _last_line(first), (first.stdout or "")[-900:])]
+    print(f"        第一次是负载场（{_last_line(first)}），等 {G2_LOAD_RETRY_WAIT:.0f}s 重试一次")
+    time.sleep(G2_LOAD_RETRY_WAIT)
+    second = _g2_run()
+    if second.returncode == 0 and "VERDICT: ALL GREEN" in (second.stdout or ""):
+        return [inject, Row(G2_BENCH_NAME, True,
+                            f"重试后 {_last_line(second)}（第一次为负载场，不作数）", "")]
+    if second.returncode == 3:
+        return [inject, Row(G2_BENCH_NAME, False,
+                            f"环境不合格（两次起跑都忙）｜第一次 {_last_line(first)}｜"
+                            f"重试 {_last_line(second)}",
+                            "探针自己采了两次起跑负载；判据 ≤500ms 未放宽 —— "
+                            "这条不是产品红，等机器空闲后重跑 g2 段")]
+    return [inject, Row(G2_BENCH_NAME, False,
+                        f"重试后 {_last_line(second)}", (second.stdout or "")[-900:])]
 
 
 SEGMENTS: dict[str, tuple[str, list[str]]] = {
@@ -420,7 +455,8 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
                     ["3.5–5.7s ＋真根另加 2,323.3s（r16c）／5,502.8s（r16）"]),
     "soak": ("p13 注入自检 + 真长跑采样", ["288.8–289.6s @4 分钟"]),
     "package": ("build.py 内容断言 + 冻结产物冒烟全阶段", ["241.9–255.0s｜238.1s（2026-10-21）"]),
-    "g2": ("G2 搜索 P95 真库实测（绑定真库，默认不进全链）", ["83.9s（2026-10-18）｜33.7s（2026-10-21 整链内）"]),
+    "g2": ("G2 搜索 P95 真库实测（绑定真库；--all 会跑；负载场判「环境不合格」不作数）",
+                  ["83.9s（2026-10-18）｜33.7s（2026-10-21 整链内）"]),
 }
 DEFAULT_ORDER = ["guards", "regression", "coldstart", "e2e", "consistency"]
 
@@ -528,7 +564,13 @@ def main(argv: list[str] | None = None) -> int:
     for s in skipped:
         print(f"  SKIP  未跑的段：{s}（{SEGMENTS[s][0]}）—— 这一场的「全绿」不覆盖它")
     bad = [r for r in checks if not r.ok]
+    # 「环境不合格」不是产品红：G2 在忙机器上超线（I25）时判的不是产品，是这台机器这次不能当量尺。
+    # 只有**全部**红行都是环境不合格才走 2 号退出码 —— 混着真红时按红报，不许让一条环境行掩护真问题。
+    env_only = bool(bad) and all("环境不合格" in r.measured for r in bad)
     print(f"  合计判定 {len(checks)} 条｜本次未跑 {len(skipped)} 段")
+    if env_only:
+        print(f"VERDICT: 环境不合格（{len(bad)} 条不作数，等机器空闲后重跑）")
+        return 2
     print("VERDICT: " + ("ALL GREEN" if not bad else f"RED（{len(bad)} 条未过）"))
     return 0 if not bad else 1
 

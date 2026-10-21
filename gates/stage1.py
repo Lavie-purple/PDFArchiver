@@ -97,9 +97,11 @@ def gate_regression() -> Row:
 
 
 def gate_injection() -> Row:
+    t0 = time.perf_counter()
     p = _run([sys.executable, "tests/probes/p9_reverse_injection.py"])
     caught = re.search(r"抓到 (\d+)/(\d+) 条坏法", p.stdout)
     measured = f"{caught.group(1)}/{caught.group(2)} 条坏法被抓到" if caught else _last_line(p)
+    measured += f"｜耗时 {time.perf_counter() - t0:.1f}s"  # 轮十八 ⑥：整段耗时进实测
     return Row("反向注入探针（断言有没有约束力）",
                p.returncode == 0 and "VERDICT: ALL GREEN" in p.stdout, measured,
                "" if p.returncode == 0 else p.stdout[-1500:])

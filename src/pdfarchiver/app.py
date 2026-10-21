@@ -41,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run(argv: list[str] | None = None, process_started_at: float | None = None) -> int:
+    t_entry = time.perf_counter()
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     paths = AppPaths.resolve(args.data_dir)
 
@@ -60,14 +61,21 @@ def run(argv: list[str] | None = None, process_started_at: float | None = None) 
         _show_startup_error(f"启动失败：{exc}", dest)
         return EXIT_BOOTSTRAP_FAILED
 
+    t_assembled = time.perf_counter()
     window = MainWindow(ctx)
     window.show()
+    t_shown = time.perf_counter()
     if process_started_at is not None:
-        cold = time.perf_counter() - process_started_at
+        cold = t_shown - process_started_at
         window.set_cold_start_seconds(cold)
         # G1 的数由应用自己报：门禁脚本从 state.log 读这一条，不靠外部掐表（外部量不到窗口就绪的时刻）
         log.info("冷启动 %.3fs（进程起来→窗口就绪）门禁 G1 [约定] ≤1.5s", cold)
-        state_event(ctx.paths.logs_dir, "window.ready", cold_start_seconds=round(cold, 3))
+        # 分段耗时（轮十八 ⑦，欠账 I102）：超线那次要能看出时间花在哪段 —— 解释器与依赖 import /
+        # 装配 / 建窗。同一个出口：读法就是 state.log 里这一条事件的 phases 字段。
+        state_event(ctx.paths.logs_dir, "window.ready", cold_start_seconds=round(cold, 3),
+                    phases={"import_to_run_s": round(t_entry - process_started_at, 3),
+                            "assemble_s": round(t_assembled - t_entry, 3),
+                            "window_s": round(t_shown - t_assembled, 3)})
     if args.exit_after > 0:
         QtCore.QTimer.singleShot(int(args.exit_after * 1000), window.close)
     if not _start_background(ctx, window):

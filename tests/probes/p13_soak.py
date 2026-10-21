@@ -58,6 +58,9 @@ HANDLE_LEAK_MAX = 200       # 相对首段中位数最多再多几个句柄
 RSS_GROWTH_MAX_MIB = 80.0   # 末段中位数 - 首段中位数：几分钟内涨这么多就是留着不放
 G8_LIMIT_MIB = 1200.0       # 内存红线；[约定] 单位口径按更严的 1,200MiB 一档（I16 说这条没写明）
 BACKLOG_DRAIN_MAX = 90.0    # 停止投放后，队列从有活到全空最多允许多少秒
+BURST_ADD = 30              # 停投放前种入的收尾积压份数 —— S6 必须有一次真排空，不能空转
+BURST_OBSERVE_MAX = 30.0    # 等积压被观测到（队列出现非终态）的上限；观测不到时 S6 判「未验」
+BURST_OBSERVE_POLL = 0.25   # 观察期轮询间隔：收尾这批清得快，1s 网格会整个错过
 OPEN_STATES = ("queued", "running", "paused")   # `LEGAL_TRANSITIONS` 里全部非终态，一个不多一个不少
 LOG_ROTATION_SLACK = 1      # 轮转份数只许比 log_keep_files 多 1（当前那份）
 
@@ -320,7 +323,7 @@ def v_memory(samples: list[dict[str, float]]) -> Row:
                f"｜G8 余量 {G8_LIMIT_MIB - peak:.1f}MiB（单位取 1,200MiB 一档，见 I16）")
 
 
-def v_backlog(drained: bool, lag: float, states: dict[str, int]) -> Row:
+def v_backlog(drained: bool, lag: float, states: dict[str, int], peak_open: int = 0) -> Row:
     gate = f"S6 停止投放后积压能排空（≤ {BACKLOG_DRAIN_MAX:.0f}s）"
     states = dict(states)
     sensor_error = str(states.pop("_读库失败", ""))
@@ -332,8 +335,14 @@ def v_backlog(drained: bool, lag: float, states: dict[str, int]) -> Row:
         tail = (f"｜读库原文：{sensor_error}" if sensor_error else
                 (f" ── 超过 {BACKLOG_DRAIN_MAX:.0f}s 仍非空，说明有活没人领" if shown else
                  f" ── 到点时读不到队列（{'、'.join(OPEN_STATES)} 都没看见），这条没有被验证"))
-    return Row(gate, drained,
-               f"排空用时 {lag:.1f}s｜结束时队列状态 {shown or '无任务行'}{tail}")
+    elif peak_open <= 0:
+        # 2026-10-21 轮十七的真实形状：churn 边投边办，停投放那一刻队列恰好是空的，
+        # `0.0s {'done': 88}` 看着完美，实际排空逻辑一次都没被走到 —— 空转通过不算验证。
+        tail = (" ── 种入的积压一次都没被观测到（队列全程非终态为空），"
+                "这次排空是空转，这条没有被验证")
+    return Row(gate, drained and peak_open > 0,
+               f"观察窗峰值积压 {peak_open} 条｜排空用时 {lag:.1f}s｜"
+               f"结束时队列状态 {shown or '无任务行'}{tail}")
 
 
 def v_docs_match(data_root: Path, pdf_now: int) -> Row:
@@ -392,13 +401,18 @@ def inject() -> int:
     fat = [dict(s, rss_mib=min(1250.0, 300.0 + s["t"] * 8)) for s in good_samples]
     bad.append((v_memory(fat), "RSS 峰值 1,250MiB 越过 G8 1,200MiB"))
     # 坏法 7：队列一直有 queued → S6 必须红（真实成因：处理器缺 dispatch，observer 线程死掉，I19）
-    bad.append((v_backlog(False, 95.0, {"queued": 41}), "120 条里 41 条始终 queued"))
+    bad.append((v_backlog(False, 95.0, {"queued": 41}, peak_open=41), "120 条里 41 条始终 queued"))
     # 坏法 7b：传感器瞎了 → S6 必须红，而且读数要说"读不到"，不能只说"没排空"。
     #          这条不是纸面上的坏法 —— 2026-10-15 第一轮真 soak 就是这么红的：
     #          backlog() 抄错表名（`jobs`，真表 `processing_jobs`），46 秒里每次读库都抛异常被吞掉。
     bad.append((v_backlog(False, 46.1,
                           {"_读库失败": "OperationalError: no such table: jobs"}),
                 "表名抄错，S6 全程一次都没读到队列"))
+    # 坏法 7c：从未观测到积压却"秒排空" → S6 必须红（未验）。
+    #          真实形状：2026-10-21 轮十七 r17c，`0.0s {'done': 88}` —— 停投放时队列本来就是空的，
+    #          排空逻辑一次都没被走到。种入积压前的旧版就是这么绿的。
+    bad.append((v_backlog(True, 0.0, {"done": 88}, peak_open=0),
+                "队列全程非终态为空，0.0s 的排空是空转（轮十七真实读数）"))
     # 坏法 8：盘上 30 份库里只有 12 份 → S7 必须红（真实成因：事件丢了且周期校验还没到，I5/I6）
     #         坏法 9：轮转份数超过 keep+1 → S8 必须红（真实成因：handler 没装 rotation）
     #         这两条要真的连库、真的建文件，所以下面现场造。
@@ -427,7 +441,7 @@ def inject() -> int:
                  (v_logs(_mk_logs(root, "leaky", 9), 5, 5000), "轮转份数 9 > keep+1（handler 没装轮转）")]
         good = [v_docs_match(root, 12),
                 v_logs(_mk_logs(root, "neat", 6), 5, 5000),
-                v_backlog(True, 12.0, {"done": 68, "failed": 3})]
+                v_backlog(True, 12.0, {"done": 68, "failed": 3}, peak_open=41)]
         for row, why in extra:
             log(f"  {'红' if not row.ok else '绿（← 这条判据没有牙）'}  {row.gate}\n"
                 f"        坏法：{why}\n        读数：{row.measured}")
@@ -505,10 +519,11 @@ def run(minutes: float, keep: bool) -> int:
         # 用 PIPE 一旦 Qt 警告把 64KB 缓冲写满就会把被测进程卡住 —— 那就不再是"验它稳不稳"了
         stdout_file = work / "app_stdout.log"
         fh = stdout_file.open("w", encoding="utf-8", errors="replace")
-        # --exit-after 比 soak 多给 45s：投放完还要等积压排空，那段时间进程必须还活着
+        # --exit-after 比 soak 多给 45s 排空 + 30s 积压观察：投放完还要等一个"确定存在过"的
+        # 积压被排空，那段时间进程必须还活着（轮十七之前这里只给 45s，S6 靠空转也能绿）
         proc = subprocess.Popen([sys.executable, "-m", "pdfarchiver.app",
                                  "--data-dir", str(data_root),
-                                 "--exit-after", str(int(soak + 45))],
+                                 "--exit-after", str(int(soak + 45 + BURST_OBSERVE_MAX))],
                                 cwd=str(work), env=env,
                                 stdout=fh, stderr=subprocess.STDOUT, text=True)
         sampler = Sampler(proc, marker=str(data_root)).start()
@@ -519,6 +534,13 @@ def run(minutes: float, keep: bool) -> int:
                 break
             time.sleep(max(0.0, CHURN_EVERY - (time.monotonic() - t0) % CHURN_EVERY))
             churned += _churn(corpus, int(time.monotonic() - t0))
+        # S6 的前置：种一批确定能被观测到的积压并等它出现。churn 边投边办，停投放那一刻
+        # 队列往往恰好是空的 —— 不种这一批，"排空 0.0s"就是空转通过（轮十七 r17c 的 0.0s）。
+        _seed_burst(corpus)
+        peak_open, observe_error = _observe_backlog(data_root, proc)
+        log(f"积压观测：峰值 {peak_open} 条｜"
+            + ("已观测到非终态" if peak_open > 0 else "没有观测到非终态")
+            + (f"｜读库原文：{observe_error}" if observe_error else ""))
         samples = sampler.stop()
         churn_seconds = time.monotonic() - t0
         log(f"投放结束：{churned} 轮变更，用时 {churn_seconds:.1f}s｜采样 {len(samples)} 点")
@@ -542,7 +564,7 @@ def run(minutes: float, keep: bool) -> int:
         rows.append(v_threads(samples))
         rows.append(v_handles(samples))
         rows.append(v_memory(samples))
-        rows.append(v_backlog(drained, lag, states))
+        rows.append(v_backlog(drained, lag, states, peak_open))
         rows.append(v_docs_match(data_root, len(list(corpus.rglob("*.pdf")))))
         rows.append(v_logs(logs_dir, _keep_files(data_root), lines_now))
         p12 = subprocess.run([sys.executable, P12, "--data-root", str(data_root)],
@@ -555,7 +577,7 @@ def run(minutes: float, keep: bool) -> int:
 
         RESULT.parent.mkdir(exist_ok=True)
         RESULT.write_text(json.dumps({"soak_seconds": soak, "samples": samples,
-                                      "rows": [asdict(r) for r in rows],
+                                      "rows": [asdict(r) for r in rows], "backlog_peak": peak_open,
                                       "churn_rounds": churned, "exit_code": rc},
                                      ensure_ascii=False, indent=2), encoding="utf-8")
         log(f"读数已写：{RESULT}")
@@ -590,6 +612,49 @@ def _churn(corpus: Path, stamp: int) -> int:
         _make_pdf(victim[0], pages=2, lines=[f"soak 投放第 {stamp} 轮被覆盖的那份正文"])
         victim[-1].unlink()
     return 1
+
+
+def _seed_burst(corpus: Path) -> int:
+    """停投放前种入一批收尾积压：S6 要排的必须是**确定存在过**的积压。
+
+    2026-10-21 轮十七 r17c 的读数 `0.0s {'done': 88}` 暴露的正是相反形状：churn 每 15s
+    投一批、worker 边投边办，停投放那一刻队列恰好是空的 —— 排空判据"绿"了，但它要守的
+    那条路（有活 → 领走 → 清空）一次都没被走到。单独目录 `burst/` 不干扰 churn 的增删循环。
+    """
+    from conftest import _make_pdf
+
+    burst = corpus / "burst"
+    burst.mkdir(exist_ok=True)
+    for i in range(BURST_ADD):
+        _make_pdf(burst / f"soak_burst_{i:03d}.pdf", pages=1,
+                  lines=[f"soak 收尾积压第 {i} 号样本正文"])
+    return BURST_ADD
+
+
+def _observe_backlog(data_root: Path, proc: subprocess.Popen[str],
+                     timeout: float = BURST_OBSERVE_MAX) -> tuple[int, str]:
+    """种入积压后盯着队列，直到出现非终态或超时。返回（观察窗峰值未完成数，读库错误原文）。
+
+    轮询比排空期密一个量级：30 份一页 PDF 在这台机器上一两秒就能办完，1s 网格会整个错过、
+    把"清得太快"误判成"从没出现过"。读库报错不中断观察（应用正在写时短暂读不到是真事），
+    但第一条原文要带回去 —— 观察不到积压时，"消费太快"和"传感器瞎了"的修法完全不同。
+    """
+    peak = 0
+    first_error = ""
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < timeout and proc.poll() is None:
+        try:
+            states = backlog(data_root)
+        except sqlite3.Error as exc:
+            first_error = first_error or f"{type(exc).__name__}: {exc}"
+            time.sleep(BURST_OBSERVE_POLL)
+            continue
+        open_now = sum(v for k, v in states.items() if k in OPEN_STATES)
+        peak = max(peak, open_now)
+        if open_now > 0:
+            return peak, ""
+        time.sleep(BURST_OBSERVE_POLL)
+    return peak, first_error
 
 
 def _wait_drain(data_root: Path, proc: subprocess.Popen[str]) -> tuple[bool, float, dict[str, int]]:

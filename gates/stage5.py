@@ -249,13 +249,32 @@ def gate_budget_stop() -> Row:
 
 
 def gate_ocr_injection() -> Row:
+    t0 = time.perf_counter()
     p = _run([sys.executable, P10])
     text = p.stdout + p.stderr
     caught = CAUGHT_RE.search(text)
     measured = (f"{caught.group(1)}/{caught.group(2)} 条坏法被抓到" if caught
                 else _last_line(p))
+    measured += f"｜耗时 {time.perf_counter() - t0:.1f}s"  # 轮十八 ⑥：整段耗时进实测
     return Row(G_INJECT, p.returncode == 0 and "VERDICT: ALL GREEN" in text, measured,
                "" if p.returncode == 0 else text[-1500:])
+
+
+def _load_values() -> tuple[float, int, str, int]:
+    """起跑负载的**结构化**读数：(CPU%、可用 MiB、最吃内存进程名、其 MiB)。
+
+    `_machine_load()` 只负责把这四个数拼成一句话；G2 探针（`scripts/g2_search_benchmark.py`）
+    要用同一份读数做"负载场/产品红"的分类 —— 口径只有一个出处，不写第二份
+    （2026-10-21 轮十八，**ISSUES I25**）。取不到就抛原异常，由调用方各自兜。
+    """
+    import psutil  # noqa: PLC0415 - base 依赖，但这一行只是给读数加上下文，坏了不该拖垮门禁
+    cpu = psutil.cpu_percent(interval=1.0)
+    avail = round(psutil.virtual_memory().available / 2 ** 20)
+    top = max(psutil.process_iter(["name", "memory_info"]),
+              key=lambda p: p.info["memory_info"].rss if p.info["memory_info"] else 0)
+    name = (top.info["name"] or "?")[:30]
+    rss = round(top.info["memory_info"].rss / 2 ** 20)
+    return cpu, avail, name, rss
 
 
 def _machine_load() -> str:
@@ -265,14 +284,8 @@ def _machine_load() -> str:
     能差好几倍（实测区间记在 `docs/TESTING.md` / `docs/VERIFICATION.md`，不写进这里）。
     把成因跟读数放在一起，免得下一次 RED 又要靠猜 —— 也不许靠放宽阈值来"修"它。
     """
-    import psutil  # noqa: PLC0415 - base 依赖，但这一行只是给读数加上下文，坏了不该拖垮门禁
     try:
-        cpu = psutil.cpu_percent(interval=1.0)
-        avail = round(psutil.virtual_memory().available / 2 ** 20)
-        top = max(psutil.process_iter(["name", "memory_info"]),
-                  key=lambda p: p.info["memory_info"].rss if p.info["memory_info"] else 0)
-        name = (top.info["name"] or "?")[:30]
-        rss = round(top.info["memory_info"].rss / 2 ** 20)
+        cpu, avail, name, rss = _load_values()
         return f"起跑负载：CPU {cpu}%｜可用内存 {avail}MiB｜最吃内存进程 {name} {rss}MiB"
     except Exception as exc:  # noqa: BLE001 - 读数加不上就少加，绝不因此改变判定
         return f"起跑负载：取不到（{type(exc).__name__}: {exc}）"

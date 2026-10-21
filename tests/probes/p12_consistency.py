@@ -64,6 +64,7 @@ from pdfarchiver.fs.identity import identity_key, normalize_path  # noqa: E402
 from pdfarchiver.fs.scanner import KIND_ERROR, KIND_EXCLUDED, KIND_OTHER, KIND_PDF, iter_tree  # noqa: E402
 from pdfarchiver.parsing.classify import OCR_STATUSES, TEXT_STATUSES  # noqa: E402
 from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE  # noqa: E402
+from _timed import breakdown, timed  # noqa: E402 同级模块：逐条计时（p12 贴着 800 行线，见 _timed.py）
 
 REAL_MIGRATIONS = REPO / "src" / "pdfarchiver" / "db" / "migrations"
 
@@ -75,9 +76,7 @@ TEXT_LEGAL = frozenset(TEXT_STATUSES) | {"pending"}
 PARSE_LEGAL = frozenset({"pending", "ok", "degraded", "failed"})
 OCR_LEGAL = frozenset(OCR_STATUSES)
 VECTOR_LEGAL = frozenset(VECTOR_STATUSES)   # 阶段 6 已交付，口径取 `db/models.VECTOR_STATUSES`
-DOCS_UNDER_ROOT_SQL = (
-    "SELECT path_key, missing_since FROM documents WHERE path_key LIKE ? ESCAPE '\\'"
-)
+DOCS_UNDER_ROOT_SQL = "SELECT path_key, missing_since FROM documents WHERE path_key LIKE ? ESCAPE '\\'"
 
 
 @dataclass
@@ -476,11 +475,12 @@ def run_checks(db: Path, data_root: Path, *, walk: bool,
     alive = _app_running() if alive_check else (False, "注入模式：核的是临时副本，没有别的手在写它")
     conn = _ro(db)
     try:
-        rows = [c0_version(conn), c1_health(conn), c2_path_keys(conn)]
-        rows += c3_files_vs_db(conn, walk=walk)
-        rows += [c4_fts(conn), c5_pages(conn), c6_status_domains(conn), c7_vector_domain(conn),
-                 c8_op_domain(conn), c9_queue(conn, alive), c10_tree(conn),
-                 c11_backups(data_root), c12_page_range(conn), c13_root_keys(conn)]
+        rows = [timed(c0_version, conn), timed(c1_health, conn), timed(c2_path_keys, conn)]
+        rows += timed(c3_files_vs_db, conn, walk=walk)
+        rows += [timed(c4_fts, conn), timed(c5_pages, conn), timed(c6_status_domains, conn),
+                 timed(c7_vector_domain, conn), timed(c8_op_domain, conn), timed(c9_queue, conn, alive),
+                 timed(c10_tree, conn), timed(c11_backups, data_root), timed(c12_page_range, conn),
+                 timed(c13_root_keys, conn)]
     finally:
         conn.close()
     return rows
@@ -778,12 +778,13 @@ def main(argv: list[str] | None = None) -> int:
 
     for row in rows:
         print(row.render())
+    print("  逐条计时：" + breakdown(rows))
     bad = [r for r in rows if not r.ok and not r.unverified]
     skipped = [r for r in rows if r.unverified]
     if out:
         payload = {"data_root": str(data_root), "source": paths.source, "walk": not args.no_file_walk,
-                   "rows": [{"code": r.code, "label": r.label, "ok": r.ok,
-                            "unverified": r.unverified, "measured": r.measured} for r in rows]}
+                   "rows": [{"code": r.code, "label": r.label, "ok": r.ok, "ms": getattr(r, "ms", None),
+                             "unverified": r.unverified, "measured": r.measured} for r in rows]}
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  INFO 结果已写出 {out}")
