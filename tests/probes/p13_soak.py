@@ -561,6 +561,7 @@ def run(minutes: float, keep: bool) -> int:
     data_root, corpus = work / "data_root", work / "corpus"
     log(f"现场：{work}｜soak {soak:.0f}s｜采样 {SAMPLE_SECONDS}s｜投放每 {CHURN_EVERY:.0f}s")
     rows: list[Row] = []
+    _UNLINK_SKIPS["count"] = 0
     proc: subprocess.Popen[str] | None = None
     _prevent_sleep()
     try:
@@ -632,9 +633,13 @@ def run(minutes: float, keep: bool) -> int:
         RESULT.parent.mkdir(exist_ok=True)
         RESULT.write_text(json.dumps({"soak_seconds": soak, "samples": samples,
                                       "rows": [asdict(r) for r in rows], "backlog_peak": peak_open,
-                                      "churn_rounds": churned, "exit_code": rc},
+                                      "churn_rounds": churned,
+                                      "churn_unlink_skipped": _UNLINK_SKIPS["count"],
+                                      "exit_code": rc},
                                      ensure_ascii=False, indent=2), encoding="utf-8")
         log(f"读数已写：{RESULT}")
+        if _UNLINK_SKIPS["count"]:
+            log(f"churn 删除被占用跳过 {_UNLINK_SKIPS['count']} 次（每次最多 5 次重试、共约 1s）")
     finally:
         _allow_sleep()
         if proc and proc.poll() is None:
@@ -653,6 +658,24 @@ def run(minutes: float, keep: bool) -> int:
     return 0 if not red else 1
 
 
+_UNLINK_SKIPS = {"count": 0}
+
+
+def _unlink_retry(path: Path, attempts: int = 5, delay: float = 0.2) -> bool:
+    """应用可能正在读刚投放的样本：Windows 上会 WinError 32。
+    短暂重试仍被占用就跳过这一轮删除并计数；曾经没接这一手，探针自己崩掉了一整场 soak。"""
+    for i in range(attempts):
+        try:
+            path.unlink()
+            return True
+        except PermissionError:
+            if i + 1 == attempts:
+                _UNLINK_SKIPS["count"] += 1
+                return False
+            time.sleep(delay)
+    return False
+
+
 def _churn(corpus: Path, stamp: int) -> int:
     """投放变更：新增 / 覆盖 / 删除各若干 —— 三条代码路都要在长跑里反复被走。"""
     from conftest import _make_pdf
@@ -665,7 +688,7 @@ def _churn(corpus: Path, stamp: int) -> int:
     victim = sorted(churn.glob("soak_add_*.pdf"))
     if victim:
         _make_pdf(victim[0], pages=2, lines=[f"soak 投放第 {stamp} 轮被覆盖的那份正文"])
-        victim[-1].unlink()
+        _unlink_retry(victim[-1])
     return 1
 
 

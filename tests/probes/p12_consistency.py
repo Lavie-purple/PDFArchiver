@@ -3,7 +3,8 @@
 跑法：
     python tests/probes/p12_consistency.py                      # 查默认数据根（%LOCALAPPDATA%\\PdfArchiver）
     python tests/probes/p12_consistency.py --data-root <路径>    # 查指定数据根（比如冻结冒烟留下的现场）
-    python tests/probes/p12_consistency.py --inject             # 反向注入自检（只动临时目录里的副本）
+    python tests/probes/p12_consistency.py --inject             # 反向注入自检（注入段在 p12_inject.py）
+    python tests/probes/p12_consistency.py --c11-deep           # C11 对每份快照都跑整库体检（慢，逐份计时）
     python tests/probes/p12_consistency.py --no-file-walk       # 跳过盘上遍历 —— 整场会判 RED，见下面第 3 条
 
 三条规矩：
@@ -27,26 +28,24 @@
     C3  盘上文件 ↔ 库里主记录 双向对账       C9  无进程时队列里不许有 running 残留
     C4  正文表 ↔ 索引花名册 双向对账       C10 分类树父链可达、无环、name_path 一致
                                           （倒排幽灵免词测不到，见 c4_fts 说明）
-    C5  正文页自洽（字数/来源/OCR 版本）     C11 最新快照整库体检，其余快照开库读版本
+    C5  正文页自洽（字数/来源/OCR 版本）     C11 最新快照整库体检（--c11-deep 逐份）
     C12 正文页页码不超过库里记的页数         C13 监测根根键与 identity_key 同口径
 
 C7/C8 是反伪装用的：阶段 6 已交付（C7 换成真口径，见 `c7_vector_domain` 注释），阶段 4 已交付
 （C8 换成真口径，见 `c8_op_domain` 注释）。这两条在对应阶段真交付时同步改成了该阶段的口径。
 
 耗时提示：C3 要真走一遍目录树（真实语料 7,768 份/202 万页那次是分钟级），C11 的整库
-`integrity_check`（与库大小同量级）只跑最新一份快照，其余快照只开库读版本 —— 每次迁移都会多一份
-12GB 级快照，逐份体检会把真根核查从分钟级抬到小时级（**ISSUES I98**）。想快就先
-`--no-file-walk`，但那时它不算验过。
+`integrity_check`（与库大小同量级）默认只跑最新一份快照，其余快照只开库读版本 —— 每次迁移
+都会多一份 12GB 级快照，逐份体检会把真根核查从分钟级抬到小时级（**ISSUES I98**）；要逐份
+体检就显式加 `--c11-deep`（跑前先看快照份数）。想快就先 `--no-file-walk`，但那时它不算验过。
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import sqlite3
 import sys
-import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,11 +59,11 @@ from pdfarchiver.db.repositories.documents import SEARCHABLE_STATUSES  # noqa: E
 from pdfarchiver.db.repositories.jobs import KINDS, STATES  # noqa: E402
 from pdfarchiver.db.sqltext import like_prefix  # noqa: E402
 from pdfarchiver.fs.exclude import Exclusions  # noqa: E402
-from pdfarchiver.fs.identity import identity_key, normalize_path  # noqa: E402
+from pdfarchiver.fs.identity import identity_key  # noqa: E402
 from pdfarchiver.fs.scanner import KIND_ERROR, KIND_EXCLUDED, KIND_OTHER, KIND_PDF, iter_tree  # noqa: E402
 from pdfarchiver.parsing.classify import OCR_STATUSES, TEXT_STATUSES  # noqa: E402
 from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE  # noqa: E402
-from _timed import breakdown, timed  # noqa: E402 同级模块：逐条计时（p12 贴着 800 行线，见 _timed.py）
+from _timed import breakdown, timed  # noqa: E402 同级模块：逐条计时（见 _timed.py）
 
 REAL_MIGRATIONS = REPO / "src" / "pdfarchiver" / "db" / "migrations"
 
@@ -395,7 +394,7 @@ def c10_tree(conn: sqlite3.Connection) -> Row:
                + ("；".join(problems) if problems else "四项全部自洽"))
 
 
-def c11_backups(data_root: Path) -> Row:
+def c11_backups(data_root: Path, deep: bool = False) -> Row:
     # 目录口径必须问产品自己：快照住在 `<root>/data/backups`（`AppPaths.backups_dir`），
     # 不是 `<root>/backups`。第一版在这里写死了根目录，结果真冻结现场（快照明明有 3 份）
     # 被判成「一份快照都没有」的未验 —— 探针和数据根吵架，正是模块说明第 2 条要避免的事。
@@ -405,12 +404,13 @@ def c11_backups(data_root: Path) -> Row:
         return Row("C11", "最新快照整库体检，其余快照开库读版本", False,
                    "backups/ 里一份快照都没有 —— 从没跑过迁移就不会有，但交付时不能拿「没有」当「验过」",
                    unverified=True)
-    # ISSUES I98 乙：最新一份才是真正的回滚点，整库 _health 只跑它；其余快照仍要打开 + 读版本。
-    # 逐份 integrity_check 的代价随迁移次数线性增长（每迁移一次多一份 12GB 级快照）。
+    # ISSUES I98 乙：默认「最新一份才是真正的回滚点」只体检它，其余快照仍要打开 + 读版本；
+    # 逐份 integrity_check 的代价随迁移次数线性增长（每迁移一次多一份 12GB 级快照），
+    # 所以逐份体检是显式的 `--c11-deep`，不是默认行为。
     newest = max(snaps, key=lambda p: (p.stat().st_mtime_ns, p.name))
     bad: list[str] = []
     detail: list[str] = []
-    health = ""
+    checked: list[str] = []
     for snap in snaps:
         size = snap.stat().st_size
         if size == 0:
@@ -427,18 +427,27 @@ def c11_backups(data_root: Path) -> Row:
                 if conn.execute("SELECT count(*) FROM sqlite_master WHERE name='schema_version'"
                                 " AND type='table'").fetchone()[0] else 0
             detail.append(f"{snap.name} {round(size / 1024)}KiB@v{version}")
-            if snap == newest:
+            if deep or snap == newest:
+                t0 = time.perf_counter()
                 ok, measured = _health(conn, snap.name)
-                health = f"最新一份整库体检 {measured}"
+                checked.append(f"{snap.name} {round((time.perf_counter() - t0) * 1000)}ms")
                 if not ok:
                     bad.append(measured)
         except sqlite3.DatabaseError as exc:
             bad.append(f"{snap.name} 读不动：{type(exc).__name__}: {exc}")
         finally:
             conn.close()
-    scope = (f"整库体检只跑最新一份，其余 {len(snaps) - 1} 份仅开库读版本"
-             f"（旧快照内部损坏不在本口径内，ISSUES I98）")
-    return Row("C11", "最新快照整库体检，其余快照开库读版本", not bad,
+    if deep:
+        label = "全部快照整库体检（--c11-deep）"
+        scope = f"--c11-deep：整库体检跑了全部 {len(snaps)} 份"
+    else:
+        label = "最新快照整库体检，其余快照开库读版本"
+        scope = (f"整库体检只跑最新一份，其余 {len(snaps) - 1} 份仅开库读版本"
+                 f"（旧快照内部损坏不在本口径内，ISSUES I98；逐份体检加 --c11-deep）")
+    shown = _brief(checked, 8)
+    extra = "" if len(checked) <= 8 else f"（另有 {len(checked) - 8} 份未展开）"
+    health = f"整库体检 {len(checked)} 份：{shown}{extra}"
+    return Row("C11", label, not bad,
                f"快照 {len(snaps)} 份｜{_brief(detail, 4)}｜{health}｜{scope}"
                + ("" if not bad else " ── " + "；".join(bad)))
 
@@ -471,7 +480,7 @@ def c13_root_keys(conn: sqlite3.Connection) -> Row:
 
 
 def run_checks(db: Path, data_root: Path, *, walk: bool,
-               alive_check: bool = True) -> list[Row]:
+               alive_check: bool = True, c11_deep: bool = False) -> list[Row]:
     alive = _app_running() if alive_check else (False, "注入模式：核的是临时副本，没有别的手在写它")
     conn = _ro(db)
     try:
@@ -479,8 +488,8 @@ def run_checks(db: Path, data_root: Path, *, walk: bool,
         rows += timed(c3_files_vs_db, conn, walk=walk)
         rows += [timed(c4_fts, conn), timed(c5_pages, conn), timed(c6_status_domains, conn),
                  timed(c7_vector_domain, conn), timed(c8_op_domain, conn), timed(c9_queue, conn, alive),
-                 timed(c10_tree, conn), timed(c11_backups, data_root), timed(c12_page_range, conn),
-                 timed(c13_root_keys, conn)]
+                 timed(c10_tree, conn), timed(c11_backups, data_root, deep=c11_deep),
+                 timed(c12_page_range, conn), timed(c13_root_keys, conn)]
     finally:
         conn.close()
     return rows
@@ -504,244 +513,8 @@ def _app_running() -> tuple[bool, str]:
     return bool(hits), ", ".join(hits[:3])
 
 
-# —————————————————————————————————————————— 反向注入自检 ——————————————————————————————————————————
-#
-# 每条坏法都是"能骗过对应断言的写法"，逐条打进现场搭出来的临时数据根，看那一条会不会红。
-# 红 = 断言有约束力；不红 = 这条断言是摆设，按 AGENTS.md 直接删或改写。
-# C1 的坏法不单独注入：毁主库等于毁整个前提，而 C11 用的是同一个 _health()，那里注入就够。
-# C11 的「旧快照能打开但内部损坏」不是坏法，而是 I98 乙的口径边界：它必须保持绿，
-# 且 C11 的 measured 必须明写这件事 —— 由 inject_mode 末尾的 _c11_scope_case 单独守。
-
-INJECTIONS: list[tuple[str, str, str]] = [
-    ("C0", "库停在旧版本，迁移目录却已经更靠前",
-     "DELETE FROM schema_version; INSERT INTO schema_version(version, applied_at) VALUES(2, 1);"),
-    ("C2", "path_key 与 identity_key(path) 不再同口径",
-     "UPDATE documents SET path_key='h:/x/篡改.pdf' WHERE id=1;"),
-    ("C2", "把唯一索引去掉后直接写出重复 path_key",
-     "DROP INDEX ux_documents_path_key;"
-     " INSERT INTO documents(path, path_key, name, ext, size_bytes, mtime_ns, created_at, updated_at)"
-     " SELECT path, path_key, name, ext, size_bytes, mtime_ns, created_at, updated_at"
-     " FROM documents WHERE id=1;"),
-    ("C4", "delete 触发器的 rowid 列写错：花名册少一条、又多挂一条（正文与索引双向两张皮）",
-     "DROP TRIGGER tx_pages_ad;"
-     " CREATE TRIGGER tx_pages_ad AFTER DELETE ON text_pages BEGIN"
-     "  INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.doc_id, old.body);"
-     " END;"
-     " DELETE FROM text_pages WHERE doc_id=1 AND page_no=2;"),
-    ("C4", "正文行绕过触发器进库（等于少一条索引）",
-     "DROP TRIGGER tx_pages_ai;"
-     " INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
-     " VALUES(1, 40, 4, '漏索引', 1);"),
-    ("C5", "char_count 与正文字数分家",
-     "UPDATE text_pages SET char_count=99999 WHERE doc_id=1 AND page_no=1;"),
-    ("C5", "OCR 正文丢了版本号",
-     "UPDATE text_pages SET ocr_version=NULL WHERE doc_id=2 AND page_no=1;"),
-    # ISSUES I90 乙：char_count 写成真实 Python len(3)，所以「字数分家」不红，只有新加的 NUL 子检查红。
-    ("C5", "正文夹着 U+0000（字数没写错，但 SQL 侧 length/substr 遇 NUL 即截断，入库前该剥掉）",
-     "INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
-     " VALUES(1, 3, 3, 'A' || char(0) || 'B', 1);"),
-    ("C6", "text_status 写成库里根本没有的值",
-     "UPDATE documents SET text_status='no_text' WHERE id=1;"),
-    ("C6", "队列 state 写成口径外的值",
-     "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'in-flight', 1);"),
-    ("C7", "向量状态写成口径外的值（产品里没人推进它，非 na 只可能是测试夹具或手工写入）",
-     "UPDATE documents SET vector_status='vectorized' WHERE id=1;"),
-    ("C8", "file_operations.status 写成口径外的值",
-     "INSERT INTO file_operations(kind, status, created_at) VALUES('move', 'cancelled', 1);"),
-    ("C9", "没有进程却留着一条 running",
-     "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'running', 1);"),
-    ("C10", "分类 name_path 与父链不一致",
-     "UPDATE categories SET name_path='胡说' WHERE parent_id IS NOT NULL;"),
-    ("C11", "最新快照能打开、版本读得动，但整库结构坏了（体检那条路必须红）",
-     "__corrupt_newest_internals__"),
-    ("C11", "最新快照被写成打不开的样子",
-     "__corrupt_backup__"),
-    ("C11", "旧快照被写成打不开的样子（每份仍要开库读版本）",
-     "__corrupt_old_backup__"),
-    ("C12", "库里记的页数比实际入库页码还小",
-     "UPDATE documents SET page_count=1 WHERE id=1;"),
-    # ISSUES I89 丙：首字母大写 → identity_key(root_key) 对不上，C13 必须点名。
-    # 只翻 C13 不翻 C3：C3 的子树 LIKE 对 ASCII 大小写不敏感，故 `C:/…/%` 仍命中 `c:/…` 的 path_key。
-    ("C13", "监测根根键写成原生 Windows 大小写（子树查询按 identity_key 前缀会认不出）",
-     "UPDATE monitored_roots SET root_key = upper(substr(root_key,1,1)) || substr(root_key,2);"),
-    ("C3", "盘上多出一份 PDF 而库里没有（漏索引）",
-     "__add_file_on_disk__"),
-    ("C3", "文件从盘上没了而库里没标缺失",
-     "__delete_file_on_disk__"),
-]
-
-
-def _fixture(root: Path) -> Path:
-    """现场搭一个小数据根：真迁移 + 真默认分类 + 3 份 PDF（两份有正文，一份 OCR 正文）。"""
-    from pdfarchiver.db.engine import Engine
-    from pdfarchiver.db.migrate import migrate
-    from pdfarchiver.db.repositories.catalog import CatalogRepository
-    from pdfarchiver.db.repositories.settings import SettingsRepository
-    from pdfarchiver.services.default_catalog import seed_default_categories
-
-    corpus = root / "corpus"
-    corpus.mkdir(parents=True, exist_ok=True)
-    data_root = root / "data_root"
-    for i in range(1, 4):
-        (corpus / f"报告{i}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-
-    engine = Engine(data_root / "data" / "catalog.db")
-    # 快照目录按产品口径给（`<root>/data/backups`），fixture 与 c11_backups 用同一个来源
-    backups = AppPaths.resolve(data_root).backups_dir
-    migrate(engine, backup_dir=backups)
-    seed_default_categories(CatalogRepository(engine), SettingsRepository(engine))
-    conn = engine.connect()
-    conn.execute("INSERT INTO monitored_roots(root_path, root_key, label, enabled, exclude_globs,"
-                 " created_at, updated_at) VALUES(?,?,?,1,'[]',1,1)",
-                 (normalize_path(corpus), identity_key(corpus), "注入语料"))
-    for i in range(1, 4):
-        path = normalize_path(corpus / f"报告{i}.pdf")
-        conn.execute(
-            "INSERT INTO documents(path, path_key, name, ext, size_bytes, mtime_ns, page_count,"
-            " parse_status, text_status, fts_status, ocr_status, vector_status, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,1,3,'ok','native','done','na','na',1,1)",
-            (path, identity_key(path), f"报告{i}.pdf", "pdf", 13))
-    conn.execute("INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
-                 " VALUES(1, 1, 6, '人工智能报告', 1)")
-    conn.execute("INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
-                 " VALUES(1, 2, 4, '产业趋势', 2)")
-    conn.execute("INSERT INTO text_pages(doc_id, page_no, source_kind, char_count, body, indexed_at,"
-                 " ocr_version) VALUES(2, 1, 'ocr', 5, '扫描件文字', 1, 'probe-v1')")
-    conn.commit()
-    conn.close()
-    engine.snapshot_to(backups / "fixture-snapshot.db")
-    engine.close_thread_connection()
-    return data_root
-
-
-def _break_rootpage(db: Path) -> None:
-    """让库仍能打开、schema_version 仍读得动，但 integrity_check 必报错：
-    把 documents 的根页指到 categories 的根页（同一页被两处引用）。"""
-    conn = sqlite3.connect(str(db))
-    try:
-        donor = conn.execute("SELECT rootpage FROM sqlite_master"
-                             " WHERE type='table' AND name='categories'").fetchone()[0]
-        conn.execute("PRAGMA writable_schema=ON")
-        conn.execute("UPDATE sqlite_master SET rootpage=? WHERE type='table' AND name='documents'",
-                     (donor,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _apply(name: str, sql: str, data_root: Path) -> str:
-    """把一条坏法打进副本。需要动文件系统的坏法在这里处理，返回注入说明。"""
-    corpus = data_root.parent / "corpus"
-    if sql == "__corrupt_backup__":
-        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                     key=lambda p: (p.stat().st_mtime_ns, p.name))
-        victim.write_bytes(b"this is not a sqlite database at all" * 40)
-        return f"（把最新快照 {victim.name} 写成非 sqlite 内容）"
-    if sql == "__corrupt_newest_internals__":
-        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                     key=lambda p: (p.stat().st_mtime_ns, p.name))
-        _break_rootpage(victim)
-        return f"（把 {victim.name} 的 documents 根页指到 categories，库仍能打开）"
-    if sql == "__corrupt_old_backup__":
-        ordered = sorted(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                         key=lambda p: (p.stat().st_mtime_ns, p.name))
-        victim = ordered[-2]  # 最新一份（fixture-snapshot.db）不动，只毁次新
-        victim.write_bytes(b"this is not a sqlite database at all" * 40)
-        return f"（把旧快照 {victim.name} 写成非 sqlite 内容，最新一份不动）"
-    if sql == "__add_file_on_disk__":
-        (corpus / "漏索引新文件.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-        return "（盘上新增一份 PDF，库里没有）"
-    if sql == "__delete_file_on_disk__":
-        (corpus / "报告3.pdf").unlink()
-        return "（删掉盘上一份文件，而库里那条 missing_since 仍为 NULL）"
-    conn = sqlite3.connect(str(data_root / "data" / "catalog.db"))
-    try:
-        conn.executescript(sql)
-        conn.commit()
-    finally:
-        conn.close()
-    return ""
-
-
-def _by_code(rows: list[Row]) -> dict[str, list[Row]]:
-    out: dict[str, list[Row]] = {}
-    for row in rows:
-        out.setdefault(row.code.split("·")[0], []).append(row)
-    return out
-
-
-def _c11_scope_case(root: Path) -> tuple[bool, str]:
-    """I98 乙的口径边界：旧快照「能打开但内部损坏」不再整库体检（成本封顶的代价）。
-    要求 C11 绿的同时明写这件事 —— 删掉那句披露，这一条就红。"""
-    data_root = _fixture(root)
-    backups = AppPaths.resolve(data_root).backups_dir
-    newest = max(backups.glob("*.db"), key=lambda p: (p.stat().st_mtime_ns, p.name))
-    old = backups / "older-snapshot.db"
-    old.write_bytes(newest.read_bytes())
-    _break_rootpage(old)
-    # 必须放在 _break_rootpage 之后：写库会把 mtime 刷成现在，否则它会被当成「最新一份」
-    stamp = newest.stat().st_mtime - 60
-    os.utime(old, (stamp, stamp))
-    conn = _ro(old)
-    try:
-        damaged, _ = _health(conn, old.name)
-    finally:
-        conn.close()
-    row = c11_backups(data_root)
-    disclosed = "仅开库读版本" in row.measured and "I98" in row.measured
-    ok = row.ok and damaged is False and disclosed
-    return ok, (f"旧快照 integrity_check={'红' if damaged is False else '绿（注入没生效）'}"
-                f"｜C11={'绿' if row.ok else '红'}｜明写={disclosed}")
-
-
-def inject_mode(out: Path | None) -> int:
-    work = Path(tempfile.mkdtemp(prefix="p12_inject_"))
-    caught: list[str] = []
-    missed: list[str] = []
-    try:
-        base = _fixture(work / "baseline")
-        baseline = run_checks(base / "data" / "catalog.db", base, walk=True, alive_check=False)
-        print("  基线（干净数据根）：" + " ".join(f"{r.code}{r.mark}" for r in baseline))
-        dirty = [r for r in baseline if not r.ok and not r.unverified]
-        if dirty:
-            print("  基线本身就不干净，注入判定全部作废："
-                  + "；".join(f"{r.code} {r.measured}" for r in dirty))
-            return 1
-        for idx, (code, name, sql) in enumerate(INJECTIONS, start=1):
-            case_root = work / f"case{idx}"
-            data_root = _fixture(case_root)
-            note = _apply(name, sql, data_root)
-            rows = _by_code(run_checks(data_root / "data" / "catalog.db", data_root,
-                                       walk=True, alive_check=False))
-            hit = [r for r in rows.get(code, []) if not r.ok]
-            (caught if hit else missed).append(f"{code} ← {name}")
-            print(f"  {'抓到' if hit else '漏了'}  {code} ← {name} {note}")
-            if not hit:
-                print("        注入后该条仍是："
-                      + _brief([r.measured for r in rows.get(code, [])] or ["（这条根本没跑）"]))
-        scope_ok, scope_note = _c11_scope_case(work / "scope")
-        print(f"  {'明写' if scope_ok else '漏写'}  口径边界 ← 旧快照内部损坏不做整库体检 "
-              f"{scope_note}")
-        total = len(INJECTIONS)
-        print(f"\n  注入自检：抓到 {len(caught)}/{total} 条坏法｜"
-              f"口径边界 {1 if scope_ok else 0}/1 明写")
-        if missed:
-            print("  没抓到的断言（没有约束力，该删或改写）：" + "；".join(missed))
-        if not scope_ok:
-            print("  口径边界没明写：旧快照内部损坏会静默漏检 —— 必须把这条写进 C11 的 measured")
-        if out:
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps({"caught": caught, "missed": missed, "total": total,
-                                       "c11_scope_disclosed": scope_ok},
-                                      ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"  INFO 结果已写出 {out}")
-        print("VERDICT: " + (f"ALL GREEN（{len(caught)}/{total} + 口径边界 1/1）"
-                             if not missed and caught and scope_ok
-                             else f"RED（漏了 {len(missed)} 条坏法"
-                                  + ("" if scope_ok else "，口径边界没明写") + "）"))
-        return 0 if not missed and caught and scope_ok else 1
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+# 反向注入自检（夹具 + 21 条坏法 + C11 口径边界）拆到同级的 p12_inject.py：
+# `main()` 里延迟导入，顶层不反向依赖（否则两个模块成环）。
 
 
 # ——————————————————————————————————————————————— 主流程 ———————————————————————————————————————————————
@@ -751,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--data-root", default=None, help="要核查的数据根（默认按产品口径解析）")
     ap.add_argument("--out", default=None, help="把结果写成 JSON")
     ap.add_argument("--inject", action="store_true", help="反向注入自检（只动临时目录里的副本）")
+    ap.add_argument("--c11-deep", action="store_true",
+                    help="C11 对每份快照都跑整库体检（慢；默认只体检最新一份）")
     ap.add_argument("--no-file-walk", action="store_true",
                     help="跳过盘上遍历；该条会显式判为未验，整场门禁随之变红")
     args = ap.parse_args(argv)
@@ -759,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(args.out) if args.out else None
     if args.inject:
+        from p12_inject import inject_mode  # noqa: PLC0415 拆出模块：注入段独立成 p12_inject.py
         return inject_mode(out)
 
     paths = AppPaths.resolve(args.data_root)
@@ -769,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         print("VERDICT: RED（1 条未过）")
         return 1
     try:
-        rows = run_checks(db, data_root, walk=not args.no_file_walk)
+        rows = run_checks(db, data_root, walk=not args.no_file_walk, c11_deep=args.c11_deep)
     except sqlite3.DatabaseError as exc:
         print(f"  红  只读方式打不开库：{type(exc).__name__}: {exc}")
         print("        应用正在跑时 WAL 可能要恢复，只读打不开 —— 关闭应用后重跑；探针不改库")

@@ -6,6 +6,64 @@
 
 ---
 
+## 勾选轮（二十）—— 2026-10-24 · **24 小时 soak 按用户选择缩到 12 小时并跑满**（9/9 全绿）/ p12 增 `--c11-deep` / consistency·injection 跨轮 A/B / I17 十屏核对包；途中逮到并修掉 I106（探针 churn 撞 Windows 文件锁）
+
+用户原要求 24 小时连续 soak。前两场分别在本机外部重启（13h40m）与探针自身的删除动作撞上
+Windows 文件锁（17h05m）处被切断；第二场是**探针缺陷**，不是产品故障，修掉后按用户勾选
+②「缩到 12h 并如实写明边界」，第三场按 12 小时跑满。本轮文档统一写「**12 小时已验、24 小时未验**」。
+
+- **A · 12 小时连续 soak（`--minutes 720`）** —— **9/9 全绿、0 红**：采样 **21,067 点｜跨度 43,201.2s｜
+  最大采样空洞 2.6s**、churn **2,880 轮**、`churn_unlink_skipped=0`。S1 rc=0；S2 `crash.log 0 字节 /
+  Traceback 0`；S3 **12→12**（峰 17）；S4 **321→321**（峰 323）；S5 **75.3 → 75.6MiB（+0.3）**、
+  中位 **76.4**、全程 3.0–120.6、G8 余量 1,079.4；S6 **峰值 17 / 排空 7.1s / `{'done': 12711}`**；
+  S7 **5810/5810**（已标缺失 1,110）；S8 **2 份 / 3,546KiB / 当前 7,032 行**；S9 p12 14 条 0 红、未验 0
+  （`.probe_work/round20_soak_720min_r1.log` / `p13_soak_result_720min_r1.json` / `round20_soak_720min_app.log` /
+  `round20_soak_720min_state.log`）。`state.log`：`startup.begin` 2026-10-23T08:58:35Z → `shutdown`
+  2026-10-23T20:59:53Z（43,201.2s）。
+- **A′ · 两场 24 小时未跑满（如实留档）** —— 第一场 **05:31:45 → 19:11:39（57%）**：被
+  `optionalfeatures.exe` / `winlogon` 发起的外部重启切断，应用 `app.log` 到 19:11:39 仍在正常索引、
+  无 Traceback。第二场 **19:21:59 → 12:27:07（71.2%，17h05m）**：探针 `_churn` 删除刚投放的
+  `soak_add_61500_2.pdf` 时撞上应用正在读该文件，Windows `PermissionError [WinError 32]` 冒到 `main()`
+  把整场切断；产品侧 `app.log` 正常写到 12:27:07、无 Traceback、`crash.log` 不存在
+  （**ISSUES I106**，已 CLOSED）。第三场 24h 在 **4h28m**（12:28:46 → 16:57:00）按用户 ② 主动中止，
+  读数作废、现场保留。
+- **B · I106 修复 · churn 删除走 `_unlink_retry`** —— `tests/probes/p13_soak.py` 新增
+  `_unlink_retry(path, attempts=5, delay=0.2)`：5 次 ×0.2s 重试仍失败就**跳过并计数**，不再让
+  `PermissionError` 冒到 `main()`；结果 JSON/打印新增 `churn_unlink_skipped`。复现验证 held-open
+  0.4s（3 次）→ 跳过、after-close → 成功、released-mid-retry → 成功
+  （`.probe_work/r20_unlink_repro.log`）。12 小时场 `churn_unlink_skipped=0`。
+- **C · p12 增 `--c11-deep`（全部快照整库体检）** —— 默认口径不变：只对**最新**快照跑整库体检，
+  其余快照仅开库读版本（I98 乙边界）。新开关让每份快照都跑 `integrity_check` + 外键 + 空值检查；
+  夹具 10 份快照、故意损坏 `older-snapshot.db`：默认 **C11 绿**（按口径不展开旧快照），
+  `--c11-deep` **红并点名** `older-snapshot.db：integrity_check=*** in database main *** /
+  2nd reference to page 9 / Page 3 is never used / NULL value in documents.path_key`，
+  7 条自检 **VERDICT: ALL GREEN**（`.probe_work/r20_p12_deep_e2e.log`）。p12 主体拆出
+  `p12_inject.py`，主文件从 800 行降到 576 行。
+- **D · consistency / injection 跨轮快慢 A/B** —— 同一台机背靠背、顺序跑、不并行：injection
+  **A 852.0s / B 867.5s（+1.8%）**；九条探针单条最大差 +10.6%。与轮十八整链的 **674.2s** 相比，
+  九条**一起**慢到 **1.18–1.43x（均值 1.28x）**，没有一条单独变慢 —— 结论是**整机档位**
+  （负载 / 内存压缩 / 夜间频率），不是探针代码变化（`.probe_work/r20_inject_ab_summary.txt`）。
+- **E · I17 十屏核对包** —— 用轮十九的真桌面 10 张（1400×880，含暗色）拼 `contact_sheet.png`，
+  另出 `I17_CHECKLIST.md`（逐屏「看什么 / 过 / 不过 / 备注」）。**UI 代码零改动，故未重拍**；
+  这仍是**给你本人勾选**的材料，I17 不因此关闭（`.probe_work/screens_r18/`）。
+- **F · 真根漂移补账 + p12 真根复跑 19/19** —— 先做只读漂移速查（6 个监测根、约 22 分钟）：
+  C/E/F/G 零漂移；**D 根盘上 91 / 库内 90**（漏索引 2 份微信 PDF + 1 条约 341 页的 PDF 已被**跨盘
+  移到 H 根**、旧记录没打缺失戳）；**H 根盘上 1857 / 库内 1856**（就是那份被移过来的 PDF；跨盘复制
+  换了 inode，`_adopt_renamed` 认不出）。全部走产品路径：`scan.reconcile_path` × 3 建记录并抽正文
+  （doc **10992** 29 页 / **10993** 7 页 / **10994** 341 页、入库 338 页），`mark_missing` 给 doc 93
+  打戳。收尾库读数：**documents 10,991｜text_pages 1,975,611｜空正文 0｜待办 0**。p12 真根复跑
+  **19/19 全绿、未验 0**（05:30:41 → 06:43:39，4,378s）：C2 10,991；C3 六根 **68 / 91（标缺失 1）/
+  1967 / 5352 / 1655 / 1857** 各相等；C4 **1,975,611 / 1,975,611、漏 0 / 残留 0**；C5 1,975,611 页
+  六项自洽；C9 running 0（done 10,941 / failed 75）；C11 最新快照 11,686,936KiB@v7 整库体检
+  **939,804ms**、ok；C12 超页 0（`.probe_work/p12_real_root_r20.log` / `.json`）。
+  **计时口径**：C3 六行共享同一段函数耗时 **975,995ms**，不是六段相加。
+- **G · 回归 / 门禁 / 文档** —— 全量回归 **789 passed / 1 skipped / 0 failed / 0 error（285.82s，最终树）**；
+  `docs-inject + guards` **9 条 ALL GREEN、本次未跑 10 段**（`.probe_work/round20_regression_final.log` /
+  `round20_docs_guards.log` / `round20_docs_guards_final.log`）；台账 **106 行｜I1–I106 连续｜CLOSED 85｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜
+  结构不合格 1 行（上限 1）：I35**，本轮 **I106 CLOSED**。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜
+  临近线 5 份`，最紧 `p13_soak.py` **794（余 6）**（p12 拆出 `p12_inject.py` 后从 800 降到 576，
+  `p12_consistency.py` 不再是临近项）。
+
 ## 勾选轮（十九）—— 2026-10-22 · **三笔欠账收口**：2 小时 soak（I32 销账）/ G2 90s 重试分支三向真触发 / 真桌面 10 张截图；途中逮到并修掉 I104、I105 两条真缺陷
 
 用户把「30 分钟 soak 上限（I32）、G2 重试分支未真触发、真机证据仍为自动断言」三笔勾成「均根据你推荐来」。
