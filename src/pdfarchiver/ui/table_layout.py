@@ -60,11 +60,17 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
     """
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
+    # 单行行高 + `ElideRight` 的组合下，Qt 对「反斜杠 + CJK 混排的整段不可断词」会把
+    # 260px 的单元格画成 `C…`（**ISSUES I107**：S3 计划表三行目标路径全中，实测
+    # `C:\Users\lavie\AppData\Local\Temp…` 只剩一个字符；同一单元格换成正斜杠串就正常，
+    # 关掉自动换行也恢复正常）。全站 8 张表都是单行行高，没有一张用得上换行 ——
+    # 一律关掉，别等下一张带反斜杠路径的表再踩一次。
+    table.setWordWrap(False)
     # 行号列没人要过，但 Qt 会自动长出来，而且**宽度随行号位数变**（2026-10-17 现测：
     # 空表 0 / 2 行 38 / 40 行 51）—— 于是同一张表"可用视口"不是一个数，I48 那套列宽
-    # 反算的分母里根本没有它。全站 8 张表里 7 张经这里，所以一处 `hide()` 修掉 7 张，
-    # 判重页那张自己配表头、单独 hide（`pages/dedup_page.py`）；
-    # 守卫 `tests/integration/test_ui_tier.py` 逐屏扫全部 8 张，第 9 张漏掉会红（ISSUES I54）。
+    # 反算的分母里根本没有它。判重页自 I61 起也走这里（它原先自己配表头），所以一处
+    # `hide()` 覆盖全站 8 张；守卫 `tests/integration/test_ui_tier.py` 逐屏扫全部 8 张，
+    # 第 9 张漏掉会红（ISSUES I54）。
     table.verticalHeader().hide()
     for col, width in widths.items():
         header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Interactive)

@@ -279,6 +279,38 @@ def test_每张表都不许带行号列(window, ctx, qapp) -> None:
     assert seen == 8, f"全站该扫到 8 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了，重数一遍再改注释"
 
 
+def test_每张表都是单行行高_不许开自动换行(window, ctx, qapp) -> None:
+    """**ISSUES I107**：`wordWrap` 开着时，Qt 把「反斜杠 + CJK 混排」的长路径画成 `C…`。
+
+    真桌面实测（2026-10-24，S3 计划表）：同一格 260px、文本 98 字符，`ElideRight` 下整行只剩
+    一个字符加省略号；同一格换成正斜杠串立刻正常，`setWordWrap(False)` 后也恢复正常
+    （对照图 `.probe_work/_plan_repro_full.png` / `_plan_nowrap.png`）。离屏平台不复现这条
+    绘制差异（CJK 字形本就缺），所以这里钉的是**开关**：8 张表一律 `wordWrap() is False`。
+
+    坏法注入（2026-10-24 真跑过）：删掉 `table_layout.set_table_columns()` 里那行
+    `setWordWrap(False)` → 这里 8 张表逐张红并点名；还原后绿。
+    """
+    seen = 0
+    for item in NAV_ITEMS:
+        if not item.implemented:
+            continue
+        window._select_by_page_id(item.page_id)
+        _settle(qapp)
+        page = window._pages[item.page_id]
+        assert page.isVisible(), f"用例前提：{item.page_id} 得是当前可见页，否则扫不到表"
+        reload = getattr(page, "reload", None)
+        if callable(reload):
+            reload()
+            _settle(qapp)
+        for table in page.findChildren(QtWidgets.QTableWidget):
+            seen += 1
+            assert not table.wordWrap(), (
+                f"{item.page_id} 的表（{table.objectName() or '未命名'}）开着自动换行 —— "
+                "单行行高 + ElideRight 会把反斜杠 CJK 路径画成 `C…`（ISSUES I107）；"
+                "经 `set_table_columns()` 建的表都该被那一行关掉")
+    assert seen == 8, f"全站该扫到 8 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了"
+
+
 def test_视口宽度只随滚动条变不随行的位数变(window, ctx, qapp) -> None:
     """I48 那套列宽反算的分母必须是个**定值**，否则"装不装得下"随数据量漂。
 

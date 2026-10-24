@@ -6,6 +6,49 @@
 
 ---
 
+## 修复轮（二十一）—— 2026-10-24 · I17 逐屏核对逮到 **I107**（表格把「反斜杠 + CJK」路径画成 `C…`）并全站修掉；十屏重拍、清单措辞按实现改
+
+轮二十把十屏交给用户勾选。交出去之前我自己逐屏过了一遍，08（S3 归档预览）的「目标路径」三行
+全部只剩一个 `C…` —— 用户根本看不出这份文件会被搬到哪。同一次核对还发现 07 / 09 两屏的
+**清单措辞与实现不一致**（备份表没有「大小」列、批次表没有时间列），05 的两块任务读数在状态框
+的滚动线以下。本轮把真缺陷修掉、把清单改成对着截图能逐字核对的措辞。
+
+- **A · 复现与定位（四个对照）** —— 用产品路径复现（`bootstrap` → `MainWindow` →
+  `archive._load_documents()` → 勾 3 份 → `_generate_preview()`），不改数据、不另写渲染：
+  同一张计划表里 `C:\Users\lavie\AppData\Local\Temp…` 画成 `C…`，而 `C:/Users/...` 正斜杠串
+  正常；`setWordWrap(False)` 与 `ElideMiddle` 两种改法都恢复；单元格宽度 260px、文本长度
+  99/103 字符均正常写进模型。结论：**单行行高 + `ElideRight` 对「反斜杠 + CJK 混排的整段
+  不可断词」会退化成只画首字符**，不是列宽或取数问题（`.probe_work/_plan_repro_full.png` /
+  `_plan_nowrap.png` / `_plan_elidemid.png` / `_plan_slashes.png` / `_plan_mix.png`）。
+- **B · 修复（一处中心改动）** —— `ui/table_layout.py::set_table_columns()` 加
+  `table.setWordWrap(False)`，覆盖全站 8 张表（archive 2 / backup 2 / library 1 /
+  operations 2 / dedup 1）。8 张表都是单行行高，没有一张靠换行表达内容。
+- **C · 守卫与坏法** —— `tests/integration/test_ui_tier.py` 新增
+  `test_每张表都是单行行高_不许开自动换行`：逐屏切页、`reload()`、`findChildren(QTableWidget)`
+  后断言 `wordWrap() is False` 且扫到 **8** 张。**坏法真注入**（注释掉那行）→ `1 failed`，
+  点名 `test_ui_tier.py:307` 与具体页面；还原后 **21 passed**。离屏平台**不复现**这条绘制
+  退化（无 CJK 字形，wrap True/False 的 ink 宽都是 248px），所以守卫钉的是开关位，绘制结果
+  由真桌面截图复核 —— 这一半写进 docstring，不冒充。
+- **D · 十屏重拍 + 拼图 + 清单** —— `.probe_work/r18_screens_real.py` 原样重跑（真 windows
+  平台、`%TEMP%` 合成语料、10 张 1400×880）：`report.json` **14 项 ALL GREEN**，10 张非空且
+  互不相同；08 的目标路径读作 `C:\Users\lavie\AppData\Local\Temp…`。`contact_sheet.png` 按新
+  md5 重建。`I17_CHECKLIST.md` 改为可逐字核对的措辞：05 明写两块任务读数**要在状态框内向下滚动**；
+  07 改成「文件名 / 版本 / 修改时间」（无大小列）；08 明写目标路径修前是 `C…`、修后是什么；
+  09 改成「ID / 类型 / 状态 / 总数 / 完成 / 失败」并写明**详情表要先点中批次**；另注明
+  01/02/10 的横向滚动条是 I48/I61 的定宽口径。
+- **E · 新开 I108（等勾选，不动代码）** —— 09 的「操作项详情」在未选中批次时是一张没有任何
+  提示的空表。甲＝加一行「先点一条批次」的空态文案；乙＝`reload()` 后默认选中最新一条。
+  两种都要过界面确认。
+- **F · 回归 / 门禁 / 台账** —— 全量回归 **790 passed / 1 skipped / 0 failed（289.17s）**；
+  `docs-inject + guards` **9 条 ALL GREEN（本次未跑 10 段）**；台账 **108 行｜I1–I108 连续｜
+  CLOSED 86｜MITIGATED 20｜OPEN 1｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，本轮 **I107
+  CLOSED**、**I108 OPEN**。文件长度：`213 个 .py / 31 个 .md｜临近线 6 份`，`test_ui_tier.py`
+  711（余 89）新进临近表；`p13_soak.py` 仍是最紧的 **794（余 6）**。
+
+**I17 仍未 CLOSED**：十屏要用户本人逐屏打勾；自动断言与我自己的看图都不能替代。
+
+---
+
 ## 勾选轮（二十）—— 2026-10-24 · **24 小时 soak 按用户选择缩到 12 小时并跑满**（9/9 全绿）/ p12 增 `--c11-deep` / consistency·injection 跨轮 A/B / I17 十屏核对包；途中逮到并修掉 I106（探针 churn 撞 Windows 文件锁）
 
 用户原要求 24 小时连续 soak。前两场分别在本机外部重启（13h40m）与探针自身的删除动作撞上

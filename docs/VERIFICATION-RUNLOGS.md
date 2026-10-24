@@ -1026,3 +1026,29 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 > 本册 +30、CHANGELOG +58、ISSUES +1，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（十九）按 §4.29 保留为历史、不动）。
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段的「回归 / 门禁 / 台账 / 文件长度」。
 > 现册里带 `**本册末行现数**` 标题的块共 **11 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八）／（十九））+ 本轮这块**活的**。
+
+### 4.31 修复轮（二十一）收尾读数（2026-10-24 07:13 → 14:15，销账 **I107**，新开 **I108**）
+
+**起止（墙钟）**：上一 commit `b1fb6dc` **2026-10-24 07:13:36** → 本块落笔并提交 **≈14:15** = **约 7.0 h**。其中 I107 的复现 → 修复 → 守卫 → 重拍 → 收尾集中在 **13:55–14:15（≈0.35 h）**；上半日是 I17 十屏逐屏核对 + 用户问答（含等用户回话的间隔，未逐段计时，不折算成"有效工时"）。会话日志（本环境 `usage.*` 恒 0，只能拿体积当代理）：**292,579,207 B｜93,406 行**（轮二十基线 288,790,076 B / 92,341 行 ⇒ **+3,789,131 B｜+1,065 行**；14:13 取数）。
+
+**A · I107 复现与定位（S3 计划表目标路径画成 `C…`）**：轮二十 I17 逐屏核对在 `r18_08_archive_preview.png` 上读到三行目标路径都只有一个 `C…`。用产品路径复现（`bootstrap` → `MainWindow` → `archive._load_documents()` → 勾 3 份 → `_generate_preview()`，模型里 `len(dst_path)` 正常是 99/103/99），四组对照：`_plan_repro_full.png` 原样复现 `C…`；`_plan_nowrap.png`（`setWordWrap(False)`）恢复；`_plan_elidemid.png`（`ElideMiddle`）恢复；`_plan_slashes.png`（同一单元格换成正斜杠串）原来就正常。**定位**：单行行高 + `ElideRight` 对「反斜杠 + CJK 混排的整段不可断词」把 260px 单元格画成首字符；**不是**列宽、不是取数。**离屏不复现**：`_plan_mix.png` 的 ink 宽在 wrap True/False 下都是 248px（离屏无 CJK 字形），所以这条退化只能在真桌面看。
+
+**B · 修复（一处中心改动覆盖 8 张表）**：`ui/table_layout.py::set_table_columns()` 在 `setStretchLastSection(False)` 之后加 `table.setWordWrap(False)`。全站 8 张表（archive 2 / backup 2 / library 1 / operations 2 / dedup 1）都经这里，且都是单行行高。顺带把同一段注释里「判重页自己配表头」的旧话改准（I61 之后它也走这里）。
+
+**C · 守卫 + 坏法注入**：`tests/integration/test_ui_tier.py::test_每张表都是单行行高_不许开自动换行` 逐屏 `_select_by_page_id` → `reload()` → `findChildren(QTableWidget)`，断言每张表 `wordWrap()` 为假并扫到 **8** 张。**坏法真注入**（把那行注释掉）→ **1 failed**，断言点名 `test_ui_tier.py:307` 与具体页面；还原后 `test_ui_tier.py` **21 passed / 5.06s**（文件 sha256 与备份一致，已核对）。**边界**：离屏画不出这条退化，守卫钉的是**开关位**；绘制结果仍由真桌面截图复核，docstring 里写明。
+
+**D · 十屏重拍 + contact sheet + 清单措辞**：`.probe_work/r18_screens_real.py` 原样重跑（真 windows 平台、`%TEMP%` 合成语料、1400×880、DPR 1.5 ⇒ PNG 2100×1320）：`report.json` **14 项 ALL GREEN**、10 张非空且互不相同（`ten_shots_nonblank_and_distinct` PASS）；08 目标路径读作 `C:\Users\lavie\AppData\Local\Temp…`。`contact_sheet.png` 按新 md5 重建（2032×4432，带 14 项断言清单与 I107 前后对照）。`I17_CHECKLIST.md` 按实现改四处：05 明写「默认分类写入结果」「扫描与索引任务」两块**在状态框内要向下滚动**；07 三列改为「文件名 / 版本 / 修改时间」（无大小列）；08 写明修前 `C…`、修后读到什么；09 改为「ID / 类型 / 状态 / 总数 / 完成 / 失败」并写明详情表**要先点中批次**；另注明 01/02/10 的横向滚动条是 I48/I61 的定宽口径。**I17 仍未 CLOSED**：需要用户本人逐屏打勾。
+
+**E · 新开 I108（OPEN，等勾选）**：09 的「操作项详情」在未选中批次时是一张没有任何提示的空表 —— 批次表有 1 行、`done`、完成 3，下面什么都没有。甲＝未选中时显示一行「先点一条批次」；乙＝`reload()` 后默认选中最新一条。`operations_page.py` 的 `reload()` 不设默认选中、`_on_op_selected()` 在 `currentRow() < 0` 时只 `setRowCount(0)`，代码与截图一致（只读核对，未改）。
+
+**F · 回归 / 门禁 / 台账 / 文件长度**：全量回归 **790 passed, 1 skipped, 0 failed / 289.17s**（轮二十基线 789，+1 是 C 段那条新守卫；`.probe_work/r21_regression.log`）。`docs-inject + guards` **9 条 ALL GREEN、本次未跑 10 段**（`.probe_work/r21_docs_guards.log`）；其中「台账里失效的测试名」现数 **6 处 / 上限 6**（未涨）。台账 **108 行｜I1–I108 连续｜CLOSED 86｜MITIGATED 20｜OPEN 1｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，本轮 **I107 CLOSED**、**I108 OPEN**。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜临近线（余量 ≤100 行）6 份` —— `p13_soak.py 794（余 6）`、`test_job_queue.py 766（余 34）`、`test_ui_tier.py 711（余 89，本轮新进）`、`test_saved_search_ui.py 707（余 93）`、`p19_combined_memory.py 742（余 58）`、`theme.py 717（余 83）`。**最紧那份仍只余 6 行，下一轮写 p13 之前先按主题拆。**
+
+**临时文件**：`.probe_work/` **550 项 / 860 MiB**（轮二十 529 项 / 858 MiB）。承重保留：`screens_r18/`（10 张新图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json`）、`_plan_repro_full.png` / `_plan_nowrap.png` / `_plan_elidemid.png` / `_plan_slashes.png` / `_plan_mix.png` / `_plan_cell.png` 及各 `_crop*.png`、`_r21_08_plan_crop.png`、`r21_regression.log`、`r21_docs_guards.log`。一次性脚本与备份 `.probe_work/r20_plan_cell_probe.py`、`r20_plan_repro.py`、`r20_ink_probe.py`、`_i107_backup.py`、`r21_contact_sheet.py` **一律 truncate 为 0**（`_i107_backup.py` 与还原后的 `table_layout.py` sha256 已核对一致）。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① **I17 仍未 CLOSED** —— 十屏要用户本人逐屏打勾；② I108 等勾选，未动代码；③ 本守卫钉的是「关闭自动换行」这个开关位，**不是**绘制结果（离屏无 CJK 字形）；④ 本轮只跑 `docs-inject + guards`，其余 10 段门禁未跑；⑤ 安装包与签名仍未交付、24 小时 soak 仍未验（沿用轮二十边界）。
+
+> **本册末行现数（2026-10-24 修复轮（二十一）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 1054｜CHANGELOG 746｜ISSUES 146` —— 轮二十 1028 / 703 / 144 ⇒
+> 本册 +26、CHANGELOG +43、ISSUES +2，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（二十）按 §4.30 保留为历史、不动）。
+> `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段「回归 / 门禁 / 台账 / 文件长度」。
+> 现册里带 `**本册末行现数**` 标题的块共 **12 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八）／（十九）／（二十））+ 本轮这块**活的**。
