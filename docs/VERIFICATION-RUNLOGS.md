@@ -1043,7 +1043,7 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 
 **F · 回归 / 门禁 / 台账 / 文件长度**：全量回归 **790 passed, 1 skipped, 0 failed / 289.17s**（轮二十基线 789，+1 是 C 段那条新守卫；`.probe_work/r21_regression.log`）。`docs-inject + guards` **9 条 ALL GREEN、本次未跑 10 段**（`.probe_work/r21_docs_guards.log`）；其中「台账里失效的测试名」现数 **6 处 / 上限 6**（未涨）。台账 **108 行｜I1–I108 连续｜CLOSED 86｜MITIGATED 20｜OPEN 1｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，本轮 **I107 CLOSED**、**I108 OPEN**。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜临近线（余量 ≤100 行）6 份` —— `p13_soak.py 794（余 6）`、`test_job_queue.py 766（余 34）`、`test_ui_tier.py 711（余 89，本轮新进）`、`test_saved_search_ui.py 707（余 93）`、`p19_combined_memory.py 742（余 58）`、`theme.py 717（余 83）`。**最紧那份仍只余 6 行，下一轮写 p13 之前先按主题拆。**
 
-**临时文件**：`.probe_work/` **550 项 / 860 MiB**（轮二十 529 项 / 858 MiB）。承重保留：`screens_r18/`（10 张新图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json`）、`_plan_repro_full.png` / `_plan_nowrap.png` / `_plan_elidemid.png` / `_plan_slashes.png` / `_plan_mix.png` / `_plan_cell.png` 及各 `_crop*.png`、`_r21_08_plan_crop.png`、`r21_regression.log`、`r21_docs_guards.log`。一次性脚本与备份 `.probe_work/r20_plan_cell_probe.py`、`r20_plan_repro.py`、`r20_ink_probe.py`、`_i107_backup.py`、`r21_contact_sheet.py` **一律 truncate 为 0**（`_i107_backup.py` 与还原后的 `table_layout.py` sha256 已核对一致）。
+**临时文件**：`.probe_work/` **550 项 / 860 MiB**（轮二十 529 项 / 858 MiB）。承重保留：`screens_r18/`（10 张新图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json`）、`_plan_repro_full.png` / `_plan_nowrap.png` / `_plan_elidemid.png` / `_plan_slashes.png` / `_plan_mix.png` / `_plan_cell.png` 及各 `_crop*.png`、`_r21_08_plan_crop.png`、`r21_regression.log`、`r21_docs_guards.log`。一次性脚本与备份 `.probe_work/r20_plan_cell_probe.py`、`.probe_work/r20_plan_repro.py`、`.probe_work/r20_ink_probe.py`、`.probe_work/_i107_backup.py`、`.probe_work/r21_contact_sheet.py` **一律 truncate 为 0**（`.probe_work/_i107_backup.py` 与还原后的 `table_layout.py` sha256 已核对一致）。
 
 **没测到的 / 仍欠（不许混进上面那些绿）**：① **I17 仍未 CLOSED** —— 十屏要用户本人逐屏打勾；② I108 等勾选，未动代码；③ 本守卫钉的是「关闭自动换行」这个开关位，**不是**绘制结果（离屏无 CJK 字形）；④ 本轮只跑 `docs-inject + guards`，其余 10 段门禁未跑；⑤ 安装包与签名仍未交付、24 小时 soak 仍未验（沿用轮二十边界）。
 
@@ -1052,3 +1052,29 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 > 本册 +26、CHANGELOG +43、ISSUES +2，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（二十）按 §4.30 保留为历史、不动）。
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段「回归 / 门禁 / 台账 / 文件长度」。
 > 现册里带 `**本册末行现数**` 标题的块共 **12 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八）／（十九）／（二十））+ 本轮这块**活的**。
+
+### 4.32 勾选轮（二十二）收尾读数（2026-10-24 14:15 → 14:3x，**I17 用户勾选销账** + **I108 甲**）
+
+**起止（墙钟）**：上一 commit `759e047` **2026-10-24 14:15:20** → 本块落笔 **≈14:36** = **约 0.35 h**。节点：用户答复「10 屏全过 / I108 甲」14:15｜I108 实现 + 测试 + 坏法 14:16–14:19｜十屏重拍 + 拼图 14:19–14:22｜台账/清单 14:22–14:30｜回归（两场）14:24–14:34｜文档 14:31–14:36。会话日志（本环境 `usage.*` 恒 0，只能拿体积当代理）：**294,178,916 B｜93,841 行**（14:33 取；轮二十一基线 292,949,984 B / 93,481 行 ⇒ **+1,228,932 B｜+360 行**）。
+
+**A · I17 CLOSED（用户本人逐屏，第一次）**：`screens_r18/I17_CHECKLIST.md` 十项全部勾「☑ 过」，含两处设计取舍 —— 05「默认分类写入结果 / 扫描与索引任务两块要在状态框内向下滚动」接受、09「未选批次时详情为空表」接受（随即改选了 I108 甲）。**口径**：勾选时看的是 14 项断言那一版；09 随后按甲多了一行提示，整包重拍为 15 项 —— 这层时间顺序写进清单头部，不把"用户勾过的"与"当前屏上的"混成一件事。
+
+**B · I108 甲（S4 详情空态提示）**：`ui/pages/operations_page.py` 在标题与详情表之间加 `item_hint`（muted），文案「先点上面一条批次，详情才会列出它搬了哪些文件」；`_sync_item_hint()` 在 `reload()` 与 `_on_op_selected()` 后统一同步 `setVisible(op_table.currentRow() < 0)`。`reload()` 仍不设默认选中 —— 乙被否的理由是「撤销选中批次」会在没人选的时候就可点。09 屏读数：提示可读、详情 0 行（`.probe_work/_r21_09_hint_crop.png`）。
+
+**C · 守卫 + 坏法注入**：`tests/integration/test_archive_execute_ui.py::test_没选中批次时详情区写明先点批次` —— 未选中：批次 1 行 / `currentRow() < 0` / 详情 0 行 / 提示可见且文案对；选中：详情 1 行 / 提示不可见。**坏法真注入**（`setVisible(...)` 改恒 `False`）→ **1 failed** 并点名 `test_archive_execute_ui.py:346`；还原后该文件 **16 passed**。
+
+**D · 十屏重拍（15 项断言）**：`.probe_work/r18_screens_real.py` 加 `operations_item_hint` 检查后整包重跑（真 windows、1400×880、DPR 1.5 ⇒ 2100×1320）：`report.json` **15 项 ALL GREEN**、10 张非空且 md5 互不相同（09 = 66,976B / `47fbf58123de`；08 目标路径仍读作 `C:\Users\lavie\AppData\Local\Temp…`）。`contact_sheet.png` 重建为 **1980×3698 / 1,226,916B**（一次性脚本 `.probe_work/r21b_contact_sheet.py` 用完 truncate 为 0）。
+
+**E · 守卫先报：轮二十一的 §4.31 写了 4 处裸探针文件名**：`docs-inject` 的「台账旧文件名 ≤ 37」红在 **41 处**（补完 §4.31 两处又量到 **38**），多出来的全是 `r20_plan_repro.py` / `r20_ink_probe.py` / `_i107_backup.py` / `r21_contact_sheet.py` —— 裸名等于宣称仓库里该有这些文件。修法：逐个补 `.probe_work/` 前缀（`PY_EXEMPT_PREFIX` 白名单），**上限 37 未动**；复跑该条 **1 passed**。
+
+**F · 回归 / 门禁 / 台账 / 文件长度**：全量回归 **791 passed, 1 skipped, 0 failed / 291.54s**（轮二十一 790，+1 = C 段新用例；第一场 301.17s 因 E 段而红，修后重跑取这一场，`.probe_work/r22_regression.log`）。`docs-inject + guards` 于本轮文档定稿后复跑（读数见末行）；台账 **108 行｜I1–I108 连续｜CLOSED 87｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，**I108 CLOSED**、OPEN 归零。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜临近线 6 份` —— `p13_soak 794（余 6）`、`test_job_queue 766（余 34）`、`p19_combined_memory 742（余 58）`、`theme 717（余 83）`、`test_ui_tier 711（余 89）`、`test_saved_search_ui 707（余 93）`；本轮新增用例把 `test_archive_execute_ui.py` 推到 **462 行**，不在临近线。
+
+**临时文件**：`.probe_work/` **554 项 / 860 MiB**（轮二十一 550 项）。新增承重：`r22_regression.log`、`_r21_09_hint_crop.png`、`_r21b_sheet_head.png`；`r21b_contact_sheet.py` **truncate 为 0**。`screens_r18/` 10 张图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json` 全部更新为 15 项版本。
+
+**没测到的 / 仍欠（不许混进上面那些绿）**：① 本轮只跑 `docs-inject + guards`，其余 10 段门禁未跑；② I108 走的是甲，乙（默认选中）未实现、也不打算实现；③ 安装包与签名仍未交付；④ **24 小时 soak 仍未验**（12h 是验到的上限）；⑤ 05 屏「要滚才看全」只是用户接受了现状，没有改成自适应高度；⑥ 本轮 I17 的勾选针对 14 项那版，09 多出的那一行由「甲」这条决策本身背书，未再单独请用户复核。
+
+> **本册末行现数（2026-10-24 勾选轮（二十二）收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 1080｜CHANGELOG 783｜ISSUES 146` —— 轮二十一 1054 / 746 / 146 ⇒
+> 本册 +26、CHANGELOG +37、ISSUES +0，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（二十一）按 §4.31 保留为历史、不动）。
+> `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段「回归 / 门禁 / 台账 / 文件长度」。
+> 现册里带 `**本册末行现数**` 标题的块共 **13 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八）／（十九）／（二十）／（二十一））+ 本轮这块**活的**。

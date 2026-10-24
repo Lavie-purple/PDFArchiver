@@ -52,6 +52,12 @@ class OperationsPage(QtWidgets.QWidget):
         item_title = QtWidgets.QLabel("操作项详情")
         item_title.setObjectName("sectionTitle")
         layout.addWidget(item_title)
+        # 未选批次时详情表只有表头 —— 不说一句就是让人对着空表猜（**ISSUES I108** 甲；
+        # 乙「reload() 默认选中最新一条」被否掉，因为那会让「撤销选中批次」一进页面就可点）。
+        self.item_hint = QtWidgets.QLabel("先点上面一条批次，详情才会列出它搬了哪些文件")
+        self.item_hint.setObjectName("muted")
+        self.item_hint.setWordWrap(True)
+        layout.addWidget(self.item_hint)
         self.item_table = QtWidgets.QTableWidget()
         self.item_table.setColumnCount(6)
         self.item_table.setHorizontalHeaderLabels(["ID", "类型", "源路径", "目标路径", "状态", "错误"])
@@ -94,11 +100,17 @@ class OperationsPage(QtWidgets.QWidget):
         # 「共 N 条」必须数自库，不能是 `len(ops)` —— 后者是被 limit 截过的取回数（**ISSUES I76**）
         self.loaded_note.setText(loaded_line(self.ctx.operations.count_operations(),
                                              len(ops), "条操作批次"))
+        self._sync_item_hint()
+
+    def _sync_item_hint(self) -> None:
+        """详情表只有表头时给一句话（I108 甲）；选中批次之后就撤掉，别盖住真详情。"""
+        self.item_hint.setVisible(self.op_table.currentRow() < 0)
 
     def _on_op_selected(self) -> None:
         row = self.op_table.currentRow()
         if row < 0:
             self.item_table.setRowCount(0)
+            self._sync_item_hint()
             return
         item = self.op_table.item(row, 0)
         if not item:
@@ -119,6 +131,7 @@ class OperationsPage(QtWidgets.QWidget):
             err_item = QtWidgets.QTableWidgetItem(it.error or "")
             err_item.setToolTip(it.error or "")
             self.item_table.setItem(r, 5, err_item)
+        self._sync_item_hint()
 
     def _selected_op_id(self) -> int | None:
         row = self.op_table.currentRow()

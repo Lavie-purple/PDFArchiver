@@ -333,6 +333,25 @@ def test_没选中批次时撤销只问一句而不建东西(window, ctx, qapp, 
     assert ctx.operations.list_operations(limit=50) == []
 
 
+def test_没选中批次时详情区写明先点批次(window, ctx, qapp, tmp_path) -> None:
+    """**ISSUES I108** 甲：未选批次时详情表只有表头，必须有一句话解释（乙=默认选中被否）。"""
+    _archived(ctx, tmp_path, ["巳.pdf"])
+    page = _ops_page(window, qapp)
+    page.reload()
+    _settle(qapp)
+
+    assert page.op_table.rowCount() == 1
+    assert page.op_table.currentRow() < 0, "用例前提：reload() 不自动选中批次（I108 选甲，不选乙）"
+    assert page.item_table.rowCount() == 0
+    assert page.item_hint.isVisible(), "未选批次时详情区是一张没有任何提示的空表"
+    assert "先点上面一条批次" in page.item_hint.text()
+
+    page.op_table.setCurrentCell(0, 0)
+    _settle(qapp)
+    assert page.item_table.rowCount() == 1
+    assert not page.item_hint.isVisible(), "选中批次之后提示还挂着，会挤掉详情表的位置"
+
+
 def test_撤销确认后另开一条反向批次并排队(window, ctx, qapp, tmp_path, answers,
                                           dialogs) -> None:
     op_id = _archived(ctx, tmp_path, ["壬.pdf"])
