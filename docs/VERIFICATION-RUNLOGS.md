@@ -540,3 +540,88 @@ g2 分类自检 **6/6** + 真库 P95 **ALL GREEN**；ui-inject p15 **36 条坏�
 > 本轮新增四张文件 `health.py 253 / db_check.py 380 / health_panel.py 203 / test_db_check.py 179`，
 > **没有一份逼近 800**（`db_check.py` 因成本文案两处改写从 379 到 380，`test_db_check.py` 那条断言改字面量、行数不变）。
 > **块数口径**：本册从 **9 块**（轮十六…二十三 + 轮二十三那块）加本轮 = **10 块**。
+
+### 4.36 轮二十五（2026-10-25）· 真机两档 / 四条红同场转绿 / 真库全库档在界面里跑（销 ①②③⑥，新开 **I109 / I110**）
+
+用户这一轮的指令逐字：「全库档 13 项没在界面里真跑过；四条门禁红的绿来自定点复跑、与那场 26 判定不是同一时刻；
+injection 整段未空载复跑；体检面板只有 offscreen 几何证据。 按你建议执行」。
+⇒ 本轮**产品代码一行没改**，只补证据 + 入账两条新事实。
+
+**A · 真机（非 offscreen）S7 体检页两档真跑 + 截图包 —— 销 ⑥**：驱动 `.probe_work/u25_screens_health.py`
+（**不设** `QT_QPA_PLATFORM` ⇒ 报告里 `platform = windows`，中文真渲染），种子小库（主记录 6 / 正文 9 行 /
+迁移生成的快照 8 份）跑在隔离 `work_dir`，00:34:33 → 00:34:38，**31 条判定 ALL GREEN**，`work_dir_removed = true`
+⇒ 真库这一场一个字节都没被写。两档点的都是产品自己的按钮（`QtTest.QTest.mouseClick`）：快速 10 行
+（9 通过 + 1 读数 C9、0 红）、全库 13 行（12 通过 + 1 读数、0 红，`C1` 第二位 / `C5` 第五位 / `C11` 末位）；
+翻页不跳高 `([417,415],[417,415])`，跑完体检仍是同一对数字；五张图 md5 各异，而「翻回设置页」那张与第一张
+设置页 **md5 完全相同**（`e16a48889123`）⇒ 1甲 的「翻回原样」第一次有像素证据。两条坏法证明判据有牙：
+`data_root` 指错 ⇒ `VOID_wrong_dataroot_report.json` RED（`confirm_dialog_yes_taken`、`four_shots_nonblank_and_distinct`
+不成立）；把 `[库体检…]` 那颗按钮拆掉 ⇒ `VOID_inj_no_toggle/` RED（`health_side_flipped` / `full_report_arrived` /
+`before_and_after_differ` / `running_shot_differs_from_before` / `bottom_row_painted` 五条不成立）。
+
+**B · 四条 G1 同源红并进同一条命令的一场上全绿 —— 销 ②③**：
+`gates/final.py --only regression --only coldstart --only e2e --only injection`（后台 `python -u`），
+02:59:27 → 03:15:32 = 965s ≈ **16 分 05 秒**，起跑负载 CPU **32.4%**｜可用 **3,809MiB**｜最吃内存
+`MemCompression 908MiB`；**合计判定 13 条｜0 红｜末行 `VERDICT: ALL GREEN`**（7 段 SKIP：guards / ui-inject / ocr /
+consistency / soak / package / g2 —— 这一场不含它们）。轮二十四那四条红正是这四段（§4.35 E），本轮它们在
+**同一时刻**成立：regression 187.5s **802 passed / 0 failed / 1 skipped**、coldstart 1.7s **冷启动 1.046s**、
+e2e 13.2s（冷启动 1.009s + 11 条端到端）、injection 760.1s。
+③ 的账：injection 整段 **9 条探针**在负载撤下来之后第一次同段全绿 —— 反向注入 69/69、G5 45/45、p16 8 坏法 + 3 对照、
+p17 3、p18 3、p21 24/24、p22 33/33、p23 23/23、p24 17/17（**抓坏法合计 225 条**，逐段 `VERDICT: ALL GREEN`
+打在 `.probe_work/u25_chain4_r25.log`）。**口径（不许写成空载）**：这一场 CPU 32.4% 是**低负载场**，
+不是真空载场 —— CPU<10% 的 injection 整段读数至今仍然没有。**G1 的 1.5s 一处没动。**
+`injection_inflight` 标记 03:02:52 建、整段全绿后被门禁自己删掉 ⇒ 注入的坏法全部还原，
+收尾 `git status` 只剩 `docs/ISSUES.md` 的两行改动。
+
+**C · 真库（11,995,631,616B ≈ 11.2GiB｜主记录 10,991｜正文 1,975,611）全库档 13 项走界面路径真跑 —— 销 ①**：
+驱动 `.probe_work/u25_real_full.py` —— 真窗口开 S7 → 点 `health_toggle_btn` 翻到体检页 → 点「全库体检」→
+确认框（正文就是 `FULL_COST`）选「是」→ 后台线程跑 13 项 → `Signal` 回主线程铺表 → `_remember()` 回写。
+- **run1** 00:41:12 → 01:13:01：13 行｜12 通过 + 1 读数｜**0 红**｜服务层 **1,618.2s = 26 分 58 秒**；
+  但四张截图 md5 全同（135,576B `4dd11a2713b3`）⇒ `before_and_after_differ`、`bottom_shot_scrolled` 不成立，
+  **整场判 RED**，改名 `real_full_report_run1_no_visual.json` 保留：只当计时证据，不当视觉证据。根因写在脚本
+  162-165 行的注释里 —— 上一场漏了点 `[库体检…]`，按钮在没露面的那一页上照样点得动、体检照样跑完，只是画不出东西。
+- **run2** 01:30:37 → 02:36:53：**17 条判定 ALL GREEN**、同样 13 行 0 红、服务层 **3,390.1s = 56 分 30 秒**；
+  四张图 md5 各异（162,483 / 164,774 / 195,037 / 199,810），滚到底那一张
+  `range=9｜value=9｜viewport_h=135｜last_row_rect=[105,133]｜last_row_on_screen=true` ⇒ 末行 C11 真画在屏上。
+- **两场的业务表零变化**：`counts_before == counts_seen == {docs 10,991｜pages 1,975,611}`（每场各测一次前后）。
+- **这一轮确实写了真库两处设置**（与 §4.35 D 那趟「故意不调 `_remember()`」相反 —— 这一趟就是产品路径本身）：
+  `app_settings` 里 `db_check.last` 由 run1 首次写入
+  `{ts:1792860359, mode:full, total:13, red:0, readings:1, elapsed_s:1618.2}`，run2 覆盖成 `elapsed_s:3390.1`；
+  另有 `ui.last_nav_page="monitor"`（`updated_at=1792867012` = run2 收尾那一刻）。两条都是产品自己的键、
+  都能在界面里改回；**要不要复位 `ui.last_nav_page` 等你说，我不自己动真库。**
+
+**D · 本轮逮到的两条新事实（入账 **ISSUES I109 / I110**，一行代码没动，等勾选）**：
+- **I109**：S7 一在屏就把 `SELECT count(*) FROM text_pages WHERE source_kind='ocr'`（`source_kind` 无索引 ⇒
+  `EXPLAIN QUERY PLAN = SCAN text_pages`）放在**主线程**上跑，真库单条 **201.1 / 212.3 / 210.7s**（现态 / 冷 / 热，±3%）。
+  触发点两处：建窗路径（`main_window.py:101` 恢复上次所在屏 → `SettingsPage.__init__:128` → `reload_status`）与
+  `patrol_tick`（`main_window.py:254-258`，S7 可见就每个 `scan_poll_seconds=5` 秒排一次）。证据 = py-spy 两次
+  MainThread 栈 + `inspect.getsource` 逐字断言的 SQL + 同场 IO `read_bytes ≈ 9.9GiB`。
+- **I110**：全库档成本文案写死「约 57 分钟与约 67 分钟」，而本轮同库同按钮相邻两场实测 **26 分 58 秒 / 56 分 30 秒**
+  ⇒ 区间下界被自家读数打破。逐项：C1 851.2→1,081.5（1.27×）、C11 708.2→932.9（1.32×）、**C4 5.8→191.9（33×）**、
+  **C5 46.7→1,178.0（25×）**，其余九项两场都在 0.0–3.9s；负载方向还是反的（CPU 60.4% 那场反而快 2.1 倍）。
+  两个候选机制都做了实验并都被排除：页缓存（201.1/212.3/210.7s）与并发同表扫描互相拖慢（各自 207.7s / 209.7s = 0.99×）。
+  **机制未定位。** 另记一条本场**没控住的变量**：C 的两场里 S7 全程可见 ⇒ `patrol_tick` 每 5 秒就往主线程排一次
+  I109 那条 ~200s 扫描 ⇒ 两场的 C4/C5 都不是「安静库上的读数」。它两场共有、不能解释那 2.1 倍，但 I109 若走 丙，
+  成本必须重测一次再定文案。
+- **读数口径纠正（历史记录不改写）**：§4.35 G 段把 p12 的 C3 记成「每盘 1,537,579ms × 6 盘」—— 实际那六行里的 ms
+  是同一个循环的累计值，逐项总和 5,581s 与该场总耗时 5,599.4s 吻合；四个慢项的读数本身有效，只有那句「× 6 盘」是误读。
+
+**E · 预检**：`scripts/precheck.py` 本轮留档两次 —— **02:59:13**（`.probe_work/u25_precheck_r25b.log`，放整链之前）与
+**03:35:15**（`.probe_work/u25_precheck_final.log`，文档定稿之后再收一次口），两步都 `VERDICT: ALL GREEN`
+（54 条守卫 **10.81s / 9.91s**；门禁 `docs-inject + guards` 9 判定 ALL GREEN、10 段 SKIP）—— 先确认台账改动不会被自己的守卫判红，
+再放 16 分钟的整链。（`.probe_work/round24_precheck.log` 那条 **00:01:24** 是轮二十四的收尾预检，不算在本轮头上。）
+
+**没测到的 / 仍欠**：④ **24 小时 soak 仍未验**（12h 是验到的上限）；⑤ 真库 `vector_status` 仍全 `na` —— 本轮 C7 现读
+逐字 `非 na 的行 0 条｜分布 {'na': 10991}｜全部合法（产品里没人写它，所以恒为 na 或测试夹具值）`（**ISSUES I63**）；
+⑦ **I109** 等勾选（甲/乙/丙/丁，建议 **丙 + 丁**）；⑧ **I110** 等勾选（甲/乙/丙/丁，建议 **丙**）；
+⑨ injection 的**真空载**（CPU <10%）整段读数仍没有；⑩ 全库档只跑过两场，27–67 分钟这个跨度的机制未定位 ——
+所以 `FULL_COST` 那句文案本轮**没改**：改它属于 I110 的勾选结果，不该在「把证据补齐」这一轮顺手定。
+
+> **本册末行现数（2026-10-25 轮二十五收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 542 → 627｜分册 757｜CHANGELOG 907 → 946｜ISSUES 146 → 148｜UI-WIREFRAMES 997` ——
+> 轮二十四那块记的是 本册 542 / CHANGELOG 907 / ISSUES 146 ⇒ 本轮 **本册 +85**（新增 §4.36 这一块）、
+> CHANGELOG **+39**（轮二十五条目）、**ISSUES +2**（新开 **ISSUES I109 / I110**，两条都 **OPEN** 等勾选，没有一条被自行实现）。
+> **本轮 `src/` 与 `tests/` 一行没改** —— 四条欠账全是证据欠账，不是功能欠账，所以不触发线框回环节，`.py` 侧临近线五份
+> （`test_job_queue.py 766（余 34）`、`p19_combined_memory.py 742（余 58）`、`theme.py 717（余 83）`、
+> `test_ui_tier.py 711（余 89）`、`test_saved_search_ui.py 707（余 93）`）与轮二十四逐字相同。
+> `.md` 侧最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`；本册 627（余 573）、CHANGELOG 946（余 254）。
+> **块数口径**：本册从 **10 块**（§4.27…§4.35）加本轮 = **11 块**。
