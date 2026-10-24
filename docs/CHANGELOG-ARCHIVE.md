@@ -12,7 +12,7 @@
 
 用户指令仍是「还差哪些东西才能算完成整个项目做完 ABCD」。本轮清的是上一轮末尾交出的三条勾选方案
 **I68 甲 / I69 丙 / I70 丙**（此前授权"勾选清单均听你推荐"），三条都带断言、都带坏法注入，
-逐字读数见 `docs/VERIFICATION-RUNLOGS.md` §4.20。
+逐字读数见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.20。
 
 - **I68 甲 · 队列处理函数的形状核对**：`WorkQueue.__init__` 在 KINDS 校验之后遍历注册表，用
   `inspect.signature(fn).bind(None, None)` 核对每条 handler 能不能按 `handler(job, monitor)` 调用。
@@ -35,9 +35,9 @@
   注入探针 `tests/probes/p16_doc_pointers_injection.py` 加一条 P6「往台账里再塞一个不存在的测试名」必须红；
   同时把 P5 反向对照改成只跑被对照的那一条断言 —— 上限进了节点表之后，同一条注入会同时顶破两条判据，
   对照分支若连着跑 P6 就变成"对照破了"的假红。
-- **收尾时抓出的一处自己的假证据**：`docs/VERIFICATION-RUNLOGS.md` §4.19 那段自称"当场输出的逐字粘贴"**不是逐字** —— 真实输出把六条
+- **收尾时抓出的一处自己的假证据**：`docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.19 那段自称"当场输出的逐字粘贴"**不是逐字** —— 真实输出把六条
   `台账旧名` 行打在 `扫了 …` 之前、每行带前缀、摘要行里的台账编号带星号。改历史不叫修正，所以在原地保留、
-  就地声明它哪几处不是逐字，真逐字的现读贴在 `docs/VERIFICATION-RUNLOGS.md` §4.20。AGENTS.md 要的是"报错原文完整粘贴、禁止转述"，
+  就地声明它哪几处不是逐字，真逐字的现读贴在 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.20。AGENTS.md 要的是"报错原文完整粘贴、禁止转述"，
   同一把尺子量自己粘过的读数：**能被复算对上的应该是字符，不是印象**。
 - **台账对账**：`docs/ISSUES.md` 现数 **71 行**（I1–I71 连续不重号），
   **CLOSED 46｜MITIGATED 18｜OPEN 6｜WONTFIX 1**（上一轮 45／17／8／1）。OPEN 那 6 条 =
@@ -57,7 +57,7 @@
 **A2 执行归档 / A3 命名模板 / A4 整批撤销** 是同一条 `ArchiveService` 链路的三段，本轮一起落地，
 **ISSUES I55 从 MITIGATED 翻成 CLOSED**。这条链路一旦接上，界面上的「执行归档」「整批撤销」
 就**真的会改动用户磁盘** —— 所以 `README.md` 那句警告从"程序自己不会动"改成"会动，但必须先过预览与确认"，
-逐字读数见 `docs/VERIFICATION-RUNLOGS.md` §4.19。
+逐字读数见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.19。
 
 - **A2 · 真建批次**：`archive_page._execute_archive()` → `ArchiveService.submit()` 写
   `file_operations(status='previewed')` + `operation_items` → 排一条 `kind='archive'` 的任务。
@@ -128,7 +128,7 @@
 用户指令是「还差哪些东西才能算完成整个项目做完 ABCD」⇒ 按交付清单 A/B/C/D 逐块做。
 **这一轮的门槛比上一轮硬**：A 块每一项都要真改行为（不是改文案），而"改行为"的界面项里凡涉及
 **新控件**都得先过线框门（AGENTS.md），所以 A5（OCR 界面入口）这一轮只交线框、不交代码。
-逐字读数见 `docs/VERIFICATION-RUNLOGS.md` §4.18 起。
+逐字读数见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.18 起。
 
 - **A1 · ISSUES I66 销账**：S7「设置与状态」的「添加目录...」/「移除选中」两颗按钮从占位变成真的。
   登记 = 一次调用里同时做完「写 `monitored_roots`」和「挂 watchdog 监听」，落点在
@@ -145,7 +145,7 @@
   清单新增条目而守卫映射表没跟上就先红）、文档不许说 OCR「会自动排队」。
   **⑭ 那条注入第一轮是假绿**：判据原本是"这一行里有否定词就算老实话"，而那行前半句本来就写着
   「界面上没有触发入口」，"会自动排队"被同行另一件事的否定词赦免了 —— 改成"否定词必须紧贴那四个字"才红。
-  教训记在 `docs/VERIFICATION-RUNLOGS.md` §4.18：**行级邻接 ≠ 语义邻接**。
+  教训记在 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.18：**行级邻接 ≠ 语义邻接**。
 - **本轮还没做的（写清楚，别让清单看着像做完了）**：A2 执行归档真生成批次并搬运、A3 命名模板渲染器、
   A4 整批撤销的反向执行器、A5 OCR 入口线框、A6 文档库表格虚拟化（**ISSUES I51**）、
   B 块真机与整链证据（**ISSUES I5 / I16 / I17**）、C 块冻结产物、D 块交付报告与备份含设置。
@@ -159,7 +159,7 @@
 用户指令是「OPEN 状态的 ISSUES（9 条）都做，I61 和 I63 按你的推荐选择来」→ **I61 勾甲**（判重页并进定宽口径）、
 **I63 勾乙 + 戊**（丙 / 丁 **没被选中**，继续挂账）。本轮收尾时 OPEN 从 9 条降到 **5 条**
 （`I5` `I16` `I17` `I51` + 本轮新开的 `I66`），**剩下这五条没有一条是我还能自己做的**：前三条要真机，
-后两条要先过线框/勾选这道门。逐字读数见 `docs/VERIFICATION-RUNLOGS.md` §4.17。
+后两条要先过线框/勾选这道门。逐字读数见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.17。
 
 - **I61 甲**：`ui/pages/dedup_page.py:127` 改调 `set_table_columns`，五列宽度按 500 组档上限反算
   （浪费量 103 / SHA256 130 / 份数 63 / 状态 103，路径列作 `stretch_col` 吸收剩余），`table_layout.py`

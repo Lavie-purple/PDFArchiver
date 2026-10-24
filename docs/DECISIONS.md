@@ -511,7 +511,7 @@ S4 是**阶段 4** 的屏。第 3 问选了"执行跑在后台队列"，**这是
 
 **后果**：装配多一次反射（`inspect.signature` × 5 条 handler，可忽略）；不合时**直接抛 `ValueError` 拒绝构造**，
 不是记日志（记日志的坏法由 H2 注入证伪 —— 捕获不上抛等于这条核对永远绿）。3 条坏法注入全红且点名
-（`tests/probes/p17_handler_shape_injection.py`，见 `docs/VERIFICATION-RUNLOGS.md` §4.20）。
+（`tests/probes/p17_handler_shape_injection.py`，见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.20）。
 
 ## D-057 · 「不可逆」的唯一出处放在服务侧；产品里今天走不到的那一档**不上屏、写进用户文档**（2026-10-18，**ISSUES I69** 丙）
 
@@ -570,7 +570,7 @@ S4 是**阶段 4** 的屏。第 3 问选了"执行跑在后台队列"，**这是
   详情面板与 `semantic/classify_service.py:58` 还在用它 —— 不是每个逐行取分类的地方都该被批量掉。
 - 修后实测：8,000 份档首屏 **0.016s / 50 行 / 批量分类 1 条 SQL**、159 批 **7.949s** 到库尾且不重不漏；
   8 万份档首屏 **0.071s**。新测试 15 条 + 13 条坏法全红 + 1 条预期为绿的负对照（那条负对照是本轮唯一
-  「断言其实没牙」的现场，逐字记在 `docs/VERIFICATION-RUNLOGS.md` §4.23）。
+  「断言其实没牙」的现场，逐字记在 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.23）。
 - 两条残留**入账而不是藏着**：**ISSUES I77**（滚过的行不释放；`documents` 上没有 name 索引 ⇒ 深分页每批全表排序，
   offset 79,950 实测 **772.9ms**，补索引后 **12.4ms**）与 **ISSUES I76**（同族未销账：S3/S5/S4 三张表也在静默截断，
   发现一类就一次声明规则，不许逐个屏打补丁）。

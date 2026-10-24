@@ -15,7 +15,8 @@ OEM 输出；带上 `PYTHONUTF8=1` 之后它变成 UTF-8，「成」的 GBK 字�
 
 判据只盯输出被取回来的调用（`capture_output`，或 stdout/stderr 是 `subprocess.PIPE`）：
 `text=True` 但把输出重定向到文件对象的不算 —— 那种调用根本不解码
-（`tests/probes/p13_soak.py:416` 就是这一类，它注释里写明了为什么用文件而不是管道）。
+（`tests/probes/p13_soak.py` 起子进程那段就是这一类，它注释里写明了为什么用文件而不是管道；
+这里不写行号 —— 2026-10-24 拆出 `p13_soak_inject.py` 时它从 416 挪到 465，行号一挪就是假指针）。
 
 跑法：
     python -m pytest tests/guards/test_subprocess_encoding.py -q

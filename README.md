@@ -108,7 +108,7 @@
   `OPEN` / `MITIGATED` / `CLOSED` / `WONTFIX`，每条的处置格写着卡在哪一步、需要谁配合。
   **这里不复写条数**：那份表是唯一口径，抄一份数字到 README 就会漂（2026-10-18 发现本处旧数
   停在 71 条而台账已有 88 条，见 **ISSUES I87** 同族）
-- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块（§4.17 起）在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)（§4.26 起，最近几轮）；§4.17–§4.25 于 2026-10-24 整批切进 [`docs/VERIFICATION-RUNLOGS-ARCHIVE.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE.md)
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) —— 按阶段记录真正做过并验证过的变更；2026-10-18 以前的
   轮次整批逐字在 [`docs/CHANGELOG-ARCHIVE.md`](docs/CHANGELOG-ARCHIVE.md)
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 走过的选择（`D-039` 起）；`D-001`–`D-038` 在

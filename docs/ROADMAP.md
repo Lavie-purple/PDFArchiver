@@ -154,8 +154,8 @@ Q7 也必须在此之前答：外壳里没有产品界面，扫描完总得有�
 真实语料（10,977 份）上一次归档都没跑过 —— 口径记在 `docs/USAGE.md` §十 与 **ISSUES I55** 的残留事实。
 
 **门禁验收（首建于 2026-10-15；**2026-10-17 归档轮当场复跑**，`gates/stage4.py` 末行 `VERDICT: ALL GREEN`，
-八条判定逐字读数见 `docs/VERIFICATION-RUNLOGS.md` §4.19 —— 冷启动 0.856s、全量回归 568 passed / 0 failed、
-反向注入 46/46 条坏法被抓到；2026-10-18 勾选轮（六）之后全量回归 **574 passed / 0 failed**，现读见 `docs/VERIFICATION-RUNLOGS.md` §4.20）**：
+八条判定逐字读数见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.19 —— 冷启动 0.856s、全量回归 568 passed / 0 failed、
+反向注入 46/46 条坏法被抓到；2026-10-18 勾选轮（六）之后全量回归 **574 passed / 0 failed**，现读见 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.20）**：
 
 | 门禁 | 内容 | 状态 |
 | --- | --- | --- |

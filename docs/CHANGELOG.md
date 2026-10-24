@@ -6,6 +6,58 @@
 
 ---
 
+## 轮二十三（2026-10-24）—— 先拆再写（RUNLOGS 切册 + p13 拆分）、收尾预检一键脚本、真库小样本语义实跑
+
+用户这一轮勾了 **1 + 4 + 5②**，另加一句「本轮三条红全是自伤，处理了」。三条红（裸探针名 ×2、
+`--data-root` 传深一层）的第二条腿就是「先拆再写」与预检脚本 —— 拆掉会超线的文件，
+把上一轮踩过的坑变成起跑前的一次判定。
+
+- **A · 先拆再写** —— ① `tests/probes/p13_soak.py` 687 行 + `tests/probes/p13_soak_inject.py`
+  142 行：反向注入整段搬出，`main()` 里延迟导入，顶层不反向依赖（否则两模块成环）。
+  ② `docs/VERIFICATION-RUNLOGS.md` **1,113 → 372 行**，§4.17–§4.25 九块整批逐字搬进
+  `docs/VERIFICATION-RUNLOGS-ARCHIVE.md`（757 行，**D-059**）：节号序列不改、标题数守恒
+  （搬前 17 = 分册 9 + 活册 8）、跨文件指针只改文件名且同一行不许混两个册的引用（共改 16 行）。
+  分册同时进 `tests/guards/test_doc_pointers.py` 的 `SELF_DEFINING` 与 `LEDGER_DOCS`。
+  ③ 顺带修掉**守卫自己的**可扩展性缺陷：`_resolve_md()` 每解析一个引用就 `rglob` 一次全仓，
+  把 `.venv`（16,393 文件 / 1,424 目录）走一遍 —— 三个守卫文件同跑 **>18 分钟挂死**，
+  `faulthandler` 堆栈点名的就是它。改成 `os.walk` 剪枝**建一次索引**：doc_pointers
+  **9 passed / 5.35s**、guards 全量 **54 passed / 30.56s**。④ `test_subprocess_encoding.py`
+  里那条 `p13_soak.py:416` 的过期行号改成不带行号的描述（拆分后它挪到 465，行号一挪就是假指针）。
+- **B · 收尾预检一键脚本** —— `scripts/precheck.py`：两步固定顺序（`pytest tests/guards` →
+  `gates/final.py --only docs-inject --only guards`），子进程显式 `encoding="utf-8"`，
+  任一红即停，末行唯一 `VERDICT:`。实测 **PASS 1/2（54 passed, 39.11s）+ PASS 2/2（门禁 9 条
+  ALL GREEN）→ VERDICT: ALL GREEN**，总 ~60s。接线由 `tests/guards/test_precheck.py` 三条盯着：
+  argv 必须带上两个 `--only`、假红 runner 只许跑 1 步且 VERDICT 为红、假绿 runner 必须打出
+  `PASS  1/2` / `PASS  2/2` —— 后两条就是坏法注入（改坏 argv 接线或吞掉红步，测试立刻红）。
+- **C · 真库小样本语义实跑** —— `tests/probes/p25_semantic_sample.py`：真库以 `mode=ro` +
+  `pragma query_only=1` 打开，`random.Random(20261024).sample(300)` 抽 `text_status ∈ {native,
+  mixed}`、`page_count 1–60` 的 300 份，每份前 7 页 → **300 份 / 1,709 页 / 651,964 字**。
+  嵌入走产品的 `EmbeddingService`（bge-small-zh int8，DirectML）：加载 **1.66s**、
+  **23.46s / 1,709 页 = 13.7 ms/页 = 72.86 页/秒**、RSS **130.3 → 281.7 MiB**；
+  全量 **1,975,611 页 ÷ 72.86 = 7.53 小时**、int8 **0.94 GiB** / fp32 **3.77 GiB**。
+  召回（top-10）：**语义按文档 19/20、按页 16/20｜全文自然句 0/20｜全文关键词 12/20｜互补 16/20**；
+  4 条按页错的里有 3 条是**同一份文档的别的页**（277/286/332），只有 346 连文档都没进。
+  三条关键词 0 命中是**带空格的两词串**（产品按口径把整串当一个短语，不拆词）—— 口径而不是坏。
+
+**两处探针自己的 bug（先修再报数，旧读数作废）**：① 命中判定写的是
+`[d, p] in [(d, p)]` —— **列表 vs 元组恒为 False**，所以首跑全文通道恒 0；② 2 字关键词
+（如「塔罗」）在 trigram 下恒 0，产品口径本应走 LIKE（`MIN_FTS_CHARS=3`），探针却一律进 FTS。
+直接查库反证过：`竞品分析` 能命中 `(255,1)` 第 2 名、`数据的本质` 命中 `(245,1)`。
+另：上一场报的「全量 47.77 小时」是 **120 页小样本被首跑预热摊薄**（11.49 页/秒），
+本场 1,709 页把预热摊薄掉后是 7.53h —— **以本场为准，上一场那个数作废**。
+
+- **D · 收尾回归（第一场是负载场，不许记成全绿）** —— 全量回归第一场 **793 passed / 1 failed /
+  1 skipped（466.21s）**，唯一红 `test_进程级冷启动实测符合G1约定` **5.439s**（单跑仍 3.593s）；
+  同场 `TOTClient-Win64-Shipping.exe` **365% CPU / 2.9GiB**、可用内存 **2.1GiB** —— 本轮没动启动路径。
+  按既有口径 deselect 后 **793 passed / 1 skipped / 1 deselected（216.29s）**；负载降下来单条复跑
+  **1 passed，冷启动 1.055s**（`import_to_run 0.797s｜assemble 0.179s｜window 0.079s`）。
+
+**口径**：查询仍是**我模拟的** 20 条，不是用户手里那 20 条真查询，所以 **ISSUES I11 不销账**；
+按页严格算 16/20 **低于** D-035 的 18/20 门槛，不许拿 19/20 的文档级读数宣布 G15 绿。
+G1 那行的绿来自**负载撤掉后的单条复跑**，不是第一场同一时刻的读数。
+
+---
+
 ## 整链补跑（二十二·续）—— 2026-10-24 · 12 段 35 判定：整链 32/35，3 条红定点复跑后全绿
 
 `gates/final.py --all --data-root "C:/Users/lavie/AppData/Local/PdfArchiver"`，整链那场 14:38:22 → 15:09:14
@@ -438,7 +490,7 @@ S6 排空 0.0s（**ISSUES I32** MITIGATED）；④ G2 判据随机器负载漂�
   起跑可用内存 3,186MiB。06:07 那场因**系统休眠 5.5h** 被 p10 的 1800s 上限打断，墙钟作废 ——
   不是产品红，也不是断言没牙）；全量回归 **782 passed / 1 skipped in 213.05s**。台账闭合：**97 行｜CLOSED 74｜MITIGATED 21｜
   OPEN 1｜WONTFIX 1**（I95 / I96 本轮销账；新开 I97 承接真根余下 3 红）。逐字读数见
-  `docs/VERIFICATION-RUNLOGS.md` §4.25。
+  `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.25。
 
 **本轮仍欠**：① 11 段整链仍没有一场跑完过；② 安装包与代码签名未交付；③ 本轮新写的界面写路径
 （并入对话框 / 导出列）仍没有真机手点证据，全部是 `QT_QPA_PLATFORM=offscreen` 的几何与行为断言；
@@ -782,7 +834,7 @@ OCR 入口出线框 / I51 本轮做）。这一轮做 **ISSUES I17**：那条一
 - **两屏线框已出，未写一行界面代码**（AGENTS.md 的线框门）：`docs/UI-WIREFRAMES.md` §W-OCR 与 §W-CONFLICT，各 2 案 + 各 3 条待勾事项。
 - 读数：`pytest tests` **577 passed / 4 skipped in 130.19s**（+3 精确对上守卫那三条）｜`tests/guards` **30 passed in 29.18s**｜
   `--only guards` 8 条全绿｜台账 **73 行｜CLOSED 48｜MITIGATED 19｜OPEN 5｜WONTFIX 1**｜`--only injection` 与 `--only ui-inject` 各
-  `VERDICT: ALL GREEN`。逐字在 `docs/VERIFICATION-RUNLOGS.md` §4.21。
+  `VERDICT: ALL GREEN`。逐字在 `docs/VERIFICATION-RUNLOGS-ARCHIVE.md` §4.21。
 
 ---
 

@@ -49,6 +49,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -70,7 +71,8 @@ SELF_DEFINING = ("DECISIONS.md", "DECISIONS-ARCHIVE.md", "ISSUES.md")
 LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/CHANGELOG-ARCHIVE.md",
                "docs/DECISIONS.md", "docs/DECISIONS-ARCHIVE.md",
                "docs/ISSUES.md", "docs/VERIFICATION.md",
-               "docs/VERIFICATION-RUNLOGS.md", "docs/REPO-JOURNAL.md")
+               "docs/VERIFICATION-RUNLOGS.md", "docs/VERIFICATION-RUNLOGS-ARCHIVE.md",
+               "docs/REPO-JOURNAL.md")
 LEDGER_DIR = "docs/stage-reports/"
 
 #: 台账类文档里「今天已经不存在的测试名」允许的条数上限（**ISSUES I70** 丙）。
@@ -252,9 +254,29 @@ def _quoted_py(line: str) -> list[str]:
     return found
 
 
-def _resolve_md(name: str) -> Path | None:
+def _md_inventory() -> dict[str, list[Path]]:
+    """仓里所有 `.md` 按文件名分组，一次走完（**2026-10-24 轮二十三**：原来每个 § 引用都
+    用 `ROOT.rglob(name)` 全仓扫一遍，`.venv` 有 1.6 万个文件、十几个引用就把单条守卫拖到
+    五分钟以上，`pytest tests/guards` 整段跟着挂住 —— 这不是环境慢，是守卫自己 O(引用数 × 文件数)。
+
+    剪枝口径与 `_py_inventory()` / `test_file_size.py` 一致：虚拟环境、VCS、产物与缓存目录
+    里没有「文档会去引用的那份 md」。用 `os.walk` 而不是 `rglob` 是因为只有前者能**跳过**
+    子树；`rglob` 先走完再过滤，代价照付。
+    """
+    skip = {".git", ".venv", "__pycache__", ".probe_work", "dist", "build",
+            ".mypy_cache", ".pytest_cache", "node_modules"}
+    index: dict[str, list[Path]] = {}
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        for fn in filenames:
+            if fn.endswith(".md"):
+                index.setdefault(fn, []).append(Path(dirpath) / fn)
+    return index
+
+
+def _resolve_md(name: str, index: dict[str, list[Path]]) -> Path | None:
     """按文件名在仓里找那份 md（引用只写文件名，不写目录，所以这里必须支持递归找）。"""
-    candidates = [p for p in ROOT.rglob(name) if p.is_file()]
+    candidates = [p for p in index.get(name, []) if p.is_file()]
     if not candidates:
         return None
     in_docs = [p for p in candidates if "docs" in p.parts]
@@ -267,6 +289,7 @@ def check_pointers() -> list[str]:
     functions = _test_functions()
     modules = _test_modules()
     heading_cache: dict[str, set[int]] = {}
+    md_index = _md_inventory()
     py_paths, py_names = _py_inventory()
     problems: list[str] = []
 
@@ -286,7 +309,7 @@ def check_pointers() -> list[str]:
             for match in re.finditer(r"`?([\w.\u4e00-\u9fff-]+\.md)`?\s*§([〇一二三四五六七八九十]+)",
                                      line):
                 name, raw = match.group(1), match.group(2)
-                target = _resolve_md(name)
+                target = _resolve_md(name, md_index)
                 if target is None:
                     problems.append(f"{rel}:{line_no} 引用 {name} §{raw}，仓库里没有这份文件")
                     continue
