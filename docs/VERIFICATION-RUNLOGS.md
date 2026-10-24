@@ -453,3 +453,90 @@ VERDICT: ALL GREEN**，总 **~60s**。接线守卫 `tests/guards/test_precheck.p
 > `p13_soak.py` 从 794 降到 **687**，**退出临近线**。
 > **块数口径**：切册后本册只剩 **8 块**（轮十六…二十二整链）—— 更早那 9 块随 §4.17–§4.25 进了分册；
 > 上面几句「共 12 / 13 / 14 块」是切册**之前**的陈述，按历史保留、不改写。加本轮这块 = **9 块**。
+
+### 4.35 S7「库体检」落地轮（二十四）收尾读数（2026-10-24 18:25 → 23:5x，#198 按 **1甲 2甲 3甲 4甲** 实现 + 其余 10 段门禁）
+
+用户这一轮的指令是两条：「其余 10 段门禁跑吧」+「#198 跟进你的建议来吧」（建议 = **1甲 2甲 3甲 4甲**）。
+线框已在轮二十三交付并确认，本轮第一次允许写界面代码。
+
+**A · 实现（三层各一处，SQL 只在 repositories）**：新 `db/repositories/health.py`（253 行，
+十四项的 SQL/PRAGMA 唯一落点；`TEXT/PARSE/OCR/VECTOR_LEGAL` 四个合法值集合写在这里，
+`p12` 反过来 import —— 原先探针自带一份是第二个口径）；新 `services/db_check.py`（380 行，
+`run(mode)` 唯一取数判定口，每条单独计时、异常变成带原文的红行，`_remember()` 只写六键）；
+新 `ui/pages/health_panel.py`（203 行，`threading.Thread(daemon=True)` + 跨线程 `Signal(object)`，
+不用 QThread 因为关窗会打 "Destroyed while thread is still running"）；
+`services/bootstrap.py` 装配 `db_check`（构造零成本，`expected_version` 取迁移目标版本）；
+`ui/pages/settings_page.py` 下半区改 `QStackedWidget` 两页就地翻页。
+
+**B · 测试**：新 `tests/integration/test_db_check.py` **8 条**（快速十行零红 / 坏根键点名 C13 /
+0 字节快照在全库档判红且 C11 只体检最新一份 / 上次体检恰好六键 / 异常变红行 / 没跑起来也给原文 /
+设置页翻页跑快速体检并回写 / 全库档确认框先给成本）；`test_status_readout.py` **10 passed**。
+五组坏法真注入并还原：C13 恒绿、C11 跳过 0 字节、`finished` 断线、`_remember` 多写 `detail`、
+临时加第 10 张表（`test_ui_tier.py` 两处 `seen` 同时红）。受影响守卫 **62 passed**。
+
+**C · 本轮逮到的真回归（不是负载）**：720 窗高下 S7 上半区只看得见 **13 行**（要求 ≥15），
+`sizes=[258,417]`。根因是新加的「上次体检」行放在**共享标题栏**，把下半区 `minimumSizeHint`
+顶高 36px ⇒ 上半区被挤。修法：那一行移进 `HealthPanel` 自己那页（隐藏时不参与尺寸），
+`SettingsPage.reload_last_check()` 改调 `health_panel.set_last_check()`。
+修后实测：720 档 `split=[280,395]`、可见 **15** 行；切到体检页仍是 `[280,395]`（1甲 的「翻页不跳高」）；
+1409 档 `[886,478]`、可见 **61** 行 / 47 块。
+
+**D · 真库（11GB / 主记录 10,991 / 正文 1,975,611）跑了一次产品服务的快速档**：
+10 行、**9 通过 + 1 读数（C9）、0 红**、整场 **11,755ms**（最慢三项 C2 4,333ms / C12 3,798ms /
+C4 3,461ms）。这条读数**推翻了线框里「秒级」那句成本说明**（那是没测过的估计），
+故本轮把 `QUICK_COST` 改成「11GB 真库实测约 12 秒」、`FULL_COST` 改成同口径两场的
+「约 57 分钟与约 67 分钟」，线框 §S7 补页与 `health_panel` 的措辞同步；
+`test_db_check.py` 那条断言也跟着从 `"秒级"` 改成 `"约 12 秒"`。
+**口径**：这一趟是脚本直接调服务的取数与判定（`_specs` + `_one`），**故意不调 `_remember()`** ⇒
+真库 `app_settings` 里没有多出 `db_check.last` 那一行（真库仍只被读，没被写）。
+
+**E · 其余 10 段门禁（一条后台命令，20:45:17 → 22:54:54 = 7,776.8s ≈ 2h09m）**：
+`--only regression coldstart e2e injection ui-inject ocr consistency soak package g2`，
+**26 条判定｜4 红｜1 段未跑（guards，已由预检两步覆盖）**，末行 `VERDICT: RED（4 条未过）`。
+起跑负载 CPU **69.5%**、可用内存 **1,333MiB**、最吃内存进程 `TOTClient-Win64-Shipping.exe` **4,296MiB**。
+四条红**同源于 G1 冷启动**（不是四个问题）：regression（801 passed / 1 failed，唯一红是
+`test_进程级冷启动实测符合G1约定`）、coldstart（3.554s）、e2e（2.454s）、
+injection（p9 的**基线**里含同一条 G1 ⇒ `VERDICT: RED（基线就没过…）`，其后 8 条探针全绿）。
+`soak / package / g2 / consistency / ocr / ui-inject` 六段当场全绿。
+
+**F · 四条红逐条定点复跑（负载压下去之后，只替换这四行，不是同一场）**：
+p9 单独复跑 **抓到 69/69 条坏法｜ALL GREEN**（23:09）；e2e 段复跑 **ALL GREEN**，
+冷启动 **1.266s**（此前同段三次读数 1.341 / 1.204 / 1.215）；coldstart 段五次读数
+**1.298 / 1.456 / 1.506 / 1.523 / 2.400s**（同一套代码，抖动全在 1.5s 线附近）；
+regression 第三场 **802 passed / 0 failed / 1 skipped（228.7s）｜ALL GREEN**（23:21，起跑 CPU 52.3%）。
+G1 单条 10 次连测：**1.217–2.0s，9/10 次 ≤1.5s**；`window.ready` 拆分 `import_to_run 1.059–1.178s`
+（占 87%）、`assemble 0.045–0.055s`、`window 0.113–0.121s` ⇒ 新增的三张模块不在启动路径上
+（自测 `health_panel import 46ms`、`HealthPanel build 14ms`）。**阈值 1.5s 一处没动**（**ISSUES I25 / I102** 同源）。
+
+**G · 真根一致性（consistency 段，5,599.4s ≈ 93.3 分）**：p12 注入自检 **21/21 + 口径边界 1/1**、
+p14 仪表 **四种坏法 × 五种口径全绿**、真根 **19 条｜红 0｜未验 0**，库 **v8**、主记录 **10,991**、
+正文 **1,975,611** 行、`running 0`、`done 10,941 / failed 75`。逐条计时最慢五项：
+**C5 1,541,084ms、C3 每盘 1,537,579ms × 6 盘、C1 1,200,867ms、C11 1,036,524ms、C4 259,539ms**。
+与轮二十二（§4.33）那场比，四个慢项同向变慢 15–24%（C1 +15.7% / C5 +24.2% / C11 +7.8% / C4 +18.6%）
+而库的行数一字未变 ⇒ 差额是**机器负载**（那场起跑 CPU 63.3–87.3% 区间外的更低档，本场 69.5%）。
+**所以 `FULL_COST` 从「约 57 分钟」改成「约 57 分钟与约 67 分钟」两个读数并写**，不挑对自己有利的那一个。
+
+**H · 其余段读数**：ocr 三条（队列 done 进度 [6,6] / 预算 2 页真停在第 3 页 / 真引擎 **4 passed 0 skipped**）；
+soak 4 分钟（采样 60 点、最大空洞 2.0s、RSS 112.4→112.6MiB、G8 余量 1,087.3MiB、积压峰 35 排空 1.0s、
+S7 盘上 82 = 库里 82）；p13 注入自检 **13/13 + 好读数放行 4/4**；package 构建 **400.1MiB / 229.5s**、
+冻结冒烟 **158.6s**（8 条 PASS，含强杀残尸 1 条被 recover 续跑、documents 273 = 磁盘 273）；
+g2 分类自检 **6/6** + 真库 P95 **ALL GREEN**；ui-inject p15 **36 条坏法 ALL GREEN**。
+
+**没测到的 / 仍欠**：① **全库档（13 项 / 约一小时）没有在界面里真跑过** —— 只在服务层跑过快速档，
+全库档的判据由 p12 真根那场同口径覆盖，界面侧只验到「弹成本确认 + 按钮禁用」；
+② 四条红的绿来自**定点复跑**，与那场 26 条判定**不是同一时刻**；
+③ injection 整段（9 条探针）未在负载撤掉后整段复跑，只单独复跑了其中红的 p9；
+④ **24 小时 soak 仍未验**（12h 是验到的上限）；⑤ 真库 `vector_status` 仍全 `na`（**ISSUES I63**）；
+⑥ 体检面板尚未做**真机（非 offscreen）**截图核对 —— 本轮的几何证据都是 offscreen 量出来的。
+
+> **本册末行现数（2026-10-24 轮二十四收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 455 → 542｜分册 757｜CHANGELOG 846 → 907｜ISSUES 146｜UI-WIREFRAMES 992 → 997` ——
+> 轮二十三那块记的是 本册 455 / CHANGELOG 846 ⇒ 本轮 **本册 +87**（新增 §4.35 这一块）、
+> CHANGELOG **+61**（轮二十四条目 + 门禁读数对账）、ISSUES **+0**（没加行；G1 那条仍是 **I25 / I102**
+> 的 MITIGATED 残留，本轮只补读数不改状态）、UI-WIREFRAMES **+5**（§S7 补页的成本措辞按实测改）。
+> `.md` 侧最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`；本册 542（余 658）、CHANGELOG 907（余 293）。
+> `.py` 侧临近线（≥690 行）**5 份**：`test_job_queue.py 766（余 34）`、`p19_combined_memory.py 742（余 58）`、
+> `theme.py 717（余 83）`、`test_ui_tier.py 711（余 89）`、`test_saved_search_ui.py 707（余 93）`；
+> 本轮新增四张文件 `health.py 253 / db_check.py 380 / health_panel.py 203 / test_db_check.py 179`，
+> **没有一份逼近 800**（`db_check.py` 因成本文案两处改写从 379 到 380，`test_db_check.py` 那条断言改字面量、行数不变）。
+> **块数口径**：本册从 **9 块**（轮十六…二十三 + 轮二十三那块）加本轮 = **10 块**。

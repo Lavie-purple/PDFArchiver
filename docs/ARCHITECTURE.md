@@ -37,7 +37,9 @@ src/pdfarchiver/
                           #   + 0007_vector_meta_and_drop_pdf_version.py★（vector_meta 收进迁移链 + 删 pdf_version 死列）
                           #   + 0008_name_ci_index.py★（浏览排序索引 ix_documents_name_ci，ISSUES I77 甲）
                           #   每一条都受 `tests/guards/test_migrations.py` 钉（丢数据即 RED）
-    repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata/collections/operations；只有这里能写 SQL
+    repositories/★        #   documents/catalog/roots/jobs/settings/text/metadata/collections/operations/health；只有这里能写 SQL
+                          #   health.py 是 #198「库体检」的取数层：十四项与 tests/probes/p12_consistency.py 同口径，
+                          #   合法值集合也只写在这一处（探针反过来 import 它，不许第二份）
     sqltext.py★           #   SQL 片段的唯一拼装处（占位符与 IN 列表），仓储层共用
   fs/                     # 文件扫描与监测层
     identity.py★          #   路径规范化与文件身份（规则见 docs/VERIFICATION 4.8 与 docs/DATABASE 二·2.1）
@@ -88,6 +90,9 @@ src/pdfarchiver/
     bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检
     status_service.py★    #   界面唯一取数口；只读、不缓存
     session_service.py★   #   导航记忆等内部状态，让 UI 不必 import 仓储层
+    db_check.py★          #   #198「库体检」的唯一取数与判定口：两档（快速 10 项 / 全库 13 项）把 health.py 的
+                          #   读数变成 CheckRow；异常原文进红行而不是带走整场；只把上次时间与四个计数写进
+                          #   `app_settings['db_check.last']`（4甲），明细不落盘
     default_catalog.py★   #   SPEC 3.3 的 14 个分类模板（数据不是代码）；靠标记"种一次"
     archive_service.py★   # 【层名 `fileops` 的落点】plan（纯计算，预览与执行同一份）→ submit（要用户确认）→
                           #   执行器（跨盘 copy+逐项验 sha256 才删源）→ journal（JSONL，执行前写盘，崩溃可恢复）→
@@ -107,7 +112,7 @@ src/pdfarchiver/
   ui/                     # UI 层，只用 services/，不 import db.repositories
     nav.py★               #   导航注册表，按 SPEC 条款号登记；阶段 1 唯一的"界面知识"
     main_window.py★       #   外壳：左导航 + 右堆叠页 + 状态栏；关窗真关连接并留对账行
-    table_layout.py★      #   列宽口径的唯一出处（内容宽 + 实测 23px 内边距；八张表都走它，**ISSUES I54**）
+    table_layout.py★      #   列宽口径的唯一出处（内容宽 + 实测 23px 内边距；九张表都走它，**ISSUES I54**）
     catalog_links.py★     #   S1 表格底下那排「归入分类 / 加标签 / 移除标签」（**ISSUES I78** 甲）：
                           #   目标清单就地展开、id 只走 `QAction.setData`、回执那句由仓储层给
     library_rows.py★      #   S1 中栏那张表的行与右栏详情怎么从一份文档摊出来（**ISSUES I78** 甲拆出）
@@ -128,6 +133,8 @@ src/pdfarchiver/
                           #   **ISSUES I51**）/ reader_page（S2）/ archive_page（S3）/ operations_page（S4）/
                           #   dedup_page（S5）/ backup_page（S6）/ settings_page（S7）/ categories_page（S8）/
                           #   pending_page（未实现说明页）
+                          #   health_panel.py 是 S7 下半区的第二页（#198 1甲）：就地翻页，不另开窗口；
+                          #   后台线程跑两档体检、只铺 `DbCheckService` 给的读数，自己不写 SQL、不重跑修库
                           #   **旧树在这里画的那个「Qt 表格/树模型」文件不存在**：虚拟化是在 library_page 里用
                           #   QAbstractItemModel 做的，列宽另由 table_layout.py 统一，不是一个 model 文件
   diagnostics/

@@ -1,4 +1,4 @@
-"""表格的列宽与取数口径 —— 八张表共用。
+"""表格的列宽与取数口径 —— 九张表共用。
 
 列宽见 `set_table_columns`；取数见 `loaded_line`（**ISSUES I76**：靠 `limit=` 封顶的表，
 屏上必须同时报「总数」与「已取回数」，两个数都取自后端字段）。
@@ -55,15 +55,16 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
     `stretch_col` 只在**其余列的定宽合计远小于视口**时才给：那一列吸收剩余宽度。
     传 `None` 就全部定宽，视口装不下时表格横向滚动。
 
-    全站 8 张表都经这里（ISSUES I61 选甲：判重页并进）：archive 2 / backup 2 / library 1 /
-    operations 2 / dedup 1。行号列统一 `hide()`，守卫 `test_ui_tier.py` 逐屏扫全部 8 张。
+    全站 9 张表都经这里（ISSUES I61 选甲：判重页并进；#198 加 S7 库体检表）：archive 2 / backup 2 /
+    library 1 / operations 2 / dedup 1 / monitor 1。行号列统一 `hide()`，守卫
+    `test_ui_tier.py` 逐屏扫全部 9 张。
     """
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
     # 单行行高 + `ElideRight` 的组合下，Qt 对「反斜杠 + CJK 混排的整段不可断词」会把
     # 260px 的单元格画成 `C…`（**ISSUES I107**：S3 计划表三行目标路径全中，实测
     # `C:\Users\lavie\AppData\Local\Temp…` 只剩一个字符；同一单元格换成正斜杠串就正常，
-    # 关掉自动换行也恢复正常）。全站 8 张表都是单行行高，没有一张用得上换行 ——
+    # 关掉自动换行也恢复正常）。全站 9 张表都是单行行高，没有一张用得上换行 ——
     # 一律关掉，别等下一张带反斜杠路径的表再踩一次。
     table.setWordWrap(False)
     # 行号列没人要过，但 Qt 会自动长出来，而且**宽度随行号位数变**（2026-10-17 现测：

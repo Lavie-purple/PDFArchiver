@@ -248,7 +248,7 @@ def test_文档表行高统一不许变行高展开(window, ctx, qapp) -> None:
 # 第一条管"在场不在场"（逐屏扫），第二条管"在场会造成什么"（视口随数据量漂）。
 
 def test_每张表都不许带行号列(window, ctx, qapp) -> None:
-    """8 张表逐个点名 —— 这条是"第 9 张表冒出来时会不会漏"的牙。
+    """9 张表逐个点名 —— 这条是"第 10 张表冒出来时会不会漏"的牙。
 
     坏法注入（本轮真跑）：删掉 `table_layout.set_table_columns()` 里那行
     `verticalHeader().hide()` → 7 张表当场红；判重页那张不经 `set_table_columns`
@@ -276,7 +276,7 @@ def test_每张表都不许带行号列(window, ctx, qapp) -> None:
                 f"{item.page_id} 的表（{table.objectName() or '未命名'}，"
                 f"{table.rowCount()} 行）带着行号列：宽 {vh.width()}px —— "
                 f"它没经 `set_table_columns()` 也没自己 `hide()`（ISSUES I54）")
-    assert seen == 8, f"全站该扫到 8 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了，重数一遍再改注释"
+    assert seen == 9, f"全站该扫到 9 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了，重数一遍再改注释"
 
 
 def test_每张表都是单行行高_不许开自动换行(window, ctx, qapp) -> None:
@@ -285,10 +285,10 @@ def test_每张表都是单行行高_不许开自动换行(window, ctx, qapp) ->
     真桌面实测（2026-10-24，S3 计划表）：同一格 260px、文本 98 字符，`ElideRight` 下整行只剩
     一个字符加省略号；同一格换成正斜杠串立刻正常，`setWordWrap(False)` 后也恢复正常
     （对照图 `.probe_work/_plan_repro_full.png` / `_plan_nowrap.png`）。离屏平台不复现这条
-    绘制差异（CJK 字形本就缺），所以这里钉的是**开关**：8 张表一律 `wordWrap() is False`。
+    绘制差异（CJK 字形本就缺），所以这里钉的是**开关**：9 张表一律 `wordWrap() is False`。
 
     坏法注入（2026-10-24 真跑过）：删掉 `table_layout.set_table_columns()` 里那行
-    `setWordWrap(False)` → 这里 8 张表逐张红并点名；还原后绿。
+    `setWordWrap(False)` → 这里 9 张表逐张红并点名；还原后绿。
     """
     seen = 0
     for item in NAV_ITEMS:
@@ -308,7 +308,7 @@ def test_每张表都是单行行高_不许开自动换行(window, ctx, qapp) ->
                 f"{item.page_id} 的表（{table.objectName() or '未命名'}）开着自动换行 —— "
                 "单行行高 + ElideRight 会把反斜杠 CJK 路径画成 `C…`（ISSUES I107）；"
                 "经 `set_table_columns()` 建的表都该被那一行关掉")
-    assert seen == 8, f"全站该扫到 8 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了"
+    assert seen == 9, f"全站该扫到 9 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了"
 
 
 def test_视口宽度只随滚动条变不随行的位数变(window, ctx, qapp) -> None:

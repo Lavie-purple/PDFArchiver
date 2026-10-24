@@ -54,27 +54,23 @@ sys.path.insert(0, str(REPO / "src"))
 
 from pdfarchiver.config.paths import AppPaths  # noqa: E402
 from pdfarchiver.db.migrations import discover  # noqa: E402
-from pdfarchiver.db.models import VECTOR_STATUSES, OP_STATUSES, ITEM_STATES  # noqa: E402
+from pdfarchiver.db.models import OP_STATUSES, ITEM_STATES  # noqa: E402
 from pdfarchiver.db.repositories.documents import SEARCHABLE_STATUSES  # noqa: E402
+from pdfarchiver.db.repositories.health import (  # noqa: E402 与 S7 库体检同一份口径
+    OCR_LEGAL, PARSE_LEGAL, TEXT_LEGAL, VECTOR_LEGAL)
 from pdfarchiver.db.repositories.jobs import KINDS, STATES  # noqa: E402
 from pdfarchiver.db.sqltext import like_prefix  # noqa: E402
 from pdfarchiver.fs.exclude import Exclusions  # noqa: E402
 from pdfarchiver.fs.identity import identity_key  # noqa: E402
 from pdfarchiver.fs.scanner import KIND_ERROR, KIND_EXCLUDED, KIND_OTHER, KIND_PDF, iter_tree  # noqa: E402
-from pdfarchiver.parsing.classify import OCR_STATUSES, TEXT_STATUSES  # noqa: E402
 from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE  # noqa: E402
 from _timed import breakdown, timed  # noqa: E402 同级模块：逐条计时（见 _timed.py）
 
 REAL_MIGRATIONS = REPO / "src" / "pdfarchiver" / "db" / "migrations"
 
-# 允许值一律取自"写这个字段的那一处"，不在探针里另立口径：
-#   text_status ← parsing/classify.TEXT_STATUSES（"还没解析过"由扫描层写 pending）
-#   parse_status ← services/index_service._parse_status（ok/degraded/failed）+ 扫描层的 pending
-#   fts_status   ← db/repositories/documents.SEARCHABLE_STATUSES
-TEXT_LEGAL = frozenset(TEXT_STATUSES) | {"pending"}
-PARSE_LEGAL = frozenset({"pending", "ok", "degraded", "failed"})
-OCR_LEGAL = frozenset(OCR_STATUSES)
-VECTOR_LEGAL = frozenset(VECTOR_STATUSES)   # 阶段 6 已交付，口径取 `db/models.VECTOR_STATUSES`
+# 允许值一律取自"写这个字段的那一处"，不在探针里另立口径 —— 现在这份名单与 S7「库体检」
+# 共用 `db/repositories/health.py`（它 import 的仍是 parsing/classify、documents、jobs、models）。
+# 探针与产品各写一份会漂，*ISSUES I90* 那轮两个 length 口径分家就是前车之鉴。
 DOCS_UNDER_ROOT_SQL = "SELECT path_key, missing_since FROM documents WHERE path_key LIKE ? ESCAPE '\\'"
 
 

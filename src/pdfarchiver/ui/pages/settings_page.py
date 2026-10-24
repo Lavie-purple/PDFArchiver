@@ -1,7 +1,8 @@
 """S7 设置 · 监测与索引 —— 上下分区（甲 · 2026-10-15 定案）。
 
 上半区 = StatusPage 现有内容（运行时 / 设置 / 数据库 / 任务读数），一字不改搬过来。
-下半区 = 设置 UI：监测目录管理、索引设置、OCR 三读数、模型状态。
+下半区 = 设置 UI：监测目录管理、索引设置、OCR 三读数、模型状态；**同一块区域里还有第二页
+「库体检」**（#198 · 1甲，2026-10-24）—— 翻页而不是另开窗口，上半区那张状态页始终在场。
 
 **上半区是真的把 `StatusPage` 那个控件嵌进来，不是再抄一份渲染代码**（**D-040** 第三条后果）。
 先前这里自己拼了一遍 `== 运行时 == / == 数据库 == / …`，两份代码已经漂掉了：状态页结尾那句
@@ -15,6 +16,9 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.services.db_check import LAST_KEY, MODE_LABELS, format_duration
+from pdfarchiver.services.status_service import format_ts
+from pdfarchiver.ui.pages.health_panel import HealthPanel
 from pdfarchiver.ui.pages.status_page import StatusPage
 
 
@@ -31,10 +35,25 @@ class SettingsPage(QtWidgets.QWidget):
         # 上半区：那张状态页本身（D-040 —— 嵌控件，不重画一份读数）
         self.status_page = StatusPage(self.ctx, cold_start_seconds=cold_start_seconds)
 
-        # 下半区：设置 UI
+        # 下半区：设置 UI + 库体检（#198 1甲 —— 同一块区域翻页，不另开窗口）
         lower = QtWidgets.QWidget()
         lower_lay = QtWidgets.QVBoxLayout(lower)
         lower_lay.setContentsMargins(8, 8, 8, 8)
+
+        header = QtWidgets.QHBoxLayout()
+        self.lower_title = QtWidgets.QLabel("监测与索引")
+        self.lower_title.setObjectName("sectionTitle")
+        header.addWidget(self.lower_title)
+        header.addStretch()
+        self.health_toggle_btn = QtWidgets.QPushButton("库体检…")
+        self.health_toggle_btn.setToolTip("就地打开库体检（不另开窗口）；上半区的状态读数一直还在")
+        self.health_toggle_btn.clicked.connect(self._toggle_lower)
+        header.addWidget(self.health_toggle_btn)
+        lower_lay.addLayout(header)
+
+        self.settings_view = QtWidgets.QWidget()
+        settings_lay = QtWidgets.QVBoxLayout(self.settings_view)
+        settings_lay.setContentsMargins(0, 0, 0, 0)
 
         # 监测目录
         roots_group = QtWidgets.QGroupBox("监测目录")
@@ -51,7 +70,7 @@ class SettingsPage(QtWidgets.QWidget):
         roots_btns.addWidget(self.remove_root_btn)
         roots_btns.addStretch()
         roots_lay.addLayout(roots_btns)
-        lower_lay.addWidget(roots_group)
+        settings_lay.addWidget(roots_group)
 
         # OCR 三读数
         ocr_group = QtWidgets.QGroupBox("OCR 读数（O1 / O2 / O3）")
@@ -62,7 +81,7 @@ class SettingsPage(QtWidgets.QWidget):
         ocr_lay.addRow("O1 · 今日已识别页数:", self.ocr_o1)
         ocr_lay.addRow("O2 · 预算剩余:", self.ocr_o2)
         ocr_lay.addRow("O3 · 累计识别页数:", self.ocr_o3)
-        lower_lay.addWidget(ocr_group)
+        settings_lay.addWidget(ocr_group)
 
         # 模型状态
         model_group = QtWidgets.QGroupBox("模型状态")
@@ -73,9 +92,19 @@ class SettingsPage(QtWidgets.QWidget):
         self.model_path.setWordWrap(True)
         model_lay.addRow("状态:", self.model_status)
         model_lay.addRow("路径:", self.model_path)
-        lower_lay.addWidget(model_group)
+        settings_lay.addWidget(model_group)
 
-        lower_lay.addStretch()
+        settings_lay.addStretch()
+
+        self.health_panel = HealthPanel(self.ctx)
+        self.health_panel.finished.connect(lambda _report: self.reload_last_check())
+
+        # 两页一起放进 stack：切页不改下半区的高度（QStackedWidget 的 sizeHint 取两页最大值），
+        # 否则用户点一次「库体检」上半区那张状态页就会跟着跳一下。
+        self.lower_stack = QtWidgets.QStackedWidget()
+        self.lower_stack.addWidget(self.settings_view)
+        self.lower_stack.addWidget(self.health_panel)
+        lower_lay.addWidget(self.lower_stack, 1)
 
         splitter.addWidget(self.status_page)
         splitter.addWidget(lower)
@@ -102,6 +131,45 @@ class SettingsPage(QtWidgets.QWidget):
     def _on_splitter_moved(self, *_args) -> None:
         if not self._rebalancing:
             self._split_locked = True
+
+    def _toggle_lower(self) -> None:
+        if self.lower_stack.currentWidget() is self.health_panel:
+            self.show_settings()
+        else:
+            self.show_health()
+
+    def show_health(self) -> None:
+        """就地翻到「库体检」页（#198 1甲）。上半区不动。"""
+        self.lower_stack.setCurrentWidget(self.health_panel)
+        self.lower_title.setText("库体检")
+        self.health_toggle_btn.setText("← 返回设置")
+        self._balance_split_by_content()
+
+    def show_settings(self) -> None:
+        self.lower_stack.setCurrentWidget(self.settings_view)
+        self.lower_title.setText("监测与索引")
+        self.health_toggle_btn.setText("库体检…")
+        self._balance_split_by_content()
+
+    def reload_last_check(self) -> None:
+        """4甲 的界面半边：只显示上次体检的时间与三个计数，明细不在库里。
+
+        `format_ts` 是全站唯一的时间出口（UTC + `Z`）；`format_duration` 是时长不是时刻，
+        两者别混用。没有记录时明说「还没有跑过」，不拿 `—` 冒充一个数。
+        """
+        try:
+            payload = self.ctx.app_settings.get(LAST_KEY)
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict) or "ts" not in payload:
+            self.health_panel.set_last_check("上次体检：还没有跑过（本页不会自动体检）")
+            return
+        mode = MODE_LABELS.get(str(payload.get("mode")), str(payload.get("mode", "—")))
+        self.health_panel.set_last_check(
+            f"上次体检：{format_ts(int(payload['ts']))}｜{mode}｜"
+            f"共 {int(payload.get('total', 0))} 项｜未通过 {int(payload.get('red', 0))}｜"
+            f"读数 {int(payload.get('readings', 0))}｜"
+            f"用时 {format_duration(float(payload.get('elapsed_s', 0)))}")
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -183,6 +251,8 @@ class SettingsPage(QtWidgets.QWidget):
         except Exception:
             self.model_status.setText("不可用（未装可选层）")
             self.model_path.setText("—")
+
+        self.reload_last_check()
 
     def add_root(self) -> None:
         """登记一个监测根。真写库：走 `ctx.register_root`，它同时负责挂上文件监听。

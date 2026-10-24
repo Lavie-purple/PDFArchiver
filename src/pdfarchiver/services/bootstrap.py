@@ -49,6 +49,7 @@ from pdfarchiver.services.backup_service import BackupService
 from pdfarchiver.services.collection_service import CollectionService
 from pdfarchiver.services.default_catalog import SeedResult, seed_default_categories
 from pdfarchiver.services.dedup_service import DedupService
+from pdfarchiver.services.db_check import DbCheckService
 from pdfarchiver.services.export_service import ExportService
 from pdfarchiver.services.index_service import IndexService
 from pdfarchiver.services.ocr_service import OcrService
@@ -95,8 +96,10 @@ class AppContext:
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
     `semantic_search` / `ai_classify` / `ocr` / `vector` / `dedup` / `backup` / `collection` /
-    `patrol` / `archive` / `export` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
-    `collection` 是 **ISSUES I78** 乙的智能集合入口，`export` 是 **ISSUES I78** 丙 的分类清单导出入口），
+    `patrol` / `archive` / `export` / `db_check` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
+    `collection` 是 **ISSUES I78** 乙的智能集合入口，`export` 是 **ISSUES I78** 丙 的分类清单导出入口，
+    `db_check` 是 S7「库体检」面板的唯一取数口 —— 它自己持有 `HealthRepository` 与
+    `app_settings`，界面不再直接写 SQL），
     以及 `background_state()`、
     `register_root()`、`unregister_root()`；`documents` / `catalog` / `collections` / `roots` /
     `jobs` / `texts` / `metadata` / `app_settings` / `operations` 是仓储对象，本该是给服务层和测试用的，
@@ -144,6 +147,7 @@ class AppContext:
     collection: CollectionService
     export: ExportService
     patrol: Patrol
+    db_check: DbCheckService
     events: EventBuffer
     bootstrap_seconds: float
     schema_version: int
@@ -301,6 +305,11 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     export = ExportService(documents, catalog, operations)
     patrol = Patrol(scan, jobs, events, poll_seconds=int(settings["scan_poll_seconds"]),
                     verify_minutes=int(settings["scan_verify_minutes"]))
+    # S7「库体检」（#198）：构造零成本，真正取数在用户点按钮时发生 ——
+    # `expected_version` 用迁移目标版本而不是当前版本，这样 C0 才是在问
+    # "水位有没有停在本版"，而不是拿自己跟自己比。
+    db_check = DbCheckService(engine, app_settings, paths.backups_dir,
+                              expected_version=report.to_version)
 
     # 启动路径**不跑任何同步库检查**（AGENTS.md 禁止启动阻塞）：
     # PRAGMA integrity_check 在 6.1GB 真语料库上实测 19 小时+未完，
@@ -330,5 +339,5 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       semantic_search=semantic_search, ai_classify=ai_classify,
                       ocr=ocr, vector=vector, archive=archive,
                       dedup=dedup, backup=backup, collection=collection, export=export,
-                      patrol=patrol, events=events,
+                      patrol=patrol, events=events, db_check=db_check,
                       bootstrap_seconds=elapsed, schema_version=schema_version)
