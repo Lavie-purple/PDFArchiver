@@ -1065,11 +1065,11 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 
 **D · 十屏重拍（15 项断言）**：`.probe_work/r18_screens_real.py` 加 `operations_item_hint` 检查后整包重跑（真 windows、1400×880、DPR 1.5 ⇒ 2100×1320）：`report.json` **15 项 ALL GREEN**、10 张非空且 md5 互不相同（09 = 66,976B / `47fbf58123de`；08 目标路径仍读作 `C:\Users\lavie\AppData\Local\Temp…`）。`contact_sheet.png` 重建为 **1980×3698 / 1,226,916B**（一次性脚本 `.probe_work/r21b_contact_sheet.py` 用完 truncate 为 0）。
 
-**E · 守卫先报：轮二十一的 §4.31 写了 4 处裸探针文件名**：`docs-inject` 的「台账旧文件名 ≤ 37」红在 **41 处**（补完 §4.31 两处又量到 **38**），多出来的全是 `r20_plan_repro.py` / `r20_ink_probe.py` / `_i107_backup.py` / `r21_contact_sheet.py` —— 裸名等于宣称仓库里该有这些文件。修法：逐个补 `.probe_work/` 前缀（`PY_EXEMPT_PREFIX` 白名单），**上限 37 未动**；复跑该条 **1 passed**。
+**E · 守卫先报：轮二十一的 §4.31 写了 4 处裸探针文件名**：`docs-inject` 的「台账旧文件名 ≤ 37」红在 **41 处**（补完 §4.31 两处又量到 **38**），多出来的全是 `.probe_work/r20_plan_repro.py` / `.probe_work/r20_ink_probe.py` / `.probe_work/_i107_backup.py` / `.probe_work/r21_contact_sheet.py` —— 裸名等于宣称仓库里该有这些文件。修法：逐个补 `.probe_work/` 前缀（`PY_EXEMPT_PREFIX` 白名单），**上限 37 未动**；复跑该条 **1 passed**。
 
 **F · 回归 / 门禁 / 台账 / 文件长度**：全量回归 **791 passed, 1 skipped, 0 failed / 291.54s**（轮二十一 790，+1 = C 段新用例；第一场 301.17s 因 E 段而红，修后重跑取这一场，`.probe_work/r22_regression.log`）。`docs-inject + guards` 于本轮文档定稿后复跑（读数见末行）；台账 **108 行｜I1–I108 连续｜CLOSED 87｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，**I108 CLOSED**、OPEN 归零。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜临近线 6 份` —— `p13_soak 794（余 6）`、`test_job_queue 766（余 34）`、`p19_combined_memory 742（余 58）`、`theme 717（余 83）`、`test_ui_tier 711（余 89）`、`test_saved_search_ui 707（余 93）`；本轮新增用例把 `test_archive_execute_ui.py` 推到 **462 行**，不在临近线。
 
-**临时文件**：`.probe_work/` **554 项 / 860 MiB**（轮二十一 550 项）。新增承重：`r22_regression.log`、`_r21_09_hint_crop.png`、`_r21b_sheet_head.png`；`r21b_contact_sheet.py` **truncate 为 0**。`screens_r18/` 10 张图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json` 全部更新为 15 项版本。
+**临时文件**：`.probe_work/` **554 项 / 860 MiB**（轮二十一 550 项）。新增承重：`r22_regression.log`、`_r21_09_hint_crop.png`、`_r21b_sheet_head.png`；`.probe_work/r21b_contact_sheet.py` **truncate 为 0**。`screens_r18/` 10 张图 + `contact_sheet.png` + `I17_CHECKLIST.md` + `report.json` 全部更新为 15 项版本。
 
 **没测到的 / 仍欠（不许混进上面那些绿）**：① 本轮只跑 `docs-inject + guards`，其余 10 段门禁未跑；② I108 走的是甲，乙（默认选中）未实现、也不打算实现；③ 安装包与签名仍未交付；④ **24 小时 soak 仍未验**（12h 是验到的上限）；⑤ 05 屏「要滚才看全」只是用户接受了现状，没有改成自适应高度；⑥ 本轮 I17 的勾选针对 14 项那版，09 多出的那一行由「甲」这条决策本身背书，未再单独请用户复核。
 
@@ -1078,3 +1078,36 @@ S8 1 份 28KiB／124 行、S9 临时 p12 **14 条红 0**。门禁行的 900 字�
 > 本册 +26、CHANGELOG +37、ISSUES +0，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；上一块轮（二十一）按 §4.31 保留为历史、不动）。
 > `.md` 侧无临近线（最紧的是 `UI-WIREFRAMES 951`，余 249）；`.py` 侧临近表见上一段「回归 / 门禁 / 台账 / 文件长度」。
 > 现册里带 `**本册末行现数**` 标题的块共 **13 块**（轮（七）／（八）／（九）／（十二）／（十三）／（十四）／（十五）／（十六）／（十七）／（十八）／（十九）／（二十）／（二十一））+ 本轮这块**活的**。
+
+### 4.33 整链补跑（2026-10-24 14:38 → 15:56，12 段 35 判定 → 3 红定点复跑）
+
+**起跑（墙钟）**：14:38:22 → 整链落 VERDICT **15:09:14**（12 段合计 1,852.6s ≈ 30.9 min）；随后三条红逐条复跑到 **15:56**。命令：
+`gates/final.py --all --data-root "C:/Users/lavie/AppData/Local/PdfArchiver"`（日志 `.probe_work/final_chain_r22.log`）。
+
+**口径先说清**：整链那一场是 **32/35 绿**，不是全绿。三条红都不是产品缺陷，但要逐条修后**定点复跑**才转绿 —— 定点重跑只替换那三行，**不能把整链写成 35/35 ALL GREEN**（同轮十八那条口径）。
+另：14:36 起跑的**第一场已作废**（stdout 被块缓冲、日志 0 字节，我在无法观察时误杀 regression/e2e 子进程）；中止后核对工作树干净、清掉标记，改 `python -u` 重起。**作废那一场不回填任何读数。**
+
+**A · 红 1/3 —— `regression`**：`790 passed / 1 failed / 1 skipped / 297.25s`，红在 `tests/guards/test_doc_pointers.py::test_台账旧文件名不超过上限`：**46 > 37**。根因是本轮 §4.32 的 E 段与「临时文件」段把 **9 处**探针名写成了裸名（CHANGELOG 4 处 + RUNLOGS 4 处 + `.probe_work/r21b_contact_sheet.py` 1 处）。修法：逐个补 `.probe_work/` 前缀，**上限 37 一个字没动**；独立复跑该守卫 **37 处、VERDICT: ALL GREEN**（`.probe_work/r22_p16_after.log`）。
+
+**B · 红 2/3 —— `injection` 里的 p16**：同一条根因（`1 failed, 7 passed in 117.15s`）。补前缀后复跑 `p16_doc_pointers_injection.py`：**11 条（8 坏法 + 3 反向对照）｜抓住 8、漏网 0、点名存疑 0、对照破 0、锚点失配 0｜ALL GREEN**（`.probe_work/r22_p16_probe.log`）。
+
+**C · 红 3/3 —— `consistency` 真根**：`0.3s` 红在 C0 之前的「库不存在：`…\PdfArchiver\data\data\catalog.db`」。这是**调用参数传深了一层**：p12 用 `AppPaths.resolve(data_root)`，自己会拼 `data/`。不是数据不一致，也不是产品问题。
+
+**D · 三条红的定点复跑**：
+- 回归：**791 passed / 1 skipped / 289.71s**（`.probe_work/r22_regression2.log`）。
+- p16：见 B。
+- 真根：`--only consistency --data-root "C:/Users/lavie/AppData/Local/PdfArchiver"` → p12 注入自检 **21/21 + 口径边界 1/1**、p14 **ALL GREEN**、真根 **19 条｜红 0｜未验 0**（`.probe_work/r22_consistency_real.log` / `p12_real_root.json`）。真根逐条计时：C1 1,037,900ms｜C5 1,241,146ms｜**C11 961,441ms**（最新一份 11,686,936KiB@v7 整库体检）｜C3·六盘各 785,823ms｜C4 218,742ms｜C2 3,367ms；库 **v8**、主记录 **10,991**、正文 **1,975,611** 行、`running 0`、`na` 全量 10,991。
+- 清标记的判据：注入段**只有整段全绿才删** `injection_inflight`，p16 红使它按设计留了下来；`git status --short` 只有两份文档改动 ⇒ 源码已由探针还原，确认后才删标记重跑。
+
+**E · 其余九段读数（整链那一场，全部 PASS）**：coldstart **1.045s**；e2e 生命周期冷启动 **1.016s** + **11 条端到端通过**；injection p9 **69/69**（225.6s）、p10 **45/45**（140.1s）、p17 3、p18 3、p21 24、p22 33、p23 23、p24 17；ui-inject p15 **36 条**（74.4s）；ocr 三条（落库 6 页 / 预算 2 页真停机 / 引擎套件 **4 passed 0 skipped**）；soak 4 分钟（**60 点、最大空洞 2.0s、RSS 112.4 → 112.6MiB、积压峰 18 排空 1.0s、S7 82/82、S8 1 份、S9 14 条**）；package **400.0MiB**、构建 147.7s、冒烟 141.3s（273/273、recover 1 条）；g2 **P95 = 326.0ms**（直接复跑探针取数：20 查询 × 5 reps、起跑 CPU 4.9%，`.probe_work/r22_g2_value.log`）。
+
+**没测到的 / 仍欠**：① 整链那场按上面的口径是 32/35，三行绿的证据来自定点复跑，**不是同一场**；② **24 小时 soak 仍未验**（4 分钟采样与 12h 档都不等于 24h）；③ 安装包与代码签名仍未交付；④ I108 乙明确不实现；⑤ 本轮未重跑 `--c11-deep`（旧快照内部损坏仍按 I98 的口径不算）。
+
+> **本册末行现数（2026-10-24 整链补跑收尾取）**：
+> `DECISIONS 687｜VERIFICATION 857｜本册 1113｜CHANGELOG 794｜ISSUES 146` —— 轮二十二 §4.32 1080 / 783 / 146 ⇒
+> 本册 +33、CHANGELOG +11、ISSUES +0，DECISIONS / VERIFICATION 主册未动（`wc -l`＝`splitlines()`＝守卫判定那条口径；§4.31/§4.32 按历史保留、不改写）。
+> 文件长度守卫直接跑：`扫了 213 个 .py 与 31 个 .md｜临近线（余量 ≤100 行）7 份`——`p13_soak.py 794（余 6）`、
+> `test_job_queue.py 766（余 34）`、`p19_combined_memory.py 742（余 58）`、`theme.py 717（余 83）`、
+> `test_ui_tier.py 711（余 89）`、`test_saved_search_ui.py 707（余 93）`、
+> **本册 1113（余 87，本轮新进临近线）**；台账 108 行、失效测试名 6 处（上限 6，未涨）。
+> 现册里带 `**本册末行现数**` 标题的历史块共 **14 块**（轮（七）……（二十二））+ 本轮这块**活的**。
