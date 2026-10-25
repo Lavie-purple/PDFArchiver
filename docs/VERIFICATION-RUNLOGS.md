@@ -732,3 +732,169 @@ id(writer)=…3248`；缓存致盲（写 3 页后同一实例仍 0 命中、它�
 > **没有新界面**（S7 只改了成本文案与状态页两条重查路线，逐屏线框回环节不触发）。
 > `.md` 侧最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`；本册 734（余 466）、CHANGELOG 1,000（余 200）。
 > **块数口径**：本册从 **11 块**（§4.26…§4.36）加本轮 = **12 块**。
+
+### 4.38 轮二十七（2026-10-25 13:0x 起）· **I112 甲+乙** / **I111 D+⑤** / **I109 ①** / ⑨ injection 最低负载整段 / **⑩ I110 的 2.1 倍定位（受控干预）** / 全量语义索引
+
+用户这一轮的指令逐字：「勾选项距跟着你的建议来，⑨ injection 的真空载（CPU<10%）整段仍无读数；
+⑩ I110 的 2.1 倍机制仍未定位；全量语义索引只跑过 20 份（占 10,991 的 0.18%）。也要处理执行」。
+⇒ 按我自己上一轮写下的建议逐条执行：**⑩ 走乙**（背靠背第三／四场仪器化 + 受控干预）、**I112 甲 → 乙**
+（上一轮的推荐顺序）、**I111 D 与 ⑤**、**I109 ①**、**⑨ 只在 CPU<10% 取**（本轮取到迄今最低档，仍不是真空载）、
+**⑤ 全量语义索引真跑**。**没有新界面**，线框回环节不触发。
+
+**A · I112 甲 + 乙：写路径的两条根因（`src/` 三份 + `tests/` 一份 + 两份存储口径文档）**：
+- **甲 · 批量前向**：`services/vector_service.py:175-222` 的 `build_vectors` 从「逐页 `embed_single`（batch=1）」
+  改成**一页一向量、一次前向吞 `EmbeddingService.BATCH_SIZE`（16）页**（`chunk` 切片 → 一次
+  `self.embedding.embed([page.body for page in chunk])`）；取消检查按批、`monitor.advance(len(chunk))` 按批推进；
+  **一批要么全写要么不写**，不留半批。
+- **乙 · 容量式 `.npy`**：`semantic/vector_store.py`（+337/−… 见 `git diff --stat`）把「每批整表 `np.save` +
+  `np.vstack` 再复制一遍」换成 `(capacity, 512)` int8：`DEFAULT_CAPACITY=1024`、**扩容只翻倍**
+  （先写 `vectors.npy.grow` 再 `os.replace`，中途崩掉留下的还是原来那个完好文件）、**真实行数每次从
+  `vector_meta` 的 `MAX(vector_idx)+1` 现读**（不缓存 ⇒ 跨实例立刻可见）、搜索与复制分块走
+  `SEARCH_CHUNK_ROWS=32_768` / `COPY_CHUNK_ROWS=65_536`；**不做内存映射**（Windows 下 `mmap_mode="r+"` 后
+  原地 `np.save` 撞 `[Errno 22]`，自己没关映射时 `os.replace` 撞 `[WinError 32]`）。
+- **守卫**：`tests/integration/test_vector_write_path.py` **+225 行**（扩容后旧行仍读得出、跨实例写进去立刻看得见、
+  停手后容量不缩），配 `vector_meta` 的 `PRAGMA foreign_keys=ON`（见 B）。
+- **顺带量的搜索端换算**（`.probe_work/u27_scale_variants.log`，只记录不改代码）：四个等价写法 top1 **全等 2.7059**
+  （最好一场 8.14 / 6.10 / 6.86 / 6.50s），**不换算那条 top1 变成 343.6539** ⇒ 量化换算不能省；
+  换成「`asarray(f32)` 后 `q/127`」最快，但那是搜索热路径，不属于本轮写路径范围，留给搜索延迟单独一轮。
+
+**B · I111 D + ⑤（台账 ①②⑤ 三条就这一轮销账）**：
+- **D · 外键打开**：`VectorStore._connect()` 执行 `PRAGMA foreign_keys=ON` —— SQLite 默认是 0，所以
+  `vector_meta.doc_id` 那条外键在产品里**一直是死的**；打开后真库孤儿行 **0**，
+  并加 `test_孤儿_doc_id_插不进元数据`（不打开就绿不了）。
+- **⑤ · 单只 `EmbeddingService`（先量再注入）**：`.probe_work/u27_embedding_two_instances.log` 逐行量第二只的代价 ——
+  基线 RSS 39.4 MiB／206 句柄／VRAM 1,136 MiB；第一只加载 +16 条 ⇒ 257.9 MiB／419／1,376（678.1ms）；
+  **第二只加载 +16 条 ⇒ 294.3 MiB／428／1,578（276.4ms）**，即 **+36.4 MiB RSS、+9 句柄、+202 MiB VRAM、276ms**；
+  两实例输出 `max|Δ|=0.000e+00`（形状 (16,512) 各一）。⇒ `bootstrap` 只建一只、注入三个消费者
+  （`SemanticSearchService` / `AIClassifyService` / `VectorService`），守卫
+  `test_装配层_embedding_只有一份三个消费者共用`；`tests/integration/test_ai_classify_service.py` +35 行跟着换注入。
+
+**C · I109 ①：状态页「重新读取数据库状态」挪出 GUI 线程**：`ui/pages/status_page.py` **+83 行** ——
+daemon `threading.Thread` + `_text_ready = Signal(str, str)` + `finished`；点下去按钮立刻变
+「正在重新读取… 已用 N 秒（界面可以继续用）」（1 秒 `QTimer` 刷新），失败把**异常原文**追加到读数后面并保留上一次的读数
+（不伪装成功、也不清空）。`tests/integration/test_status_readout.py` **+95 行**。
+
+**D · ⑨ injection 整段：跑到迄今最低负载档，但仍不是真空载**（`.probe_work/u27_injection_idle.log` /
+`u27_injection_idle_summary.txt`，2026-10-25 14:01 → 14:14）：
+- **整段真跑了**：**9 条判定全绿、17/17 条坏法被抓到、`EXIT=0`、`WALL=732s（12 分 12 秒）`**，末行
+  `VERDICT: ALL GREEN` 两处，`injection_inflight` 由门禁自己删掉（整段全绿的唯一条件）。
+- **起跑窗口不是 CPU<10%**：PRE-RUN 40 秒采样 **mean=18.1%｜median=15.2%｜max=49.5%**，门禁自己的起跑读数
+  **CPU 25.5%｜可用 8,613MiB｜最吃内存 `WorkBuddy.exe 430MiB`**；跑完 14:17 再采 60 秒 **26.2–31.0%（mean 26.9%）**。
+  逐进程指名（10 秒窗口）：`Qoder CN.exe` pid 19204 **持续读 15.6 MiB/s**、pid 4004 **持续写 15.9 MiB/s**
+  （本会话的编辑器/索引进程，不是本轮探针），外加 `MsMpEng.exe`、`WorkBuddy.exe` / `DoubaoWork.exe` ——
+  按规矩都不替用户关，所以「CPU<10%」这一档在本机当前状态下不可达。
+- **这条读数推翻一个隐含前提**：历史「空载」读数 **788.9 / 793.9s** 一直被当基准，而本场 mean 18.1%
+  （比那两场的口径高得多）只用 **732s**，快 **7–8%** ⇒ injection 的时长**不朝「负载越低越快」的方向变**，
+  「必须真空载才算数」这个前提本身站不住。但按项目口径，`CPU<10%` 这一行**仍然没有读数**，不销账。
+
+**E · ⑩ I110 的 2.1 倍已定位：系统页缓存装不装得下这次扫描（不是负载、不是 PRAGMA、不是并发）**：
+- **仪器化背靠背两场**（`.probe_work/u27_i110_pairs.py` → `.log`／`.json`，末行 `VERDICT: MEASURED`；
+  `svc._remember` 被替换成空函数 ⇒ 真库只读，`db_check.last` 一字未动）：run1 合计 **1,224.8s**、
+  run2 **1,259.8s**（起跑 CPU 28.6%／13.3%，可用 8,657,967,152／8,626,507,776 B）。逐项连同设备读：
+  **C4 4.659／4.554s** —— 进程逻辑读 **4,391.9 MiB**，设备读只有 **10.1／15.7 MiB**；
+  **C5 45.712／45.035s** —— 26,139.0 MiB 对 **519.0／274.7 MiB**；
+  C1 588.527／634.887s —— 设备读 21,649.7／23,220.1 MiB ⇒ **36.8／36.6 MiB/s**；
+  C11 579.519／571.051s —— 设备读 23,546.5／23,357.4 MiB ⇒ **40.6 MiB/s**；
+  `busy` 两场全程 **0.9–1.4s**。⇒ 两场都落在「快档」（C4 ≈4.6s），**快档不是偶然，是缓存装得下的常态**。
+- **产品连接的 PRAGMA 读数**（同一次两场里现取）：`cache_size=-2000`（2 MB）、`mmap_size=0`、`temp_store=0`、
+  `journal_mode=wal`、`synchronous=2`、`page_size=4,096`、`page_count=2,928,621`（**11.2 GiB 库**）⇒
+  2 MB 页缓存装不下、mmap 是关的 ⇒ 能装多少完全由**系统页缓存**决定。
+- **受控干预**（`.probe_work/u27_i110_cache_pressure.py` → `.json`，末行 `VERDICT: MEASURED`；同一进程、同一条
+  `_c4_full`、同一份库）：**A1 194.196s**（设备读 5,051.3 MiB，起点可用 8,384MiB —— C11 那 23 GiB 扫描刚把缓存挤掉）
+  → **A2 4.557s**（设备读 2.0 MiB）→ 触碰 4 GiB 匿名页把可用压到 **4,377.9 MiB**（安静档那场是 4,437MiB）
+  → **B 188.925s**（设备读 5,121.6 MiB）→ 释放后 **C 16.57s**（618.8 MiB）。
+  **B / A2 = 41.5 倍**，两次之间只差「可用内存还剩多少」。四次读数串完全相同
+  （`正文 1,975,611 行｜花名册 1,975,611 行｜漏索引 0｜花名册残留 0`）。
+- **撤回轮二十五那条「页缓存被排除」**：那次压的是**单条 201s 扫描自身**（现态 201.1／冷 212.3／热 210.7s，±3%），
+  **没动可用内存**；而轮二十五那两场的可用内存 **2,197／3,656 MiB 都小于 C4 的 4.4 GiB 工作集** ⇒ 那次排除不作数。
+  历史记录不改写，撤回写在这里。
+- **剩下的边界（不销账）**：磁盘本身也慢 —— 设备读吞吐两档实测 **20–41 MiB/s** 而 `busy` 只 0.9–1.4s，
+  瓶颈在**每次 4 KiB 页读的往返**而不是 SSD 带宽；这一层没拆开，也不影响「缓存决定快慢」这条结论。
+- **文案四处同步**：`services/db_check.py` 模块 docstring 与 `FULL_COST`、`ui/pages/health_panel.py` docstring、
+  `docs/UI-WIREFRAMES.md` S7 硬条件段；`tests/integration/test_db_check.py` 的
+  `test_全库档的确认框先给成本` 把 `"跨度没定位"` 换成 `"系统页缓存" + "4.6 秒"`（**能骗过它的坏法**：把这句改回
+  「跨度没定位」即红 —— 本轮真注入过一次，`1 failed` 后还原成 `10 passed`）。台账 `ISSUES I110` 残留 ① 改写成
+  「乙 已做完」，并留下磁盘吞吐这条边界。
+- **新快端不放过**：仪器化两场的 **20 分 25 秒 / 21 分 0 秒**把原先写的「跨度 26 分 58 秒 → 67 分钟」下界又推前了
+  —— 这正是 I110 当初被开的那个错（拿过时的极端值当区间）。⇒ 三处区间口径一起改：`db_check.py` docstring
+  「测过五场，跨度 26 分 58 秒 → 67 分钟」⇒「测过七场，跨度 **20 分 25 秒** → 67 分钟」、
+  `health_panel.py` docstring「最快的一场 26 分 58 秒」⇒「**20 分 25 秒**（轮二十七脚本仪器化）」、
+  `UI-WIREFRAMES.md` 两处「四场 / 五场」⇒「七场」；`FULL_COST` 那句枚举改成「脚本四场 20 分 25 秒、21 分 0 秒、
+  约 57 分钟、约 67 分钟」，测试加断言 `20 分 25 秒` + `21 分 0 秒`（只钉慢端就是重犯旧错）。
+- **几何复核**（`.probe_work/u27_cost_geometry.py`，末行 `VERDICT: ALL GREEN`；文案 450 字）：
+  **1024×720** 标签高 **100 → 112**（+12）、体检表仍 **180**、状态行底边 **550 < 页高 676**；
+  **1280×800** 标签高 **72 → 86**（+14）、表仍 180、底边 **604 < 756**；页上无滚动容器（`range=0` 那条判据不适用）。
+
+**F · ⑤ 全量语义索引：真库 8,661 份候选跑到底（7 小时 30 分）**（`.probe_work/u27_full_index.py` →
+`.log`／`u27_full_index_status.json`，末行 `VERDICT: DONE`；不动产品代码，走的就是 I112 甲 + 乙 之后的同一条写路径）：
+- **起止**：15:08:16 → 22:38:39，**27,022.9s = 450.4 分（7 小时 30 分）**。**备份在先**：
+  `data/backups/backup-20261025-045656-v8`（04:56，早于这批写 10 小时）+
+  `pre-migration-0008-20261020T122144.db`（11,967,422,464 B）。
+- **结果**：候选 **8,661**｜成功 **8,660**｜失败 **0**｜缺文件 **1**（`doc_id 93`，文件已不在磁盘上，按规矩跳过、
+  不标 `missing`）｜嵌入 **1,966,435 页 = 写入 1,966,435 条向量**｜**72.77 页/秒**｜峰值 RSS **442.8 MiB**
+  （G8 红线 1,200MiB 的 37%）。
+- **终值复核（只读，跑完后现查）**：`vector_status {'done': 8,687, 'na': 2,304}`（合计 10,991）；
+  `vector_meta` **1,968,159 行，idx 0…1,968,158 连续**、孤儿 **0**、重号 **0**；
+  `vectors.npy` **1,073,741,952 B = 2,097,152 行 × 512 B**（容量翻倍到位，**已用 1,968,159 = 93.8%**）；
+  `done` 文档的 `text_pages` 合计 **1,968,159**、空正文 **0** 行 ⇒ **向量条数与正文行数逐条相等**。
+- **一处 ±1 对账（记下来而不是抹平）**：本轮写 1,966,435 + 轮二十六／二十七小样本已写 1,723 = **1,968,158**，
+  库里是 **1,968,159** ⇒ 差的这 1 条落在小样本那 26 份里（它们的 `text_pages` 比当时写下的向量多 1 条），
+  **不是本轮重复写**：本轮每份只处理一次、`na → done` 一步到位。终值口径以「向量 = `done` 文档的正文行」为准。
+- **成本三次估算的对照（前两次作废，只留实测）**：轮二十六按 20 份外推 **19.27 小时**、轮二十七按 6 份
+  106 页/秒折算 **5.2 小时**，全量真跑 **7.53 小时** ⇒ 小样本偏悲观 2.6 倍、大样本偏乐观 1.45 倍。
+  **写放大已消**：450 分钟里没有任何一次整表重写（容量式追加），峰值 RSS 也远低于红线。
+- **库体积**：`catalog.db` 11,995,631,616 → **12,109,783,040 B（+114,151,424 B ≈ +108.9 MiB**，全在
+  `vector_meta` 与 `documents.vector_status`）；`vectors.npy` **1 GiB** 单独一份文件。
+- **候选池之外**：`text_status='none'` **2,229** 份与 `failed` **74** 份没有正文可嵌，跑完仍是 `na`
+  （加上 doc 93 ⇒ `na` 终值 2,304）—— 这不是失败。**I63 ⑤ 至此从「20 份 = 0.18%」变成「候选池全跑完」**。
+
+**G · 全量回归与门禁：一条命令 802 passed／1 skipped；两处自伤都是守卫先报的**：
+- **回归**：`pytest tests/unit tests/integration tests/guards -q` ⇒ **802 passed / 1 skipped in 178.34s**（exit 0）。
+  轮二十六基线 794 passed / 1 skipped ⇒ 净 **+8**；`git diff tests/` 逐行数是 +9 个 `def test_` 与 1 个**原地改签名**
+  （`test_探测器在按钮路径上真的抓得到那条扫描` 补 `qtbot`），8 = 9 − 1。
+- **守卫单跑**：`pytest tests/guards -q` ⇒ **54 passed**（预检里 11.28s、复跑 10.44s）。
+- **两处自伤都是守卫先报的（不是我看出来的）**：
+  1. **台账格子结构**：预检 15:12 那场 `VERDICT: RED（1 步未过）`，原文
+     「`I112 的状态字段有 2 个（要正好 1 个…）`」—— I112 处置格里写了 `状态 OPEN → **MITIGATED**`，`**` 被算成第二个状态词。
+     改成不加粗后 `tests/guards` **54 passed**。
+  2. **成本文案有牙**：把 `FULL_COST` 里那句「跨度来自系统页缓存（同一条 C4 命中 4.6 秒 / 冷 189 秒）」
+     改回「跨度没定位（**ISSUES I110**）」⇒ `test_全库档的确认框先给成本` **1 failed, 9 deselected**；
+     从 `.probe_work/u27_db_check.bak` 还原 ⇒ **10 passed in 1.85s**（备份文件用完即删）。
+- **数值自伤一处（读数不一致，守卫照不到）**：`db_check.py`／`UI-WIREFRAMES.md`／`ISSUES.md` 里写的压测后可用内存
+  是 **4,329 MiB**，而 `u27_i110_cache_pressure.json` 记的是 **4,377.9 MiB** ⇒ 四处一并改成 **4,378**。
+  这条守卫抓不到（是跨文件的同一条读数），记在这里当反例。
+- **预检两场**（`scripts/precheck.py`，`.probe_work/u27_precheck.log` / `u27_precheck_final.log`）：
+  **15:12** 那场 `合计 2 步｜红 1`、`VERDICT: RED（1 步未过）` —— 红的就是台账形状那条（I112 双加粗），
+  另有一条**既存**的「结构不合格 1 行（上限 1）：I35（3 格、行尾未闭合）」在限额内、不算新红；
+  **终场**（本章全部文档改完之后）`54 passed in 13.28s` + `docs-inject/guards` **9 条判定全绿**
+  ⇒ `合计 2 步｜红 0`、末行 `VERDICT: ALL GREEN`（10 段 SKIP 照旧逐行明写，全绿不覆盖它们）。
+
+**H · 没测到的 / 仍欠（逐条，不打包成「都验过了」）**：
+- ④ **24 小时 soak 仍未验**（12h 是上限；不许写「24h/每日已验」）。
+- ⑨ injection 的**真空载门（CPU<10%）整段仍无读数**：本场 18.1% mean 是迄今最低档，且「负载越低越快」这个
+  隐含前提被本场**证伪**（732s 快过历史空载 788.9／793.9s）—— 前提倒了不等于那一行有读数，两件事分开记。
+- **全量语义索引的候选池口径**（`u27_full_index.py:35-36` 的现读查询）：`vector_status='na' AND text_status IN ('native','mixed')`
+  ⇒ 起跑时 **8,661** 份。同一时刻的类分布（只读快照）：`native 8,461｜mixed 227｜none 2,229｜failed 74` ⇒
+  **`none` 与 `failed` 两类共 2,303 份不在池内**（没有正文可嵌，本轮跑完它们仍是 `na`；这是口径不是失败）。
+  跑动中留一份中途快照对账：`done 2,011｜na 8,979｜running 1`、`vector_meta 150,674 行（0…150,673）`、
+  `vectors.npy` 33,554,560 B ⇒ 容量 65,536（翻倍到位），与日志 `[1970/8661]` 那行一致。
+- **I111 ⑥**：`delete_by_doc` 只删 `vector_meta`、不动 `.npy` 里的行（死行占 top_k 名额）—— 本轮**没修**。
+- **I112 ③**：容量只增不减 ⇒ 文件只涨不缩（终值仍 ≈ 1 GiB）—— 本轮**没修**。
+- **I110 的剩余边界**：设备读吞吐两档 20–41 MiB/s、`busy` 只 0.9–1.4s ⇒ 瓶颈在 4 KiB 页读往返，
+  这一层没拆开（不影响「缓存决定快慢」，但「磁盘为什么这么慢」仍没有答案）。
+
+> **本册末行现数（2026-10-25 轮二十七收尾取）**：`CHANGELOG 1,056（余 144）｜DECISIONS 687（余 513）｜本册 884 → 900（余 300）｜分册 757（余 443）｜ISSUES 150｜UI-WIREFRAMES 1,009（余 191）`；
+> **最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`**。
+> **台账**：`112 行｜I1–I112 连续不重号｜CLOSED 87｜MITIGATED 24｜WONTFIX 1｜OPEN 0` —— 本轮 I112 由 OPEN 转 MITIGATED（残留 ③ 条照实挂着），
+> I110 残留 ① 改写成「乙 已做完」并留下磁盘吞吐这条边界，没有新增行（I109/I110/I111/I112 只改证据与状态格）。
+> **测试**：`pytest tests/unit tests/integration tests/guards -q` ⇒ **802 passed / 1 skipped（178.34s，exit 0）**；`tests/guards` 单跑 **54 passed（13.28s）**；
+> `scripts/precheck.py` 两场（15:12 那场 RED 是 I112 双加粗自伤，修后终场）末行 `VERDICT: ALL GREEN`（`合计 2 步｜红 0`，10 段 SKIP 照旧逐行明写）。
+> **真库现数（只读，`mode=ro` 取）**：`catalog.db 12,109,783,040 B`｜`vectors.npy 1,073,741,952 B = 2,097,152 行 × 512 B（已用 93.8%）`｜
+> `vector_meta 1,968,159 行（idx 0…1,968,158，孤儿 0、重号 0）`｜`vector_status done 8,687 / na 2,304`。
+> **临时文件**：`.probe_work/` 顶层 **663 项（13 个子目录）｜递归 1,104 文件｜857.6 MiB｜顶层 0 字节 75 个**
+> （10 份轮二十七探针脚本截成 0 字节；`u27_mm_probe`、`u27_mm_probe2` 两个工作目录与 `status_page.py.bak`／`bootstrap.py.bak` 已删）；`injection_inflight` 不在场。
+> **会话日志体积（token 代理）**：**337,053,182 B｜104,887 行**（22:45 取）vs 轮二十六基线 **327,159,766 B / 102,523 行** ⇒ **+9,893,416 B｜+2,364 行**。
+> **本轮 `src/` 改了 7 份**（`semantic/search_service.py`、`semantic/vector_store.py`、`services/bootstrap.py`、`services/db_check.py`、
+> `services/vector_service.py`、`ui/pages/health_panel.py`、`ui/pages/status_page.py`）、**`tests/` 改了 4 份**（`test_ai_classify_service.py`、
+> `test_db_check.py`、`test_status_readout.py`、`test_vector_write_path.py`）、**`docs/` 改了 6 份**（本册、`CHANGELOG.md`、`ISSUES.md`、
+> `UI-WIREFRAMES.md`、`ARCHITECTURE.md`、`DATABASE.md`），`git diff --stat` 合计 **17 份 +895/−196**。**没有新界面**（S7 只改成本文案与状态页重查路线）。

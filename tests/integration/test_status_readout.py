@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 
 from PySide6 import QtCore, QtWidgets
 
@@ -20,6 +22,21 @@ from pdfarchiver.ui.nav import NAV_ITEMS
 from pdfarchiver.ui.pages.settings_page import SettingsPage
 from pdfarchiver.ui.pages.status_page import StatusPage, UNWIRED_ACTIONS
 from tests.conftest import settle as _settle
+
+
+def _wait_reload(page: StatusPage, qapp, timeout: float = 30.0) -> None:
+    """等后台重查把正文递回来（**ISSUES I109** ①：按钮路径不再同步渲染）。
+
+    队列信号只有在主线程跑事件循环时才投递，所以这里必须 `processEvents()` 而不是睡等；
+    超时就直接红，别让"线程没回信号"变成一条静默的旧读数。
+    """
+    deadline = time.monotonic() + timeout
+    while page.reloading:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"后台重查 {timeout:.0f}s 未结束（status-reload 线程没回信号？）")
+        qapp.processEvents()
+        time.sleep(0.01)
+    _settle(qapp)
 
 
 def _status_block(window, qapp) -> StatusPage:
@@ -64,6 +81,7 @@ def test_刷新按钮重查数据库(window, ctx, qapp, qtbot) -> None:
     assert "标签 = 0" in page.view.toPlainText()
     ctx.catalog.add_tag("刷新后才出现的标签")
     qtbot.mouseClick(page.refresh, QtCore.Qt.MouseButton.LeftButton)
+    _wait_reload(page, qapp)
     assert "标签 = 1" in page.view.toPlainText(), "刷新必须是重新查库，不是重排一遍旧文本"
 
 
@@ -80,6 +98,7 @@ def test_状态页显示扫描与索引任务的读数(window, ctx, qapp, root, 
     ctx.scan.scan_root(r)
     page = _status_block(window, qapp)
     page.reload()
+    _wait_reload(page, qapp)
     text = page.view.toPlainText()
     assert "== 扫描与索引任务：进度 / 错误 / 重试 ==" in text
     assert "后台未启动" in text, "没起 worker 就要说没起，不许显示成正在跑"
@@ -95,11 +114,13 @@ def test_刷新按钮同样重查任务读数(window, ctx, qapp, root, make_pdf,
     ctx.scan.scan_root(r)
     page = _status_block(window, qapp)
     qtbot.mouseClick(page.refresh, QtCore.Qt.MouseButton.LeftButton)
+    _wait_reload(page, qapp)
     assert "queued=1" in page.view.toPlainText()
 
     make_pdf("刷新读数/丑.pdf", page_lines=["丑文档的正文内容字符"])
     ctx.scan.scan_root(r)
     qtbot.mouseClick(page.refresh, QtCore.Qt.MouseButton.LeftButton)
+    _wait_reload(page, qapp)
     assert "任务条数  index：queued=2" in page.view.toPlainText()
 
 
@@ -298,7 +319,31 @@ def test_自动节拍不现数全库OCR页数(window, ctx, qapp) -> None:
     assert "库里已存 OCR 正文 未现数" in text, f"没数过的那一格要明写未现数，不许显示成 0 页：{text}"
 
 
-def test_探测器在按钮路径上真的抓得到那条扫描(window, ctx, qapp, qtbot) -> None:
+def _statements_during_button_reload(ctx, page: StatusPage, qapp) -> list[str]:
+    """按下刷新按钮并等它读完，回**后台线程那条连接**上真执行过的 SQL 原文。
+
+    按钮路径的重查在后台线程跑（**ISSUES I109** ①），用的是那条线程自己
+    `engine.connect()` 的产物 —— 主线程那份 trace 一条也抓不到。所以这里把
+    `Engine.connect` 临时包一层，给每条新建连接挂同一个 trace 回调。
+    """
+    seen: list[str] = []
+    real_connect = ctx.engine.connect
+
+    def traced_connect():
+        conn = real_connect()
+        conn.set_trace_callback(seen.append)
+        return conn
+
+    ctx.engine.connect = traced_connect
+    try:
+        page.refresh.click()
+        _wait_reload(page, qapp)
+    finally:
+        ctx.engine.connect = real_connect
+    return seen
+
+
+def test_探测器在按钮路径上真的抓得到那条扫描(window, ctx, qapp) -> None:
     """上面那条的反面配对：只有按钮会现数那一格，所以探测器必须在那里报出来。
 
     没有这一条，`_full_scans_of_text_pages` 可以写成永远返回空列表而上面照样绿 ——
@@ -306,8 +351,52 @@ def test_探测器在按钮路径上真的抓得到那条扫描(window, ctx, qap
     0 要显示成 `0 页` 而不是「未现数」）。
     """
     block = _status_block(window, qapp)
-    seen = _statements_during(ctx, lambda: qtbot.mouseClick(block.refresh,
-                                                           QtCore.Qt.MouseButton.LeftButton))
+    seen = _statements_during_button_reload(ctx, block, qapp)
+    assert seen, "后台线程那条连接一条 SQL 都没抓到 —— 这条守卫会永真，先修捕获再谈结论"
     bad = _full_scans_of_text_pages(ctx.engine.thread_connection(), seen)
     assert len(bad) == 1, f"按钮路径应当恰好出现一条全表扫描，实际 {len(bad)} 条：{bad}"
     assert "库里已存 OCR 正文 0 页" in block.view.toPlainText()
+
+
+def test_按钮重读在后台跑不占住界面线程(window, ctx, qapp, monkeypatch, qtbot) -> None:
+    """**ISSUES I109** ①：完整重查在后台线程跑，点击当场返回。
+
+    判据是**点击耗时**与**点击刚返回时的正文**：把一次读数拖慢 0.6 秒（真库上那格是
+    201–212 秒），同步实现会把点击一起拖住、正文当场就变；后台实现必须立刻返回、
+    正文还是旧的，并且 `read_tasks` 是在非主线程里被调的。
+    """
+    block = _status_block(window, qapp)
+    real = ctx.status.read_tasks
+    names: list[str] = []
+
+    def slow(*args, **kwargs):
+        names.append(threading.current_thread().name)
+        time.sleep(0.6)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ctx.status, "read_tasks", slow)
+    before = block.view.toPlainText()
+
+    t0 = time.perf_counter()
+    qtbot.mouseClick(block.refresh, QtCore.Qt.MouseButton.LeftButton)
+    elapsed = time.perf_counter() - t0
+
+    assert elapsed < 0.2, f"点击耗时 {elapsed:.2f}s —— 重查还在 GUI 线程里同步跑"
+    assert block.reloading, "点击之后没有进入'正在读'的状态，按钮无法反映进度"
+    assert block.view.toPlainText() == before, "点击刚返回正文就变了 —— 同步跑才会这样"
+    assert not block.refresh.isEnabled(), "读取期间按钮该禁用，否则重复点击会叠线程"
+
+    _wait_reload(block, qapp)
+    assert names, "桩没被调用：后台线程根本没开始读"
+    assert names[0] != "MainThread", f"读数在主线程里跑的（thread={names[0]}）"
+    assert block.refresh.isEnabled() and block.refresh.text() == "重新读取数据库状态"
+
+
+# `I109` ① 三条新断言（2026-10-25 轮二十七，三条坏法各自真注入过再还原，逐字结果）：
+#   坏法 A｜`reload()` 改回 `self._render(with_ocr_pages=True)`（同步渲染）⇒ **2 failed, 11 passed**：
+#          一条红在 `后台线程那条连接一条 SQL 都没抓到`（主线程连接早缓存过，worker 根本没起），
+#          另一条红在 `点击耗时 0.60s —— 重查还在 GUI 线程里同步跑`。
+#   坏法 B｜删掉 `self.refresh.setEnabled(False)` ⇒ 只有新测试红，`读取期间按钮该禁用，否则重复点击会叠线程`。
+#   坏法 C｜后台线程里改成 `_render_text(with_ocr_pages=False)`（按钮不再现数 OCR 页数）
+#          ⇒ **1 failed, 12 passed**，红在 `按钮路径应当恰好出现一条全表扫描，实际 0 条` ——
+#          证明探测器仍咬在按钮路径上，没有因为挪线程而跟着空转。

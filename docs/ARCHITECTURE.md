@@ -65,7 +65,8 @@ src/pdfarchiver/
     embedding.py★         #   ONNX 向量服务：加载的文件名写死在文件里（`onnx/model_int8.onnx`，产品唯一口径），
                           #   模型缺失抛 `FileNotFoundError` 并回显该去哪个目录下载（旧树在这里写的是一个
                           #   src 里从没存在过的异常类名，见 **ISSUES I82**）
-    vector_store.py★      #   int8 向量 + 整份载入的 `.npy`（不做内存映射）+ `vector_meta` 表（迁移 0007 收编进链）
+    vector_store.py★      #   int8 向量 + 容量式 `.npy`（`(capacity,512)`，按 `MAX(vector_idx)+1` 认行，
+                          #   扩容翻倍、只写新增行；不做内存映射）+ `vector_meta` 表（迁移 0007 收编进链）
     search_service.py★    #   语义检索：查询文本 → embedding → `VectorStore.search()` → 命中（这一整条串的断言见 **ISSUES I83** 甲）
     classify_service.py★  #   分类建议，只产建议，不落库
   # ── `fileops/` 与 `backup/` 这两个目录**在场但是空的**：各只有一个零字节 `.gitkeep`，没有

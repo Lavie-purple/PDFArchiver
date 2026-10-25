@@ -29,8 +29,11 @@ p12 C7「向量状态取值都在口径内」恒绿，但那个"在口径内"只
    正文变了要重建时，旧向量不清就会让语义搜索同时命中新旧两版，命中页对不上真身。
 6. **空正文页不建向量**：`char_count=0` 的页跳过，与"这一页本来就没字"是同一件事；
    给它建一条向量等于往语义索引里塞一条谁也不该命中的行。
-7. **可取消**：逐页 embedding 是这份服务里最长的循环，每页前问一次 `monitor.cancelled()`，
+7. **可取消**：逐批 embedding 是这份服务里最长的循环，每批前问一次 `monitor.cancelled()`，
    中途停下时 `vector_status` 留在 `stale`（写了半截也不算 `done`）并抛 `JobCancelled`。
+8. **一页一向量，但一次前向吞 `BATCH_SIZE` 页**（**ISSUES I112** 甲）：模型对 batch=1 的反应是
+   把 16 次前向拆成 16 次调用，实测只有 28.48 页/s；同一批 16 页一次前向是 72.86 页/s。
+   取消检查与进度上报随批走 —— 一批之内是原子的，不半批落库。
 
 这一层**只读 `text_pages`、只写 `vector_meta` + `vectors.npy` + `documents.vector_status`**：
 不碰用户磁盘上的 PDF（SPEC 3.6 默认不动用户文件）。
@@ -49,6 +52,7 @@ from pdfarchiver.db.repositories.documents import DocumentRepository
 from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure
+from pdfarchiver.semantic.embedding import EmbeddingService
 from pdfarchiver.services.index_service import TEXT_SEARCHABLE
 
 log = logging.getLogger("pdfarchiver.vector.service")
@@ -198,7 +202,10 @@ class VectorService:
 
         try:
             vectors: list[tuple[int, int, np.ndarray]] = []
-            for page in todo:
+            # 批大小取模型自己的 BATCH_SIZE：`embed()` 内部还按同一值分批，这里给同值才是
+            # "一次前向 16 页"；给更大会被内部再切开，只白白拉长取消的响应间隔。
+            batch = EmbeddingService.BATCH_SIZE
+            for start in range(0, len(todo), batch):
                 if monitor is not None and monitor.cancelled():
                     # 停在半路：写了半截也不算 done（口径 7），把状态留回 stale 等下次按需重跑。
                     self.documents.set_vector_status(doc_id, VECTOR_STALE)
@@ -206,11 +213,13 @@ class VectorService:
                     outcome.stopped_cancelled = True
                     outcome.took_ms = int((time.perf_counter() - started) * 1000)
                     raise JobCancelled(f"建向量被取消，停在第 {len(vectors)}/{len(todo)} 页")
-                vec = self.embedding.embed_single(page.body)
-                vectors.append((doc_id, int(page.page_no), vec))
-                outcome.pages_embedded += 1
+                chunk = todo[start:start + batch]
+                embedded = self.embedding.embed([page.body for page in chunk])
+                for page, vec in zip(chunk, embedded):
+                    vectors.append((doc_id, int(page.page_no), np.asarray(vec, dtype=np.float32)))
+                outcome.pages_embedded += len(chunk)
                 if monitor is not None:
-                    monitor.advance()
+                    monitor.advance(len(chunk))
             written = self.vector_store.add_batch(vectors)
             outcome.vectors_written = len(written)
         except FileNotFoundError as exc:

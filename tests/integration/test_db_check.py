@@ -8,7 +8,8 @@
    六个键 —— 明细不落盘这件事写成"键集合相等"，多存一个字段就红。
 3. **1甲 面板接线**：设置页里翻页（不另开窗口）、点「快速体检」后表格真的铺上 10 行、
    「上次体检」行跟着更新、返回设置页。坏法注入：把 `finished` 接到空 lambda → 这张表停在 0 行。
-4. **成本读数（**ISSUES I110** 丙）**：文案里四场读数都在且明说跨度没定位；确认框那一个
+4. **成本读数（**ISSUES I110** 丙 + 乙）**：文案里四场读数都在，并明说跨度来自系统页缓存
+   （同一条 C4 命中 4.6 秒 / 冷 189 秒）；确认框那一个
    点上的时长回读 `db_check.last.elapsed_s`，且只认 `mode == full` 的记录。
 """
 from __future__ import annotations
@@ -180,8 +181,10 @@ def test_全库档的确认框先给成本(window) -> None:
     """2甲：全库档是真慢动作，按钮上要写明时长，点下去先问一次。
 
     钉的是**读数都在**（**ISSUES I110** 丙）：安静档四项（C1 18 分 16 秒 / C5 22 分 23 秒 /
-    C11 19 分 16 秒 / C4 3 分 40 秒）与「合计约 64 分钟」，加上界面里那两场（26 分 58 秒 / 56 分 30 秒），
-    并明说跨度没定位、点下去按本机上次实测报。
+    C11 19 分 16 秒 / C4 3 分 40 秒）与「合计约 64 分钟」，加上界面里那两场（26 分 58 秒 / 56 分 30 秒）
+    与轮二十七仪器化两场那个**新的快端**（20 分 25 秒 —— 它把先前的 26 分 58 秒下界又往前推了，
+    所以这里连快端一起钉住，不许只留慢的那几场），
+    并明说跨度来自系统页缓存（轮二十七 §4.38 定位：同一条 C4 命中 4.6 秒 / 冷 189 秒）、点下去按本机上次实测报。
     只留「57–67 分钟」那种准点数就是回到被自家读数打破的老写法 —— 原先这里断言的正是那两个数。
     """
     window._select_by_page_id("monitor")
@@ -189,11 +192,12 @@ def test_全库档的确认框先给成本(window) -> None:
     page.show_health()
     for where in (page.health_panel.cost_label.text(), page.health_panel.full_btn.toolTip()):
         assert "26 分 58 秒" in where and "56 分 30 秒" in where, where
+        assert "20 分 25 秒" in where and "21 分 0 秒" in where, where
         assert "18 分 16 秒" in where and "22 分 23 秒" in where, where
         assert "19 分 16 秒" in where and "3 分 40 秒" in where, where
         assert "合计约 64 分钟" in where, where
         assert "57 分钟" in where and "67 分钟" in where, where
-        assert "跨度没定位" in where, where
+        assert "系统页缓存" in where and "4.6 秒" in where, where
         assert "按本机上次实测报" in where, where
         assert "不可中断" in where, where
         assert "**" not in where, where

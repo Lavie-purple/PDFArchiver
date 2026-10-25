@@ -6,7 +6,7 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
 的 `"vector"` 从不入队，`vector_status` 恒为 `Document` 默认值 `na`。于是 p12 C7「向量状态
 取值都在口径内」恒绿，但那个绿只是"全都停在初始值"的读数，不是判定。
 
-这九条各自钉住一个会坏的地方：
+这十五条各自钉住一个会坏的地方：
 
 1. **点名进队（丁的入队路径）**：`request_vectors` 把该建的排进队列，回执分开数 `named /
    queueable / enqueued`，没正文的那份当场被挡在门外并指到具体 doc_id。
@@ -15,7 +15,7 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
 3. **成功推进 + 向量真落盘（丙）**：`build_vectors` 之后 `vector_status` 从 `na` 走到 `done`，
    且 `VectorStore.count()` 随页数增长 —— 比只数状态更能证明 `VectorStore.add_batch` 真被调了。
 4. **重嵌先清旧向量（丙的 `delete_by_doc` 调用方）**：连建两次，向量总数不翻倍。
-5. **模型没装不许伪装成功**：`embed_single` 抛 `FileNotFoundError` 时写 `failed` + 原文进
+5. **模型没装不许伪装成功**：`embed` 抛 `FileNotFoundError` 时写 `failed` + 原文进
    `last_error`，绝不写 `done`，也绝不停在 `na`（"跑不了"≠"没跑"）。
 6. **没正文不建空向量**：`text_status` 不在 `TEXT_SEARCHABLE` 的那份直接拒，状态一个字节不动。
 7. **空正文页跳过**：`char_count=0` 的那一页不塞进语义索引 —— 与"这一页本来就没字"同一件事。
@@ -23,12 +23,24 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
    AI 分类建议。这条是结构判据，防的是"再长回两只"。
 9. **建完当场搜得到，不必重启（**ISSUES I111** 甲的用户可见后果）**：先搜一次把读侧缓存锁成空，
    再走写路径建向量，同一场会话里必须立刻搜得到 —— 修之前这一段是 0 命中。
+10. **一次前向吞一批页（**ISSUES I112** 甲）**：逐页 `embed_single` 实测 28.48 页/s，同批 16 页
+   一次前向 72.86 页/s。判据是**每次调用的页数**，不是总页数 —— 坏形状也照样嵌得完。
+11. **取消按批生效**：第 N 批前被取消就地停，`vector_status` 回 `stale`、一条向量都不落盘。
+12. **追加不重写整份文件（**ISSUES I112** 乙）**：容量够时只写新行，文件大小不动。
+13. **扩容搬旧行且翻倍（乙）**：第 1025 行触发扩容，前 1024 行必须原样还在。
+14. **不共用实例也看得见（**ISSUES I111** ①）**：A 先搜一次、B 再写，A 必须当场命中 ——
+    `used` 现读库、文件现开现关，实例级缓存这一层已经没有了。
+15. **孤儿 `doc_id` 插不进元数据（**ISSUES I111** D）**：连接打开 `PRAGMA foreign_keys=ON`，
+    迁移 0007 声明的那条 FK 才真的执行。
+16. **全进程只养一份 `EmbeddingService`（**ISSUES I111** ⑤）**：查询向量与建向量共用一次加载，
+    不再为语义搜索另养一个 ONNX session。
 
 跑法：
     .venv/Scripts/python.exe -m pytest tests/integration/test_vector_write_path.py -q
 """
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -37,31 +49,53 @@ import pytest
 
 from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.fs.identity import identity_key
-from pdfarchiver.jobs.queue import PermanentFailure
-from pdfarchiver.semantic.vector_store import VectorStore
+from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure
+from pdfarchiver.semantic.vector_store import DEFAULT_CAPACITY, VectorStore
 from pdfarchiver.services.bootstrap import AppContext, bootstrap
 from pdfarchiver.services.vector_service import (
-    SKIP_NOT_SEARCHABLE, VECTOR_DONE, VECTOR_FAILED, VectorService)
+    SKIP_NOT_SEARCHABLE, VECTOR_DONE, VECTOR_FAILED, VECTOR_STALE, VectorService)
 
 
 class StubEmbedding:
     """把"这一页正文"换成一个确定向量，绕开 ONNX 模型（模型在 CI 上不存在）。
 
-    只实现 `VectorService` 用到的 `embed_single` —— 契约就是那一个方法，不假装是完整引擎。
+    只实现 `VectorService` 用到的 `embed` —— 契约就是那一个方法，不假装是完整引擎。
     同一文本永远返回同一向量（按哈希做种子），让"重嵌先清旧"那条断言不受随机性干扰。
+    `calls` 记下**每一批的正文**：批大小为 1 也照样嵌得完，只有逐次页数能分辨好坏（I112 甲）。
     """
 
     def __init__(self, *, raise_missing: bool = False) -> None:
         self._raise = raise_missing
-        self.calls: list[str] = []
+        self.calls: list[list[str]] = []
 
-    def embed_single(self, text: str) -> np.ndarray:
+    def embed(self, texts: list[str]) -> np.ndarray:
         if self._raise:
             raise FileNotFoundError("语义模型不存在：…/model_int8.onnx\n请先下载 bge-small-zh-v1.5")
-        self.calls.append(text)
-        rng = np.random.RandomState(abs(hash(text)) % (2 ** 32))
-        vec = rng.randn(512).astype(np.float32)
-        return vec / np.linalg.norm(vec)
+        self.calls.append(list(texts))
+        rows = []
+        for text in texts:
+            rng = np.random.RandomState(abs(hash(text)) % (2 ** 32))
+            vec = rng.randn(VectorStore.DIM).astype(np.float32)
+            rows.append(vec / np.linalg.norm(vec))
+        return np.vstack(rows) if rows else np.zeros((0, VectorStore.DIM), dtype=np.float32)
+
+
+class _CountedMonitor:
+    """只做 `VectorService` 会问的三件事，`cancel_after` 批之后报取消。"""
+
+    def __init__(self, cancel_after: int | None = None) -> None:
+        self.total: int | None = None
+        self.done = 0
+        self._cancel_after = cancel_after
+
+    def set_total(self, total: int) -> None:
+        self.total = total
+
+    def advance(self, n: int = 1) -> None:
+        self.done += n
+
+    def cancelled(self) -> bool:
+        return self._cancel_after is not None and self.done >= self._cancel_after
 
 
 class StubQueryEmbedding:
@@ -224,14 +258,28 @@ def test_空正文页不建向量(ctx, tmp_path) -> None:
 def test_装配层只有一只_vector_store_三个消费者共用(ctx) -> None:
     """**ISSUES I111** 丁：把「同一进程只许一只 `VectorStore`」钉成断言，防止再长回两只。
 
-    向量缓存（`_vectors` 那条 numpy 数组与 `_next_idx`）是**每只实例自己的**，所以两只实例
-    等于两份互不知情的账：读的那只看不见写的那只刚落盘的东西。坏法实测见本文件末尾的注。
+    I112 乙 之后 `VectorStore` 已经不再缓存向量数组与 `_next_idx`（`used` 每次现读库、
+    文件现开现关），所以"两只实例互相看不见"那个后果不复存在；这条留作**结构**判据：
+    两个写者会撞在同一份 `MAX(vector_idx)` 上分索引，装配层只该有一只。
     """
     writer = ctx.vector.vector_store
     assert ctx.semantic_search._vectors is writer, (
-        "语义搜索自己 new 了一只 VectorStore —— 它的向量缓存不会被写路径刷新，"
-        "刚建好的向量在同一场会话里永远搜不到（ISSUES I111）")
+        "语义搜索自己 new 了一只 VectorStore —— 装配层只该有一只（ISSUES I111 丁）")
     assert ctx.ai_classify._vectors is writer, "AI 分类建议用的不是写路径那一只"
+
+
+def test_装配层_embedding_只有一份三个消费者共用(ctx) -> None:
+    """**ISSUES I111** ⑤：查询向量与建向量共用同一只 `EmbeddingService`。
+
+    每份 `EmbeddingService` 独占一个 ONNX session。2026-10-25 实测第二份的代价
+    （`.probe_work/u27_embedding_two_instances.log`）：+36.2 MiB RSS、+9 句柄、
+    整机显存 +约 200 MiB（DirectML）、懒加载 276 ms；而两个实例对同一批文本的输出
+    `max|Δ|=0.000e+00` —— 多养一份换不到任何东西。
+    """
+    loader = ctx.vector.embedding
+    assert ctx.semantic_search._embedding is loader, (
+        "语义搜索另养了一个 EmbeddingService —— 同一进程只该加载一次模型（ISSUES I111 ⑤）")
+    assert ctx.ai_classify._embedding is loader, "AI 分类建议另养了一个 EmbeddingService"
 
 
 def test_建完向量同一场会话当场搜得到(ctx, tmp_path) -> None:
@@ -256,6 +304,125 @@ def test_建完向量同一场会话当场搜得到(ctx, tmp_path) -> None:
         "—— 读侧那只 VectorStore 又不是写侧那一只")
 
 
+def test_一次前向吞一批而不是逐页单条(ctx, tmp_path) -> None:
+    """**ISSUES I112** 甲：批大小跟着模型走（`EmbeddingService.BATCH_SIZE=16`）。
+
+    判据是**每次调用喂了几页**：逐页 `embed_single` 也能把 40 页嵌完，只有调用形状能分辨 ——
+    同一批 549 页的真库实测是逐页 28.48 页/s、批 16 页 72.86 页/s。
+    """
+    bodies = [f"第 {n} 页正文" for n in range(1, 41)]
+    doc_id = _seed(ctx, tmp_path, "批量.pdf", bodies)
+    stub = StubEmbedding()
+
+    outcome = _fresh_vector_service(ctx, stub).build_vectors(doc_id)
+
+    sizes = [len(batch) for batch in stub.calls]
+    assert sizes == [16, 16, 8], f"实际每批页数 {sizes}：逐页调用等于每次只喂模型 1 页"
+    assert [t for batch in stub.calls for t in batch] == bodies, "批处理打乱了页序"
+    assert outcome.pages_embedded == 40 and outcome.vectors_written == 40, outcome.describe()
+    assert _store(ctx).count() == 40
+
+
+def test_取消按批生效且不落半截向量(ctx, tmp_path) -> None:
+    """**ISSUES I112** 甲 改了循环仍要能停：第 2 批前取消 → `stale`、一条向量都不落盘。
+
+    旧形状逐页检查取消；新形状每批检查一次。把检查挪出循环、或让每批直接落盘，这条就红。
+    """
+    bodies = [f"第 {n} 页正文" for n in range(1, 41)]
+    doc_id = _seed(ctx, tmp_path, "取消.pdf", bodies)
+    monitor = _CountedMonitor(cancel_after=16)
+
+    with pytest.raises(JobCancelled, match="16/40"):
+        _fresh_vector_service(ctx, StubEmbedding()).build_vectors(doc_id, monitor)
+
+    assert monitor.total == 40, "取消前要把总页数报给队列，否则进度停在 0/0 像卡死"
+    assert ctx.documents.get(doc_id).vector_status == VECTOR_STALE
+    assert _store(ctx).count() == 0, "停在半路却落了一半向量，下次搜索会命中半份文档"
+
+
+def test_追加不重写整份向量文件(ctx, tmp_path) -> None:
+    """**ISSUES I112** 乙：容量够时新增只写新行，文件大小不动。
+
+    老写法每批都 `np.vstack` + `np.save` 整份重写（满库累计 5.06 TiB 写放大）。判据取
+    「文件大小不变而 `count()` 增加」：`np.save` 写出的文件行数等于真实行数，
+    第二批一进来大小必然变 —— 这条能分辨两种形状，不是只数了个数。
+    """
+    doc = _seed(ctx, tmp_path, "追加.pdf", ["第一页正文"])
+    store = _store(ctx)
+    vec = np.zeros(VectorStore.DIM, dtype=np.float32)
+    vec[0] = 1.0
+    store.add_batch([(doc, n + 1, vec) for n in range(3)])
+    path = ctx.paths.data_dir / "vectors.npy"
+    size_before = path.stat().st_size
+    assert store.count() == 3
+
+    store.add_batch([(doc, 4, vec), (doc, 5, vec)])
+
+    assert store.count() == 5
+    assert path.stat().st_size == size_before, (
+        f"只加了 2 行，文件却从 {size_before} 变成 {path.stat().st_size} —— 整份又重写了一遍")
+    assert int(np.load(path, mmap_mode="r").shape[0]) >= 5
+
+
+def test_扩容搬旧行且翻倍(ctx, tmp_path) -> None:
+    """**ISSUES I112** 乙：容量满了扩一次，已有的行必须原样搬过去、新行必须写得进去。"""
+    doc = _seed(ctx, tmp_path, "扩容.pdf", ["第一页正文"])
+    store = _store(ctx)
+    vec = np.zeros(VectorStore.DIM, dtype=np.float32)
+    vec[0] = 1.0
+
+    store.add_batch([(doc, n + 1, vec) for n in range(DEFAULT_CAPACITY)])
+    assert store.count() == DEFAULT_CAPACITY
+
+    # 第 1025 行才触发扩容 —— 必须是在**已有 1024 行**的前提下扩，才照得到"搬旧行"。
+    store.add_batch([(doc, DEFAULT_CAPACITY + 1, vec)])
+
+    path = ctx.paths.data_dir / "vectors.npy"
+    capacity = int(np.load(path, mmap_mode="r").shape[0])
+    assert capacity == DEFAULT_CAPACITY * 2, f"容量应翻倍，实际 {capacity}"
+    kept = store.get_vectors()
+    assert kept.shape[0] == DEFAULT_CAPACITY + 1, "used 行数不对"
+    assert int(kept[0][0]) == 127 and int(kept[-1][0]) == 127, (
+        f"扩容把旧行搬丢了（首行首值 {int(kept[0][0])}），或新行没写进去")
+
+
+def test_另一只实例写进去的向量本只立刻看得见(ctx, tmp_path) -> None:
+    """**ISSUES I111** ① / **ISSUES I112** 乙 规矩 2：不共用实例也看得见。
+
+    I111 甲 修的是「同一进程两只实例互看不见」，靠共用一只实例绕开；这条反过来钉住存储层
+    自己：A 先搜一次（老写法会把缓存锁成空），B 再写，A 必须当场命中。`used` 现读库、
+    文件现开现关之后，跨进程（门禁与界面同开一个数据根）没有别的分支可走。
+    """
+    doc = _seed(ctx, tmp_path, "两只实例.pdf", ["第一页正文"])
+    reader = _store(ctx)
+    writer = _store(ctx)
+    query = np.zeros(VectorStore.DIM, dtype=np.float32)
+    query[0] = 1.0
+    assert reader.search(query) == [], "写之前本该是空的"
+
+    writer.add(doc, 1, query)
+
+    hits = reader.search(query)
+    assert [(int(d), int(p)) for d, p, _ in hits] == [(doc, 1)], (
+        f"另一只实例写入后这只仍看不到（hits={hits}）—— 实例级缓存又长回来了")
+
+
+def test_孤儿_doc_id_插不进元数据(ctx) -> None:
+    """**ISSUES I111** D：连接打开 `PRAGMA foreign_keys=ON`，迁移 0007 声明的 FK 才真的执行。
+
+    修之前这条插得进去（临时库实测 `vector_meta 5 行｜库里 0 份文档`），而孤儿行永远没人清，
+    13 项体检里也没有 `vectors.npy` ⇄ `vector_meta` 的对账项。
+    """
+    store = _store(ctx)
+    vec = np.zeros(VectorStore.DIM, dtype=np.float32)
+    vec[0] = 1.0
+
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        store.add(999_999, 1, vec)
+
+    assert store.count() == 0, "FK 拒了插入却留下了元数据"
+
+
 # 上面两条 `I111` 断言的坏法实测（2026-10-25，三条都真注入过再还原，逐字结果）：
 #   坏法 1｜`bootstrap.py` 那句改回 `SemanticSearchService(paths.root)`（不注入）
 #          ⇒ **2 failed, 7 passed**，两条都红：结构那条红在「语义搜索自己 new 了一只 VectorStore」，
@@ -267,4 +434,30 @@ def test_建完向量同一场会话当场搜得到(ctx, tmp_path) -> None:
 #             行为那条照绿 —— 证明两条断言各查各的，不是同一条的两次复读。
 # 乙（写后撤缓存）在甲落地后进程内已无对应分支：`add`／`add_batch` 会把新数组写回**同一只**实例
 # （`vector_store.py:116`／`:170`），所以没有为它写代码；跨进程的陈旧缓存留在 ISSUES I111 的残留里。
+#
+# `I112` 甲 两条新断言（2026-10-25 轮二十七，两条都真注入过再还原）：
+#   坏法 4｜同批 16 页仍写成 `[self.embedding.embed([p.body])[0] for p in chunk]`（逐页调用，
+#          页数、页序、条数全对，只有调用形状退化）⇒ **1 failed, 10 passed**，
+#          红在 `实际每批页数 [1, 1, …]` —— 证明判据咬的是前向形状本身。
+#   坏法 5｜把取消检查改成只在 `start == 0` 时问（等价于挪到循环外）⇒ 同样 **1 failed, 10 passed**，
+#          红在 `DID NOT RAISE JobCancelled` —— 证明"每批都问"不是装饰。
+#
+# `I112` 乙 / `I111` D 四条新断言（2026-10-25 轮二十七，四条都真注入过再还原）：
+#   坏法 6｜`_write_rows` 写完追加一行 `np.save(self._vectors_path, np.array(mapped[:need]))`
+#          （等价于老路：整份重写、文件行数等于真实行数）⇒ **1 failed, 14 deselected**，
+#          红在 `只加了 2 行，文件却从 524416 变成 …`。
+#   坏法 7｜扩容时 `if old is not None and False and used:`（不搬旧行）⇒ **1 failed**，
+#          红在 `扩容把旧行搬丢了（首行首值 0）` —— 第一版测试只塞一批 1025 行照不到它
+#          （那次注入是绿的，测试当场改成"先 1024 再 1"）。
+#   坏法 8｜`search()` 里把 used 缓存到实例上（`self._cached_used`）⇒ **1 failed**，
+#          红在 `另一只实例写入后这只仍看不到（hits=[]）`。
+#   坏法 9｜`_connect()` 去掉 `PRAGMA foreign_keys=ON` ⇒ **1 failed**，
+#          红在 `DID NOT RAISE IntegrityError`。
+#
+# `I111` ⑤ 一条新断言（2026-10-25 轮二十七，两条坏法各自真注入过再还原）：
+#   坏法 10｜`bootstrap.py` 改回 `SemanticSearchService(paths.root, vector_store)`（语义搜索自建 embedding）
+#          ⇒ **1 failed, 15 passed**，红在 `语义搜索另养了一个 EmbeddingService`。
+#   坏法 11｜`ai_classify` 那只改成 `AIClassifyService(…, EmbeddingService(paths.root), …)`
+#          ⇒ 同样 **1 failed, 15 passed**，红在第二句 `AI 分类建议另养了一个 EmbeddingService`
+#          —— 两句断言各查一个消费者，不是同一条的两次复读。
 

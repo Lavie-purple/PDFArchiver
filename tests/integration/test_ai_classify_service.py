@@ -116,26 +116,37 @@ def test_vector_indices_for_doc_默认row_factory不崩(ctx: AppContext):
 
     默认 row_factory 是元组，按名字 `r["vector_idx"]` 取会 TypeError。
     这条测试钉住修法不再退化。
+
+    **ISSUES I111** D 之后：`VectorStore` 的连接打开了 `PRAGMA foreign_keys=ON`，
+    给不存在的 `doc_id` 插元数据会当场 `IntegrityError`（以前静默插得进去），
+    所以这里必须先落两份真文档 —— 这也正是这条测试以前没照到的那个缺口。
     """
     from pdfarchiver.semantic.vector_store import VectorStore
-    
+
     vector_store = VectorStore(ctx.paths.root)
-    
-    # 加两条向量（维度必须匹配 VectorStore.DIM = 512，类型必须是 float32）
+
+    doc1 = ctx.documents.upsert(Document(
+        path="D:\\docs\\甲.pdf", path_key="d:\\docs\\甲.pdf", name="甲.pdf",
+        size_bytes=10, sha256="c" * 64, text_status="done", fts_status="done"))
+    doc2 = ctx.documents.upsert(Document(
+        path="D:\\docs\\乙.pdf", path_key="d:\\docs\\乙.pdf", name="乙.pdf",
+        size_bytes=20, sha256="d" * 64, text_status="done", fts_status="done"))
+
+    # 加三条向量（维度必须匹配 VectorStore.DIM = 512，类型必须是 float32）
     vec = np.random.randn(512).astype(np.float32)
     vector_store.add_batch([
-        (1, 0, vec),
-        (1, 1, vec),
-        (2, 0, vec),
+        (doc1.id, 0, vec),
+        (doc1.id, 1, vec),
+        (doc2.id, 0, vec),
     ])
 
-    # doc_id=1 应该有 2 个索引（page 0 和 1）
-    indices = vector_store.vector_indices_for_doc(1)
-    assert sorted(indices) == [0, 1], f"doc_id=1 应该有索引 [0, 1]，实际 {indices}"
+    # doc1 应该有 2 个索引（page 0 和 1）
+    indices = vector_store.vector_indices_for_doc(doc1.id)
+    assert sorted(indices) == [0, 1], f"doc1 应该有索引 [0, 1]，实际 {indices}"
 
-    # doc_id=2 应该有 1 个索引（page 0），全局索引是 2（前两个给了 doc_id=1）
-    indices = vector_store.vector_indices_for_doc(2)
-    assert indices == [2], f"doc_id=2 应该有索引 [2]，实际 {indices}"
+    # doc2 应该有 1 个索引（page 0），全局索引是 2（前两个给了 doc1）
+    indices = vector_store.vector_indices_for_doc(doc2.id)
+    assert indices == [2], f"doc2 应该有索引 [2]，实际 {indices}"
 
     # doc_id=999 不存在，应该返回空列表
     indices = vector_store.vector_indices_for_doc(999)
