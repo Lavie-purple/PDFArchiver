@@ -252,7 +252,8 @@ class VectorStore:
 
             conn.execute("DELETE FROM vector_meta WHERE doc_id = ?", (doc_id,))
             conn.commit()
-            # 不物理删除向量文件里的行（避免碎片化），只删元数据
+            # 不物理删除向量文件里的行（避免碎片化），只删元数据；
+            # 这些死行由 `search()` 按 `used - COUNT(*)` 超量取样抵掉（ISSUES I111 ⑥）
             return len(rows)
         finally:
             conn.close()
@@ -268,6 +269,11 @@ class VectorStore:
         （约 190 万行）上是 3.9 GiB 瞬时分配 —— 本机实测一次查询 **66.5s**；分块后同一场
         **6.1s**、峰值 64 MiB。`/127` 挪到查询向量上（存的是 `round(v*127)`），省掉一整趟
         1 GiB 的除法（`.probe_work/u27_search_cost.log` / `u27_scale_variants.log`）。
+
+        超量取样（**ISSUES I111** ⑥）：`delete_by_doc` 按设计只删 `vector_meta`、不动 `.npy`
+        里的行，所以死行仍参与打分。先按 `used - COUNT(*)` 数出死行，取 `top_k + 死行数`
+        个候选再回查元数据 —— 否则死行会把名额吃掉，用户设 10 条只看到 7 条且没有任何提示。
+        `COUNT(*)` 在 196.8 万行上实测 **25ms（温）/ 1.1s（冷）**，相对一次查询的秒级成本可忽略。
         """
         assert query_vector.shape == (self.DIM,)
         assert query_vector.dtype == np.float32
@@ -277,6 +283,8 @@ class VectorStore:
         used = self._used_rows()
         if used == 0:
             return []
+        dead = max(0, used - self.count())
+        want = min(top_k + dead, used)
         mapped = self._open(writable=False)
         if mapped is None:
             raise self._mismatch(0, used)
@@ -291,10 +299,10 @@ class VectorStore:
                 stop = min(start + SEARCH_CHUNK_ROWS, used)
                 chunk = np.asarray(mapped[start:stop], dtype=np.float32)
                 scores = chunk @ query_scaled
-                k = min(top_k, scores.shape[0])
+                k = min(want, scores.shape[0])
                 for pos in np.argpartition(-scores, k - 1)[:k]:
                     cand = (float(scores[pos]), start + int(pos))
-                    if len(best) < top_k:
+                    if len(best) < want:
                         heapq.heappush(best, cand)
                     elif cand[0] > best[0][0]:
                         heapq.heapreplace(best, cand)
@@ -313,6 +321,8 @@ class VectorStore:
                 ).fetchone()
                 if row:
                     results.append((row[0], row[1], score))
+                    if len(results) == top_k:
+                        break
             return results
         finally:
             conn.close()

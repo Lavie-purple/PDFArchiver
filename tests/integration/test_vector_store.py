@@ -125,3 +125,32 @@ def test_count(vector_store: VectorStore, ctx) -> None:
     vector_store.add(doc_id, 2, np.random.randn(512).astype(np.float32))
 
     assert vector_store.count() == initial + 2
+
+
+def test_删过向量的文档不占满命中名额(vector_store: VectorStore, ctx) -> None:
+    """**ISSUES I111** ⑥ 甲：`delete_by_doc` 只删元数据，死行仍参与打分。
+
+    死行分数排进前 `top_k` 时会被回查元数据那一步静默跳过 —— 用户设 2 条只看到 1 条，
+    屏幕上没有任何提示。修法是先按 `used - COUNT(*)` 数出死行，取 `top_k + 死行数` 个候选。
+    坏法：把 `want` 改回 `top_k`（等于删掉这处修复）⇒ 本条报 `应为 2 条，实得 1`。
+    """
+    keep_a = _make_doc(ctx, "test/keep_a.pdf", "keep_a.pdf", "1" * 64, 1, 11, 1)
+    dead = _make_doc(ctx, "test/dead.pdf", "dead.pdf", "2" * 64, 1, 12, 1)
+    keep_b = _make_doc(ctx, "test/keep_b.pdf", "keep_b.pdf", "3" * 64, 1, 13, 1)
+
+    def unit(pos: int) -> np.ndarray:
+        vec = np.zeros(VectorStore.DIM, dtype=np.float32)
+        vec[pos] = 1.0
+        return vec
+
+    vector_store.add(keep_a, 1, unit(0))
+    vector_store.add(dead, 1, unit(0))      # 与查询完全同向：删掉后它是分数最高的死行
+    vector_store.add(keep_b, 1, unit(1))
+
+    assert vector_store.delete_by_doc(dead) == 1
+    assert vector_store.count() == 2, "元数据里只剩两份活文档"
+
+    results = vector_store.search(unit(0), top_k=2)
+
+    assert len(results) == 2, f"死行吃掉命中名额：应为 2 条，实得 {len(results)}"
+    assert {doc_id for doc_id, _page, _score in results} == {keep_a, keep_b}

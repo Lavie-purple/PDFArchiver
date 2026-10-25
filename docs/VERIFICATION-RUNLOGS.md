@@ -883,6 +883,60 @@ daemon `threading.Thread` + `_text_ready = Signal(str, str)` + `finished`；点�
 - **I110 的剩余边界**：设备读吞吐两档 20–41 MiB/s、`busy` 只 0.9–1.4s ⇒ 瓶颈在 4 KiB 页读往返，
   这一层没拆开（不影响「缓存决定快慢」，但「磁盘为什么这么慢」仍没有答案）。
 
+---
+
+## 4.39 轮二十八 · I111 ⑥ 甲 / I112 ③ 甲 / ⑨ 真空载窗口（2026-10-25）
+
+本轮指令逐字：「按推荐方案执行」⇒ 执行上一轮 3×3 表里的 ⑥ 甲（超量取样）、③ 甲（保持现状）、⑨ 甲（等窗口，不造假读数）。
+产品代码只改 `semantic/vector_store.py` 一处读路径（**没有新界面**）。
+
+**A · I111 ⑥ 甲：死行不再吃 `top_k` 名额**
+- 现态：`delete_by_doc` 只删 `vector_meta`、不动 `.npy` 里的行（避免碎片化）⇒ 行还在、元数据没了，它在打分里仍占位，
+  回查时被 `if row:` 跳过；用户设 10 条可能只看到 7 条，屏幕上没有任何解释。
+- 改法（`vector_store.py:286-287`、`:302-308`、`:317-325`）：`dead = max(0, used - self.count())`、
+  `want = min(top_k + dead, used)`，分块 `argpartition` 与堆都按 `want` 取，回查时**凑够 `top_k` 就 `break`**。
+- 代价实测（真库只读，1,968,159 行）：`SELECT COUNT(*) FROM vector_meta` **25ms（温）／1,113ms（冷）**；
+  对照满库一次语义查询 6.1s（`.probe_work/u27_search_cost.log`）⇒ 温态 <1%，冷态那 1.1s 只在首次触盘付一次。
+- 真库现读（`.probe_work/u28_deadrows.txt`，`mode=ro`）：`vector_meta 1,968,159｜max_idx 1,968,158｜used 1,968,159｜dead 0`、
+  `catalog.db 12,109,783,040 B`、`vectors.npy 1,073,741,952 B` ⇒ **真库今天没有死行**，所以效果只能在临时库上验。
+- 守卫 `tests/integration/test_vector_store.py::test_删过向量的文档不占满命中名额`：三份各 1 页、中间那份与查询
+  完全同向且被 `delete_by_doc` 删掉，`top_k=2` 必须拿回两份活文档；坏法（`want` 改回 `top_k`）真红
+  **1 failed**、原文 `AssertionError: 死行吃掉命中名额：应为 2 条，实得 1`（`.probe_work/u28_badway_search.log`，
+  `test_vector_store.py:155`），还原后该文件 + `test_vector_write_path.py` **23 passed**。
+
+**B · I112 ③ 甲：容量只增不减 —— 定案保持现状（代码不改）**
+- 数字：容量 **2,097,152 行**、已用 **1,968,159 行（93.8%）** ⇒ 空行 128,993 × 512B = **66,044,416 B ≈ 63.0 MiB**，
+  占 `vectors.npy` 1,073,741,952 B 的 **6.2%**；换来的是「追加写、不重整、不重写整表」——全量 8,660 份
+  跑出 **72.77 页/秒**（`.probe_work/u27_full_index_status.json`）时一次整表重写都没有。
+- 定案理由：压缩要重写整份 1 GiB 文件并动文件格式，收益只有 63 MiB，风险是打断已验的写路径；
+  93.8% 的占用离「取整浪费过半」还很远。
+- **重新评估触发条件（任一命中就重开）**：① 死行 `used - COUNT(*)` 超过 `used` 的 5%；② 一次删除/重嵌掉
+  ≥ 1 万行；③ 容量翻倍到 4,194,304 行（文件 ≈ 2 GiB）。
+
+**C · ⑨ 真空载（CPU<10%）整段：仍无读数，而且这次能证明「会话活着就到不了」**
+- 做法（甲）：`.probe_work/u28_idle_watch.py` —— 每 10s 采一次整机 `psutil.cpu_percent`，**连续 3 个采样点
+  都 <10% 才起** `gates/final.py --only injection --data-root …`；口径写死在脚本里不许放宽，也不动任何进程。
+- 结果：**55 个采样点、10 分 15 秒、0 个 <10%**（min 21.5%｜中位 44.0%｜mean 46.4%｜max 69.8%），
+  所以**没有起 injection**（`.probe_work/u28_idle_watch.log`）。判据未命中就停，不为凑读数降门槛。
+- **为什么这不是「运气不好」**：同一批采样里 `Qoder CN.exe` 的单核占用 **94.3–97.4%（中位 96.1%）**，
+  即 8 核的 **12.01%** —— 它一个人就把整机 CPU 的地板抬到 10% 以上，**只要本会话的编辑器在跑，
+  CPU<10% 在任何时刻都不可达**（不是「今天忙」，是算术）。
+- 交给下一轮的两条路（不替用户做）：① 在**关掉 Qoder/ZCode** 的纯 `cmd.exe` 里跑
+  `python -u gates/final.py --only injection --data-root C:/Users/lavie/AppData/Local/PdfArchiver`
+  （或 `python -u .probe_work/u28_idle_watch.py --minutes 60`，窗口出现时它自己起这一段并落
+  `.probe_work/u28_idle_watch.json`）；② 接受「真空载这一行永远没有读数」，把历史最低档 **18.1% mean / 732s**
+  作为唯一可引用的近空载读数（引用时必须标 18.1%，**不许写成空载**）。
+
+**D · 回归 / 守卫 / 预检：一条命令 803 passed**
+- 回归：`pytest tests/unit tests/integration tests/guards -q` ⇒ **803 passed / 1 skipped in 215.05s**（exit 0）；
+  轮二十七基线 802 passed / 1 skipped ⇒ 净 **+1**，就是本轮新加的那条守卫（`.probe_work/u28_regression.log`）。
+- `tests/guards` 单跑 **54 passed**（14.98s；预检里同一批 13.03s）；`tests/guards/test_file_size.py` 单跑末行
+  `VERDICT: ALL GREEN`，**临近线 5 份**（最紧 `test_job_queue.py` 766 行、余 34；其余 707 / 711 / 742 等，阈值没动）。
+- `scripts/precheck.py` ⇒ `合计 2 步｜红 0`、末行 `VERDICT: ALL GREEN`（10 段 SKIP 照旧逐行明写，全绿不覆盖它们）。
+- **守卫第三次先逮到我的裸名**：终场预检第一遍 `VERDICT: RED（1 步未过）`，点名 `docs/VERIFICATION-RUNLOGS.md:962 u28_idle_watch.py`
+  ⇒ 台账档旧名计数 **38 > 37**（`.probe_work/u28_precheck.log` 那场是 37，绿；`u28_precheck_final.log` 这遍才红）。
+  补上 `.probe_work/` 前缀后回到 37 —— **上限 37 没动**，与本册 §4.33 / §4.35 同一个坑（只豁免带前缀的引用）。
+
 > **本册末行现数（2026-10-25 轮二十七收尾取）**：`CHANGELOG 1,056（余 144）｜DECISIONS 687（余 513）｜本册 884 → 900（余 300）｜分册 757（余 443）｜ISSUES 150｜UI-WIREFRAMES 1,009（余 191）`；
 > **最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`**。
 > **台账**：`112 行｜I1–I112 连续不重号｜CLOSED 87｜MITIGATED 24｜WONTFIX 1｜OPEN 0` —— 本轮 I112 由 OPEN 转 MITIGATED（残留 ③ 条照实挂着），
@@ -898,3 +952,17 @@ daemon `threading.Thread` + `_text_ready = Signal(str, str)` + `finished`；点�
 > `services/vector_service.py`、`ui/pages/health_panel.py`、`ui/pages/status_page.py`）、**`tests/` 改了 4 份**（`test_ai_classify_service.py`、
 > `test_db_check.py`、`test_status_readout.py`、`test_vector_write_path.py`）、**`docs/` 改了 6 份**（本册、`CHANGELOG.md`、`ISSUES.md`、
 > `UI-WIREFRAMES.md`、`ARCHITECTURE.md`、`DATABASE.md`），`git diff --stat` 合计 **17 份 +895/−196**。**没有新界面**（S7 只改成本文案与状态页重查路线）。
+
+> **本册末行现数（2026-10-25 轮二十八收尾取）**：`CHANGELOG 1,076（余 124）｜DECISIONS 687（余 513）｜本册 900 → 968（余 232）｜分册 757（余 443）｜ISSUES 150｜UI-WIREFRAMES 1,009（余 191）`；
+> **最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`**，本册这轮从余 300 掉到余 232。
+> **台账**：`112 行｜I1–I112 连续不重号｜CLOSED 87｜MITIGATED 24｜WONTFIX 1｜OPEN 0` —— 本轮没有新增行、没有状态迁移：
+> I111 ⑥ 的残留格由「本轮只记账不改码」改成「已修（甲）」，I112 ③ 由「压缩/整理不在本条范围」改成「定案 甲=保持现状 + 三条重开触发条件」。
+> **测试**：`pytest tests/unit tests/integration tests/guards -q` ⇒ **803 passed / 1 skipped（215.05s，exit 0）**；`tests/guards` 单跑 **54 passed（14.98s）**；
+> `scripts/precheck.py` 末行 `VERDICT: ALL GREEN`（`合计 2 步｜红 0`，10 段 SKIP 照旧逐行明写，`.probe_work/u28_precheck.log`）。
+> **真库现数（只读，`mode=ro` 取）**：`catalog.db 12,109,783,040 B`｜`vectors.npy 1,073,741,952 B = 2,097,152 行 × 512 B（已用 93.8%）`｜
+> `vector_meta 1,968,159 行（idx 0…1,968,158 稠密）｜死行 0` —— 自本轮起每次语义查询多一条 `COUNT(*)`（温 25ms／冷 1,113ms）。
+> **临时文件**：`.probe_work/` 顶层 **674 项（13 个子目录）｜递归 1,103 文件｜857.7 MiB｜顶层 0 字节 75 个**；
+> `.probe_work/u28_idle_watch.py` **故意不截成 0 字节** —— §4.39 C 把它写成「关掉 Qoder 后自己起 injection」的入口，截了就等于把那条路拆了。
+> **会话日志体积（token 代理）**：**339,082,629 B｜105,405 行** vs 轮二十七基线 **337,053,182 B / 104,887 行** ⇒ **+2,029,447 B｜+518 行**。
+> **本轮 `src/` 改了 1 份**（`semantic/vector_store.py`，+16/−3）、**`tests/` 改了 1 份**（`test_vector_store.py`，+29）、
+> **`docs/` 改了 3 份**（本册、`CHANGELOG.md`、`ISSUES.md`）；**零新界面、零新入口**。
