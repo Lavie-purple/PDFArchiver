@@ -4,9 +4,16 @@
 
 - **两档**：`quick` 只读小表与索引、不发 PRAGMA、不扫正文，真库实测十几秒；`full` 在它之上再跑
   正文页扫描、花名册双向对账、`integrity_check / foreign_key_check` 与最新快照整库体检。
-  真库（11GB / 正文 1,975,611 行）同口径两场实测的四个慢项：C1 1,037,900→1,200,867ms、
-  C5 1,241,146→1,541,084ms、C11 961,441→1,036,524ms、C4 218,742→259,539ms，
-  合计 **57 → 67 分钟**（`docs/VERIFICATION-RUNLOGS.md` §4.33 与 §4.35；差额是机器负载，不是库变大）。
+  真库（11GB / 正文 1,975,611 行）**同这十三项到今天测过五场，跨度 26 分 58 秒 → 67 分钟**。
+  **安静档**（无应用在跑，2026-10-25 轮二十六，`docs/VERIFICATION-RUNLOGS.md` §4.37）：
+  十二项同场 **2,665.8s（44 分 26 秒）** —— C1 1,096.0s、C5 1,343.0s、C4 220.4s 三条占 99.8%；
+  C11 那一条被会话生命周期切断后**单跑** **1,156.4s（19 分 16 秒）** ⇒ 两段相加 3,822.2s ≈ 64 分钟。
+  界面按钮路径两场 1,618.2s（26 分 58 秒）与 3,390.1s（56 分 30 秒）（§4.36），
+  同口径脚本两场约 57 分钟与约 67 分钟（§4.33 与 §4.35）。
+  **机制未定位**（**ISSUES I110**）：页缓存与并发同表扫描两个候选都做过实验并被排除，
+  负载方向还是反的（CPU 60.4% 那场反而快 2.1 倍）；C11 单跑那场起跑 CPU 86.7% 落在自家区间上半段，
+  与十二项那场不是同时刻 ⇒ 这里不写一个准点数，也不写「差多少是谁造成的」，
+  要点上的时长由确认框回读 `db_check.last.elapsed_s` 给本机自己那次。
 - **只报证据**：不自动重跑索引、不修库、不动文件；红行只说明查到什么、原文是什么。
 - **只存上次时间与计数**：`app_settings["db_check.last"]` 里是
   `{ts, mode, total, red, readings, elapsed_s}`，明细不落盘（4甲）。
@@ -44,9 +51,12 @@ LAST_KEY = "db_check.last"
 QUICK_COST = ("快速体检：结构版本、路径键、正文行数、四组状态取值域、页码、分类树、根键。"
               "不发 PRAGMA、不读正文；11GB 真库实测约 12 秒。")
 FULL_COST = ("全库体检 = 快速体检 + 正文页扫描（字数/NUL/来源）+ 索引花名册双向对账 + "
-             "integrity_check / foreign_key_check + 最新快照整库体检。"
-             "11GB 真库同口径两次实测：约 57 分钟与约 67 分钟（慢的四项 C1 约 17–20 分、"
-             "C5 约 21–26 分、C11 约 16–17 分、C4 约 4 分），运行期间不可中断。")
+             "integrity_check / foreign_key_check + 最新快照整库体检。运行期间不可中断。"
+             "慢的是四条全表／整库级的项：C1 整库体检、C5 正文页自洽、C11 快照体检、C4 花名册对账。"
+             "11GB 真库安静档实测：C1 18 分 16 秒、C5 22 分 23 秒、C11 19 分 16 秒、C4 3 分 40 秒，"
+             "合计约 64 分钟；界面里同库同按钮另测过 26 分 58 秒 与 56 分 30 秒，"
+             "脚本两场约 57 分钟 与 67 分钟 —— "
+             "跨度没定位（ISSUES I110），所以这里不给准点数，点下去按本机上次实测报。")
 
 
 def format_duration(seconds: float) -> str:
@@ -59,6 +69,27 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes} 分 {secs} 秒"
     return f"{secs} 秒"
+
+
+def last_full_elapsed(app_settings: SettingsRepository) -> float | None:
+    """本机上一次**全库**体检在这只库上的实测秒数；没有可比记录时给 `None`。
+
+    只认 `mode == FULL`：4甲 存的是「上次体检」，快速档那十几秒不是全库档的成本，
+    拿它当「上次实测」等于报一个假点数（**ISSUES I110** 丙）。
+    记录缺字段、类型不对、读不出来都一律回 `None` —— 这条只用于给文案，
+    不能因为它自己出错而把一个已经能给出的读数换成瞎猜的区间。
+    """
+    try:
+        payload = app_settings.get(LAST_KEY)
+    except Exception:  # noqa: BLE001 - 读不出上次读数就回「没有」，不许从这里抛到界面上
+        return None
+    if not isinstance(payload, dict) or payload.get("mode") != FULL:
+        return None
+    try:
+        elapsed = float(payload["elapsed_s"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return elapsed if elapsed > 0 else None
 
 
 @dataclass(frozen=True)
@@ -280,7 +311,7 @@ class DbCheckService:
         bad = (f"documents.vector_status 有 {n} 行落在口径外（出现值 {values}｜"
                f"允许值 {sorted(VECTOR_LEGAL)}）")
         return not n, (f"非 na 的行 {non_na:,} 条｜分布 {dist or '空'}｜"
-                       + (bad if n else "全部合法（产品里没人写它，所以恒为 na 或测试夹具值）"))
+                       + (bad if n else "全部合法（写入方只有 VectorService.build_vectors）"))
 
     def _c8(self) -> tuple[bool, str]:
         ops, items = self.repo.operation_distributions()

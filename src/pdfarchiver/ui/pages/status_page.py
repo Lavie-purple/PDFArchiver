@@ -7,6 +7,11 @@
 内容全部来自 `StatusService.read()` / `read_tasks()` / `AppContext.background_state()` 的真查询，
 页面里没有任何写死的数字。
 
+**它有两条重查路线，差别只在一格读数上**（**ISSUES I109** 丙）：`reload()` 是完整的，只有
+「重新读取数据库状态」那颗按钮走它；`reload_progress()` 是建窗路径与 5 秒巡检节拍走的轻版本，
+跳过「库里已存 OCR 正文 N 页」那一格，因为那一格要逐行扫正文表。两条路线都不缓存其余读数，
+所以"进度停在过去的时刻"这条老规矩没变。
+
 **它作为控件被 `SettingsPage` 嵌入，而不是被复制一份渲染代码** —— 抄一份就会有两个口径，
 而且实际已经漂过：这一份结尾原先挂着"语义搜索/归档/备份的界面都还没实现"那句散文，
 抄的那一份没有，而那句话后来逐条过期。**现在页尾只有两处口径**：`UNWIRED_ACTIONS`（没接到
@@ -64,13 +69,18 @@ class StatusPage(QtWidgets.QWidget):
         self.view.setReadOnly(True)
         self.refresh = QtWidgets.QPushButton("重新读取数据库状态")
         self.refresh.setObjectName("searchBtn")
+        # 全站唯一会现数「库里已存 OCR 正文」的入口，代价写在按钮上（**ISSUES I109** 丙）。
+        self.refresh.setToolTip("会连「库里已存 OCR 正文」一起现数 —— 那一条要逐行扫正文表，"
+                                "库大了要在这里等几分钟")
         self.refresh.clicked.connect(self.reload)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         lay.addWidget(self.view, 1)
         lay.addWidget(self.refresh)
-        self.reload()
+        # 建窗路径不现数全库页数（**ISSUES I109** 丙）：这条在 11GB 真库上实测 ~200s，
+        # 而窗口构造完就要画出来 —— G1 冷启动 1.5s 测在小库夹具上，照不到这个形状。
+        self.reload_progress()
 
     def _runtime_block(self) -> list[str]:
         ctx = self.ctx
@@ -100,13 +110,29 @@ class StatusPage(QtWidgets.QWidget):
         return [f"  · {line}" for line in UNWIRED_ACTIONS]
 
     def reload(self) -> None:
-        """重查一遍库再渲染。刷新按钮存在的全部意义就是让"重启后数据还在"这件事可当场验证。
+        """完整重查一遍再渲染 —— 只有「重新读取数据库状态」这颗按钮走这条。
 
-        任务块每次都是新查询、不缓存：进度缓存了等于在界面上展示一个已经过去的时刻。
+        刷新按钮存在的全部意义就是让"重启后数据还在"这件事可当场验证。
+        它同时也是全站**唯一**会现数「库里已存 OCR 正文 N 页」的入口（**ISSUES I109** 丙）：
+        那条计数没有索引可走，真库 197 万页实测单条 201–212 秒，所以它只许出现在
+        用户亲手按下的一次，不放在任何自动节拍上（代价写在按钮的 tooltip 上）。
         """
+        self._render(with_ocr_pages=True)
+
+    def reload_progress(self) -> None:
+        """自动路径（建窗、5 秒巡检节拍、回填冷启动耗时）走的轻版本：除那一格全库计数之外全部现数。
+
+        与判重页同一处理（`main_window.patrol_tick` 里"只刷进度行"那条先例）。摘掉的只有
+        `text_pages` 全表那一格 —— 其余读数（任务条数 / 进度 / 错误 / 重试 / 监测根 / 索引状态）
+        每次都是新查询、不缓存：进度缓存了等于在界面上展示一个已经过去的时刻。
+        """
+        self._render(with_ocr_pages=False)
+
+    def _render(self, *, with_ocr_pages: bool) -> None:
         bg = self.ctx.background_state()
         st = self.ctx.status.read()
-        tasks = self.ctx.status.read_tasks(max_attempts=bg.max_attempts)
+        tasks = self.ctx.status.read_tasks(max_attempts=bg.max_attempts,
+                                           with_ocr_pages=with_ocr_pages)
         parts = ["== 运行时 =="] + self._runtime_block()
         parts += ["", "== 设置（生效值 / 是否覆盖 / 来源）==", self.ctx.settings.describe()]
         parts += ["", "== 数据库 =="] + [f"  {ln}" for ln in st.lines()]

@@ -22,10 +22,15 @@ from pdfarchiver.semantic.vector_store import VectorStore
 class SemanticSearchService:
     """语义搜索服务。线程不安全（内部组件都不线程安全）。"""
 
-    def __init__(self, data_root: Path | None = None) -> None:
+    def __init__(self, data_root: Path | None = None,
+                 vector_store: VectorStore | None = None) -> None:
+        """`vector_store` 由装配层注入（**ISSUES I111** 甲）：向量缓存是每只实例自己的，
+        读侧另建一只就会把「刚建好的向量」挡在视野外，且只有重启才恢复。不注入时自建，
+        给独立调用（`gates/stage6.py`）与单测留一条不需要装配层的路。
+        """
         self._data_root = data_root or AppPaths.resolve().root
         self._embedding = EmbeddingService(self._data_root)
-        self._vectors = VectorStore(self._data_root)
+        self._vectors = vector_store or VectorStore(self._data_root)
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, int, float]]:
         """搜索最相似的 top_k 个向量。

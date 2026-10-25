@@ -98,7 +98,7 @@ S1 的批量点名面板就是它。两者共用 `_split()`，所以面板上的
 | 这本书里有几页是 OCR 出来的 | `documents.ocr_pages_done`（计数，不参与任何状态判定） |
 | 某页识别成了什么 | `text_pages` 里 `source_kind='ocr'` 的那行 `body`，带 `page_no` 与 `ocr_version` |
 | 搜到的这句是 OCR 的还是原本的 | 检索结果的出处标签只有两种：**「原生正文」**与**「OCR 识别（可能有错字）」**（D-031） |
-| 全库进度 | `ctx.status.snapshot()`：`ocr_by_status` 分组计数 + `ocr_pages`（库里已存 OCR 正文页数） |
+| 全库进度 | `ctx.status.read()` 给 `ocr_by_status` 分组计数；`ocr_pages`（库里已存 OCR 正文页数）在 `ctx.status.read_tasks(max_attempts=…)` 返回的 `TaskStatus` 上。界面上那一条**只在按「重新读取数据库状态」时现数**，自动节拍上是 `None` ⇒ 写「未现数」而不是 `0 页`（**ISSUES I109** 丙） |
 | 今天还剩多少页预算 | `ctx.ocr.budget.describe()`，形如 `今日 OCR 已用 2 页 / 预算 2 页（剩 0 页，UTC 日 2026-10-14）` |
 | 为什么停在半路 | 任务行的 `last_error`，例如 `跑到第 3 页之前今天的页预算用满（…），未识别的页留在待办里`（D-030） |
 

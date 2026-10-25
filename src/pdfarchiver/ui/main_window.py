@@ -255,6 +255,9 @@ class MainWindow(QtWidgets.QMainWindow):
             # 这一条同时管住了状态读数：状态页现在是 S7 的上半区（D-040），
             # `reload_status()` 就是让那块控件重查一遍 —— 少这一行，界面上的进度会停在
             # 一个已经过去的时刻，而 worker 线程一直在推进度。
+            # 它走的是状态页的**轻版本**：下面判重页那条理由在这里同样成立，而且更严重 ——
+            # 「库里已存 OCR 正文」那一格要扫正文全表（真库实测 ~200s），挂在这个 5 秒节拍上
+            # 等于每 tick 把界面线程按住几分钟，所以它只由状态块上那颗按钮现数（**ISSUES I109** 丙）。
             settings_page.reload_status()
             settings_page.reload_settings()
         duplicates_page = self._pages.get("duplicates")

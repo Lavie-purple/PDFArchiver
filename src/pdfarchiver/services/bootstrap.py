@@ -282,9 +282,12 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     scan = ScanService(documents, roots, jobs, exclusions=Exclusions.of())
     indexer = IndexService(documents, texts, metadata)
     search = SearchService(documents, metadata, texts)
-    semantic_search = SemanticSearchService(paths.root)
     embedding = EmbeddingService(paths.root)
+    # **ISSUES I111** 甲：全进程只许一只 `VectorStore`。以前这里先建语义搜索（它自己 new 一只）
+    # 再另建一只注入写路径，于是写侧落的向量在读侧那只的缓存里永远看不见 —— 刚建完向量当场搜不到，
+    # 只有重启才好。由 `bootstrap` 建好再注入，谁读谁写都是同一只。
     vector_store = VectorStore(paths.root)
+    semantic_search = SemanticSearchService(paths.root, vector_store)
     ai_classify = AIClassifyService(catalog, documents, embedding, vector_store)
     ocr_engine = OcrEngine()
     ocr = OcrService(documents, texts, jobs, ocr_engine,

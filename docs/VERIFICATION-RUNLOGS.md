@@ -625,3 +625,110 @@ p17 3、p18 3、p21 24/24、p22 33/33、p23 23/23、p24 17/17（**抓坏法合�
 > `test_ui_tier.py 711（余 89）`、`test_saved_search_ui.py 707（余 93）`）与轮二十四逐字相同。
 > `.md` 侧最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`；本册 627（余 573）、CHANGELOG 946（余 254）。
 > **块数口径**：本册从 **10 块**（§4.27…§4.35）加本轮 = **11 块**。
+
+### 4.37 轮二十六（2026-10-25 04:0x → 13:1x）· I109 丙+丁 / I110 丙+安静档复测 / I111 甲+丁 / ⑤ 真库语义索引真写（新开 **I112**）
+
+用户这一轮的指令逐字：「⑤ 真库 vector_status 全 na（I63）｜⑦⑧ 等上面两条勾选｜⑨ injection 真空载读数｜⑩ 27–57 分钟跨度的机制未定位。 跟进你的建议来」，
+随后两条「跟进你的推荐建议来」「继续执行之前中断的后续部分」。⇒ 本轮**按我自己上一轮给出的推荐**执行：
+⑦ **I109 丙 + 丁**、⑧ **I110 丙**（前置是安静库上的同口径复测）、**I111 甲 + 丁**、**⑤ ⑤ 真库小样本真写**；
+⑨（真空载 injection）只在起跑 CPU <10% 时跑，本轮**没等到这个窗口**（见 F 段）；⑩ 的机制仍未定位。
+
+**A · I109 丙 + 丁（`src/` 三处 + `tests/` 两处）**：`StatusService.read_tasks` 加 `with_ocr_pages=True` 开关，
+关掉时 `ocr_pages=None`（**不是 0** —— 界面写「未现数（这条要全库扫描，按「重新读取数据库状态」才数）」，
+`TaskStatus._pages_text()` 一处出两种说法）；`StatusPage` 拆两条重查路线：`reload()` 是完整的（只有
+「重新读取数据库状态」那颗按钮走，tooltip 明写「那一条要逐行扫正文表，库大了要在这里等几分钟」），
+`reload_progress()` 是轻版本（建窗路径与 `patrol_tick` 的 5 秒节拍都改走它，`SettingsPage.reload_status()`
+跟着换）。**真库只读实测**（`.probe_work/u26_i109_light_path.txt`，末行 `VERDICT: ALL GREEN`）：在
+11,995,631,616B 真库上让建窗 + 一次巡检节拍真跑，trace 捞到 **55 条语句、合计 0.309s**（最慢两条是
+`documents` 的两个状态 GROUP BY，15.8 / 14.0ms；`count(*) FROM documents` 0.9ms；`processing_jobs`
+三条 2.4–3.3ms；其余 ≤0.1ms），**逐行扫 `text_pages` 全表的语句：无** —— 对照被摘掉的那一条
+201.1 / 212.3 / 210.7s。**丁 的两条守卫在 `tests/integration/test_status_readout.py`**：
+`test_自动节拍不现数全库OCR页数`（用 sqlite `set_trace_callback` 捞这一轮**真执行过**的 SQL 逐条
+`EXPLAIN QUERY PLAN`，出现不带 `USING` 的 `SCAN text_pages` 即红；并断言那一格写着「未现数」）与它的
+反面配对 `test_探测器在按钮路径上真的抓得到那条扫描`（按钮路径**恰好**一条全表扫描、且显示 `0 页`）——
+没有配对那条，探测器写成恒返回空列表也会绿。
+
+**B · I110 丙 + 安静档同口径复测（真库只读，`db_check.last` 一字未动）**：上一轮 §4.36 D 自己记下的条件是
+「I109 若走 丙，成本必须重测一次再定文案」。复测分两段、**不许拼成「同场 13 项」**：
+- **十二项同场**（`.probe_work/u26_realdb_full_quiet.txt`，04:44 → 05:29:36 被会话生命周期切断、无末行）：
+  起跑 CPU **23.1%**｜可用 4,437MiB｜最吃内存 `MemCompression 616MiB`；合计 **2,665.8s（44 分 26 秒）**，
+  C1 **1,096.0s（18 分 16 秒）**、C5 **1,343.0s（22 分 23 秒）**、C4 **220.4s（3 分 40 秒）** 三条占 **99.8%**，
+  其余九项 0.0–4.7s（C12 4.7 / C2 1.5 / C6 0.2）。
+- **C11 单跑**（`.probe_work/u26_c11_only.py` → `.txt`，末行 `VERDICT: ALL GREEN`）：**1,156.4s（19 分 16 秒）**，
+  快照 1 份 `pre-migration-0008-20261020T122144.db 11686936KiB@v7`、整库体检 1 份 1,156,368ms；
+  起跑 CPU **86.7%** → 收口 16.7%（这半段落在本条自家历史区间 708.2–1,036.5s 的**上半段**）。
+- **两段相加 3,822.2s ≈ 63 分 42 秒（写作文案时取「合计约 64 分钟」）**。**零写红线**：两段都没调
+  `_remember()`，收尾快照里 `db_check.last` 仍是上一轮界面跑剩下的 `elapsed_s:3390.1`、字节数与
+  `settings_keys` 全部一致（12:3x 复核 `updated_at=1792867009` 未动）。
+- **文案四处同步**：`services/db_check.py` 的 `FULL_COST`（去掉 `**` 加粗符 —— 它是 UI 字符串）与模块 docstring、
+  `ui/pages/health_panel.py` docstring、`docs/UI-WIREFRAMES.md` S7 硬条件段、`tests/integration/test_db_check.py`
+  的 `test_全库档的确认框先给成本`（新增四个安静档数字 + `合计约 64 分钟` + `assert "**" not in where`）；
+  `pytest tests/integration/test_db_check.py -q` ⇒ **10 passed in 3.24s**。
+- **几何**（`.probe_work/u26_cost_label_geometry.py`，末行 `VERDICT: ALL GREEN`）：成本文案变长后标签
+  **1024×720 86→100（+14px）/ 1280×800 58→72（+14px）**，体检表仍是 180px 下限，状态行底边
+  538 < 页高 676 ⇒ 不许出现滚动条的那两块没被顶出去。
+- **台账**：I110 由 OPEN 转 **MITIGATED**（丙 已落地），残留仍记：乙「2.1 倍机制未定位」不许销账。
+
+**C · I111 甲 + 丁（本轮前半落账，读数补在这里）**：`bootstrap.py:285-291` 先建一只 `VectorStore` 再注入
+`SemanticSearchService`，`search_service.py:25-34` 加可选 `vector_store` 参数（不注入仍自建，`gates/stage6.py`
+两处照旧）；`vector_store.py:9` 那句「内存映射」改成「整份读进内存」（实测 `mmap_mode="r+"` 后原地
+`np.save` ⇒ `OSError: [Errno 22]`，收尾删文件 ⇒ `WinError 32`）。四段实测 `.probe_work/u26_i111_proof.py`
+→ `.log`（末行 `VERDICT: ALL GREEN`，只写临时目录、不碰真库）：结构两只实例 `id(reader)=…5712｜
+id(writer)=…3248`；缓存致盲（写 3 页后同一实例仍 0 命中、它自己的 `count()` 已报 3；换新实例 3 命中）；
+双写者 `IntegrityError: UNIQUE constraint failed: vector_meta.vector_idx`；FK 在 `VectorStore` 自开的连接上
+是死的（`doc_id=999999` 插得进、`vector_meta 现有 5 行｜库里 0 份文档`）。守卫两条进
+`tests/integration/test_vector_write_path.py`（第 8、9 条），连同原 7 条 **9 passed**；三条坏法
+（不注入 / 构造函数忽略注入 / 只把 `ai_classify` 换第二只）分别红在指定断言上。
+
+**D · ⑤ 真库语义索引：装模型 → 备份在先 → 20 份真写 → 当场命中 → 重启后重载**（`.probe_work/u26_semantic_pilot.py`
+→ `.txt`，末行 `VERDICT: ALL GREEN`，起跑 CPU 42.3%｜可用 2,434MiB）：
+- **装模型**：`.probe_work/models/bge-small-zh-v1.5` → `%LOCALAPPDATA%/PdfArchiver/models/`，
+  `onnx/model_int8.onnx` **23,903,394B**，0.36s。
+- **备份在先**：走产品 `BackupService.create_backup()` ⇒ `backup-20261025-045656-v8`，
+  **70.1s｜11,995,631,616B**（= 真库原大小，逐字节同量级）。
+- **真写**：写前 `vector_status {'na': 10991}｜vector_meta 0`；样本池 **3,273 份**（非缺失、`native/mixed`、
+  1–60 页），`seed=20261025` 点名 20 份 ⇒ **20/20 done｜549 页｜549 条向量｜19.28s**；
+  写后 `{'done': 20, 'na': 10971}｜vector_meta 549`，**主记录 10,991 与正文 1,975,611 前后一致**。
+- **当场命中（I111 甲 的用户可见后果）**：同一只 `SemanticSearchService` 立刻搜 3 条（拿样本首页正文起题）
+  ⇒ **3/3 命中来源**：`[7841,1,0.6323]`／`[7013,55,0.7396]`／`[10872,17,0.7041]`。
+- **重启后重载**：另起一个进程从磁盘重载 ⇒ `count() 549`、`data/vectors.npy 281,216B`
+  （= 549×512+128 头，账对得上）、同两条查询仍命中同源页。**探针自己有一处打印错误**：它把
+  `vectors.npy` 取在数据根而不是 `data/` 下，打出「0B」；文件真身在 `data/vectors.npy`，产品侧无问题 ——
+  这一行以本节为准，探针输出里的 `0B` 不作数。
+- **配套口径订正（四处）**：C7 那三处「产品里没人推进它」在 ⑤ 落地后变成假话，本轮按实际写入方改写
+  `services/db_check.py:_c7`、`db/models.py` 的 `VECTOR_STATUSES` 注释、`tests/probes/p12_consistency.py`
+  的标题与测量串、`tests/probes/p12_inject.py` 的 C7 坏法名（只改文案，判定逻辑一条没动）。
+
+**E · 新事实入账 **ISSUES I112**（写路径 2.56 倍慢 + 每份整表 `np.save` 的 O(n²) 写放大，未实现）**：
+同一台机器、同一模型、同一份真语料，**写路径 28.48 页/秒**（35.1 ms/页）对 **只读批式 72.86 页/秒**
+（轮二十三 `p25_semantic_sample.py`）⇒ **2.56 倍**；去掉首份冷启动（1 页 1.98s 含 session 首次加载）后
+548 页 / 17.30s = 31.68 页/秒，仍差 2.30 倍 ⇒ 冷启动不是主因。根因两条：`vector_service.py:209` 逐页
+`embed_single`（batch=1，而 `EmbeddingService.BATCH_SIZE=16`）；`vector_store.py:167-175` 的 `add_batch`
+每份都把**整个** `vectors.npy` 重新 `np.save`、`:170` 的 `np.vstack` 再复制一遍。按最大量级反算
+（**推算，不是实测**）：终值 964.8 MiB、累计写 ≈ 5.06 TiB（按本场备份 171 MB/s 折算 ≈ 9 小时顺序写）、
+常驻 964.8 MiB 占 G8 红线 1,200MiB 的 80%、`vstack` 瞬时 ≈ 1.9 GiB。全量折算 **19.27 小时**（20 份小样本
+线性外推，短文档把每份固定开销摊贵，属保守值）。方案甲乙丙丁见台账，**推荐 甲 → 乙**。
+
+**F · ⑨ 真空载 injection：本轮没测到（如实记「没有读数」）**：13:00 两次采样（10s 窗口）整机
+**CPU 43.8%**，占用者是 `DoubaoWork.exe` 123.6% + `WorkBuddy.exe` 68.8% + 另两只 `DoubaoWork` —— 都不是本项目的进程，
+按规矩不替用户关；CPU<10% 的窗口本轮**没出现**，所以 injection 整段的真空载读数**仍然没有**。
+上一轮的低负载场（CPU 32.4%、§4.36 B）不许拿来当空载。
+
+**没测到的 / 仍欠**：④ 24 小时 soak 仍未验（12h 是上限）；⑨ 真空载 injection 仍无读数；⑩ I110 的 2.1 倍机制
+仍未定位（安静档复测没解释它：C1 与 C5 都落在自家历史区间内，唯一异常仍是轮二十五那场的 C4 5.8s / C5 46.7s）；
+**I112** 等勾选；I111 残留 ①②③④⑤⑥（跨进程、FK、双 `EmbeddingService`、`delete_by_doc` 死行占 top_k）
+一条都没销。
+
+> **本册末行现数（2026-10-25 轮二十六收尾取）**：`DECISIONS 687｜VERIFICATION 857｜本册 627 → 734｜分册 757｜CHANGELOG 946 → 1,000｜ISSUES 148 → 150｜UI-WIREFRAMES 997 → 1,003` ——
+> 轮二十五那块记的是 本册 627 / CHANGELOG 946 / ISSUES 148 ⇒ 本轮 **本册 +107**（新增 §4.37）、
+> CHANGELOG **+54**（轮二十六条目）、**ISSUES +2**（本轮新开 **I111** 与 **I112**；I109/I110/I111 三条只改状态与证据格，不增行）。
+> **本轮 `src/` 改了 10 份**（`db/models.py`、`semantic/search_service.py`、`semantic/vector_store.py`、
+> `services/bootstrap.py`、`services/db_check.py`、`services/status_service.py`、`ui/main_window.py`、
+> `ui/pages/health_panel.py`、`ui/pages/settings_page.py`、`ui/pages/status_page.py` —— 逐份见 `git diff --stat`）、
+> **`tests/` 改了 7 份**（`test_db_check.py`、`test_status_readout.py`、`test_vector_write_path.py`、
+> `p9_reverse_injection.py`、`p10_reverse_injection_ocr.py`、本轮 C7 文案两处 `p12_consistency.py` / `p12_inject.py`）、
+> **`docs/` 改了 7 份**（本册、`CHANGELOG.md`、`ISSUES.md`、`UI-WIREFRAMES.md`、`OCR.md`、`TROUBLESHOOTING.md`、
+> `ARCHITECTURE.md` —— 最后一份是 I111 丁 顺带改的那句「内存映射」措辞）。
+> **没有新界面**（S7 只改了成本文案与状态页两条重查路线，逐屏线框回环节不触发）。
+> `.md` 侧最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`；本册 734（余 466）、CHANGELOG 1,000（余 200）。
+> **块数口径**：本册从 **11 块**（§4.26…§4.36）加本轮 = **12 块**。

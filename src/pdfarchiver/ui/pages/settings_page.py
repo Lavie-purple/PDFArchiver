@@ -209,8 +209,12 @@ class SettingsPage(QtWidgets.QWidget):
             self._rebalancing = False
 
     def reload_status(self) -> None:
-        """重渲染上半区 —— 就是让那张状态页自己重查一遍库，这里不留第二份查询。"""
-        self.status_page.reload()
+        """重渲染上半区 —— 就是让那张状态页自己重查一遍库，这里不留第二份查询。
+
+        走的是**轻版本**（`reload_progress()`）：这条被 5 秒巡检节拍和建窗路径调用，
+        不能在里面放那条全库正文扫描（**ISSUES I109** 丙）。要那个数请按上半区那颗按钮。
+        """
+        self.status_page.reload_progress()
 
     def reload_settings(self) -> None:
         """重查下半区的设置读数。"""

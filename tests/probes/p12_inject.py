@@ -62,7 +62,7 @@ INJECTIONS: list[tuple[str, str, str]] = [
      "UPDATE documents SET text_status='no_text' WHERE id=1;"),
     ("C6", "队列 state 写成口径外的值",
      "INSERT INTO processing_jobs(kind, doc_id, state, created_at) VALUES('index', 1, 'in-flight', 1);"),
-    ("C7", "向量状态写成口径外的值（产品里没人推进它，非 na 只可能是测试夹具或手工写入）",
+    ("C7", "向量状态写成口径外的值（写入方 = VectorService，非 na 有真来源）",
      "UPDATE documents SET vector_status='vectorized' WHERE id=1;"),
     ("C8", "file_operations.status 写成口径外的值",
      "INSERT INTO file_operations(kind, status, created_at) VALUES('move', 'cancelled', 1);"),

@@ -15,8 +15,9 @@ def now_ts() -> int:
 
 
 # `vector_status` 的唯一口径（`docs/DATABASE.md` §2.1 那一行注释是它的出处）。
-# **注意：产品里没有任何代码推进它** —— 现在只有 `Document` 的默认值 `na` 会落库，
-# 所以它是**读数**不是判定；接线欠账挂在 **ISSUES I63**。
+# 写入方只有一处：`services/vector_service.py` 的 `VectorService.build_vectors()`（重嵌前
+# `delete_by_doc` → 逐页嵌入 → `add_batch` → `set_vector_status`），默认值 `na` 由 `Document` 落库。
+# 接线历史挂在 **ISSUES I63**。
 VECTOR_STATUSES = ("na", "pending", "running", "done", "failed", "stale")
 
 # file_operations.status 的合法取值。口径唯一来源是 `docs/DATABASE.md` §二那张表

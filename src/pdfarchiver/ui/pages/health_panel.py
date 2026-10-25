@@ -4,13 +4,14 @@
 
 - **1甲 就地折叠**：它是 S7 下半区的第二页（`QStackedWidget`），不另开独立窗口 ——
   上半区那张状态页始终还在，体检读数与运行状态可以对照着看。
-- **2甲 两档**：快速 / 全库。两档的成本说明照抄 `services/db_check.FULL_COST`，不在这里改写。
+- **2甲 两档**：快速 / 全库。两档的成本说明照抄 `services/db_check.FULL_COST`，不在这里改写；
+  确认框里那一个**点上的**时长回读 `db_check.last.elapsed_s`（**ISSUES I110** 丙），这里不自己造数。
 - **3甲 只报证据**：本面板没有"重跑索引""修复"按钮；红行的原文就是结论。
 - **4甲 只存上次时间与计数**：写 `app_settings` 的是服务层，界面这里只显示。
 
-**为什么全库体检在后台线程跑**：真库同口径两次实测约 57 分钟与约 67 分钟（C1 约 17–20 分、
-C5 约 21–26 分、C11 约 16–17 分），
-放在 GUI 线程里等于整个应用冻住一小时。用 `threading.Thread` + `Signal(object)` 回主线程，
+**为什么全库体检在后台线程跑**：真库（11GB）同这十三项到今天测过五场，安静档合计 **63 分 42 秒**
+（十二项同场 44 分 26 秒 + C11 单跑 19 分 16 秒），最快的一场 **26 分 58 秒**、最慢约 67 分钟
+（跨度的机制未定位 —— **ISSUES I110**），放在 GUI 线程里等于整个应用冻住半小时到一小时。用 `threading.Thread` + `Signal(object)` 回主线程，
 不用 `QThread`：窗口关闭时 QThread 还在跑会打 "Destroyed while thread is still running"，
 而 daemon 线程随进程退出、服务层在 `finally` 里把那条线程的连接还掉。
 
@@ -32,6 +33,7 @@ from pdfarchiver.services.db_check import (
     QUICK_COST,
     DbCheckReport,
     format_duration,
+    last_full_elapsed,
 )
 from pdfarchiver.ui.library_hits import set_text_role
 from pdfarchiver.ui.table_layout import set_table_columns
@@ -147,10 +149,23 @@ class HealthPanel(QtWidgets.QWidget):
         self._thread = threading.Thread(target=work, name=f"db-check-{mode}", daemon=True)
         self._thread.start()
 
+    def full_confirm_text(self) -> str:
+        """确认框正文 —— 「点下去要等多久」那一个数回读本机上次实测（**ISSUES I110** 丙）。
+
+        这里不出现写死的区间：四场历史读数之间差 2.1 倍、机制未定位，再挑一个数印在文案里
+        等于替用户猜。没有可比记录（本机没跑过全库档，或上次只跑了快速档）就明说没有，
+        不拿快速档那十几秒冒充全库档的时长。
+        """
+        elapsed = last_full_elapsed(self.ctx.app_settings)
+        if elapsed is None:
+            prior = "本机还没有全库档的实测读数（没跑过，或上次只跑了快速档）。"
+        else:
+            prior = f"上次在本机本库实测：{format_duration(elapsed)}。"
+        return (f"{FULL_COST}\n\n{prior}\n"
+                "运行期间不可中断；要中止只能退出应用（不会改库）。\n\n确定开始？")
+
     def _confirm_full(self) -> None:
-        answer = QtWidgets.QMessageBox.question(
-            self, "全库体检",
-            FULL_COST + "\n\n运行期间不可中断；要中止只能退出应用（不会改库）。\n\n确定开始？")
+        answer = QtWidgets.QMessageBox.question(self, "全库体检", self.full_confirm_text())
         if answer == QtWidgets.QMessageBox.StandardButton.Yes:
             self.start(FULL)
 

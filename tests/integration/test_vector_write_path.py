@@ -6,7 +6,7 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
 的 `"vector"` 从不入队，`vector_status` 恒为 `Document` 默认值 `na`。于是 p12 C7「向量状态
 取值都在口径内」恒绿，但那个绿只是"全都停在初始值"的读数，不是判定。
 
-这七条各自钉住一个会坏的地方：
+这九条各自钉住一个会坏的地方：
 
 1. **点名进队（丁的入队路径）**：`request_vectors` 把该建的排进队列，回执分开数 `named /
    queueable / enqueued`，没正文的那份当场被挡在门外并指到具体 doc_id。
@@ -19,6 +19,10 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
    `last_error`，绝不写 `done`，也绝不停在 `na`（"跑不了"≠"没跑"）。
 6. **没正文不建空向量**：`text_status` 不在 `TEXT_SEARCHABLE` 的那份直接拒，状态一个字节不动。
 7. **空正文页跳过**：`char_count=0` 的那一页不塞进语义索引 —— 与"这一页本来就没字"同一件事。
+8. **全进程只许一只 `VectorStore`（**ISSUES I111** 丁）**：装配层把同一只实例注入读侧、写侧与
+   AI 分类建议。这条是结构判据，防的是"再长回两只"。
+9. **建完当场搜得到，不必重启（**ISSUES I111** 甲的用户可见后果）**：先搜一次把读侧缓存锁成空，
+   再走写路径建向量，同一场会话里必须立刻搜得到 —— 修之前这一段是 0 命中。
 
 跑法：
     .venv/Scripts/python.exe -m pytest tests/integration/test_vector_write_path.py -q
@@ -34,6 +38,7 @@ import pytest
 from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.jobs.queue import PermanentFailure
+from pdfarchiver.semantic.vector_store import VectorStore
 from pdfarchiver.services.bootstrap import AppContext, bootstrap
 from pdfarchiver.services.vector_service import (
     SKIP_NOT_SEARCHABLE, VECTOR_DONE, VECTOR_FAILED, VectorService)
@@ -57,6 +62,19 @@ class StubEmbedding:
         rng = np.random.RandomState(abs(hash(text)) % (2 ** 32))
         vec = rng.randn(512).astype(np.float32)
         return vec / np.linalg.norm(vec)
+
+
+class StubQueryEmbedding:
+    """只实现 `SemanticSearchService.search` 用到的 `embed`：任何查询都回同一条单位向量。
+
+    下面那两条 `I111` 断言要证的是「写进缓存的向量当场读得到」，不是检索质量 ——
+    库里只有那两条向量，top_k=10 一定把它们都吐回来，所以查询向量相不相干无所谓。
+    """
+
+    def embed(self, texts: list[str]) -> list[np.ndarray]:
+        vec = np.zeros(VectorStore.DIM, dtype=np.float32)
+        vec[0] = 1.0
+        return [vec for _ in texts]
 
 
 @pytest.fixture
@@ -93,7 +111,6 @@ def _fresh_vector_service(ctx: AppContext, embedding) -> VectorService:
 
 
 def _store(ctx: AppContext):
-    from pdfarchiver.semantic.vector_store import VectorStore
     return VectorStore(ctx.paths.root)
 
 
@@ -202,3 +219,52 @@ def test_空正文页不建向量(ctx, tmp_path) -> None:
     assert outcome.pages_expected == 3
     assert outcome.pages_skipped_empty == 1 and outcome.pages_embedded == 2, outcome.describe()
     assert _store(ctx).count() == 2, "空页建了向量 = 往语义索引塞一条谁都不该命中的行"
+
+
+def test_装配层只有一只_vector_store_三个消费者共用(ctx) -> None:
+    """**ISSUES I111** 丁：把「同一进程只许一只 `VectorStore`」钉成断言，防止再长回两只。
+
+    向量缓存（`_vectors` 那条 numpy 数组与 `_next_idx`）是**每只实例自己的**，所以两只实例
+    等于两份互不知情的账：读的那只看不见写的那只刚落盘的东西。坏法实测见本文件末尾的注。
+    """
+    writer = ctx.vector.vector_store
+    assert ctx.semantic_search._vectors is writer, (
+        "语义搜索自己 new 了一只 VectorStore —— 它的向量缓存不会被写路径刷新，"
+        "刚建好的向量在同一场会话里永远搜不到（ISSUES I111）")
+    assert ctx.ai_classify._vectors is writer, "AI 分类建议用的不是写路径那一只"
+
+
+def test_建完向量同一场会话当场搜得到(ctx, tmp_path) -> None:
+    """**ISSUES I111** 甲 的用户可见后果：不必重启。
+
+    先把读侧缓存锁成"空"（本场第一次搜索 —— 这就是真实用户点开搜索框的那一下），
+    再走**产品写路径**建向量，然后同一条查询必须命中。修之前的实测
+    （`.probe_work/u26_i111_proof.log` B 段，逐字）：写前 0 命中｜写后**同一只实例**仍 0 命中｜
+    而它自己的 `count()` 已经报 3｜换一只新实例同一条查询 3 命中。
+    """
+    doc_id = _seed(ctx, tmp_path, "当场搜得到.pdf", ["第一页正文", "第二页正文"])
+    ctx.vector.embedding = StubEmbedding()
+    ctx.semantic_search._embedding = StubQueryEmbedding()
+
+    assert ctx.semantic_search.search("任何查询") == [], "第一次搜索本应是空的（库里还没有向量）"
+
+    ctx.vector.build_vectors(doc_id)
+
+    hits = ctx.semantic_search.search("任何查询", top_k=10)
+    assert sorted((int(d), int(p)) for d, p, _ in hits) == [(doc_id, 1), (doc_id, 2)], (
+        f"建完 {ctx.semantic_search.count()} 条向量后同一场会话搜不到（hits={hits}）"
+        "—— 读侧那只 VectorStore 又不是写侧那一只")
+
+
+# 上面两条 `I111` 断言的坏法实测（2026-10-25，三条都真注入过再还原，逐字结果）：
+#   坏法 1｜`bootstrap.py` 那句改回 `SemanticSearchService(paths.root)`（不注入）
+#          ⇒ **2 failed, 7 passed**，两条都红：结构那条红在「语义搜索自己 new 了一只 VectorStore」，
+#             行为那条红在 `AssertionError: 建完 2 条向量后同一场会话搜不到（hits=[]）`。
+#   坏法 2｜只把 `search_service.py` 的 `vector_store or VectorStore(...)` 改成恒自建（忽略注入参数）
+#          ⇒ 同样两条都红、红字逐字相同 —— 接线的两端（装配 + 构造）任一处断掉都会显形。
+#   坏法 3｜把 `ai_classify` 那只换成另 new 的 `VectorStore(paths.root)`
+#          ⇒ **1 failed, 8 passed**，只红在第二条「AI 分类建议用的不是写路径那一只」，
+#             行为那条照绿 —— 证明两条断言各查各的，不是同一条的两次复读。
+# 乙（写后撤缓存）在甲落地后进程内已无对应分支：`add`／`add_batch` 会把新数组写回**同一只**实例
+# （`vector_store.py:116`／`:170`），所以没有为它写代码；跨进程的陈旧缓存留在 ISSUES I111 的残留里。
+

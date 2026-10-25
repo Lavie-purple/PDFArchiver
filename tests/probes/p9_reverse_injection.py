@@ -7,10 +7,11 @@ AGENTS.md 的规矩是「每写完一条断言，先用能骗过它的坏法真�
   注入后变红      ⇒  这条断言有约束力
 
 跑法：python tests/probes/p9_reverse_injection.py
-末行 VERDICT: ALL GREEN 表示 69 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2，
+末行 VERDICT: ALL GREEN 表示 70 条坏法全部被抓到（1–18 是阶段 1，19–46 是阶段 2，
 47 是 **ISSUES I94** 的守卫在场性，48–49 是 **ISSUES I67** 甲 那颗「送去识别」的两侧，
 50–69 是 **ISSUES I78** 甲：S1 那排「归入 / 加标签 / 移除标签」与 S8 右键菜单，
-`tests/integration/test_catalog_writes_ui.py` 里 19 条断言一条不落）。
+`tests/integration/test_catalog_writes_ui.py` 里 19 条断言一条不落；
+70 是 **ISSUES I109** 丁：把那条全库正文扫描放回 5 秒巡检节拍上 —— 与 29 改的是同一段代码，所以挨着放）。
 `node` 可以用空格分隔多个测试节点，要求它们**全部**变红；空格在这里不是测试名的一部分。
 
 两件事先说清，免得结论被误读：
@@ -188,10 +189,16 @@ CASES: list[Case] = [
     Case("29", "任务读数缓存起来，刷新按钮不再重查",
          "tests/integration/test_status_readout.py::test_刷新按钮同样重查任务读数",
          [Edit("src/pdfarchiver/ui/pages/status_page.py",
-               "        tasks = self.ctx.status.read_tasks(max_attempts=bg.max_attempts)",
+               "        tasks = self.ctx.status.read_tasks(max_attempts=bg.max_attempts,\n"
+               "                                           with_ocr_pages=with_ocr_pages)",
                "        tasks = getattr(self, \"_cached\", None) or "
-               "self.ctx.status.read_tasks(max_attempts=bg.max_attempts)\n"
+               "self.ctx.status.read_tasks(max_attempts=bg.max_attempts,\n"
+               "                                           with_ocr_pages=with_ocr_pages)\n"
                "        self._cached = tasks")]),
+    Case("70", "把那条全库正文扫描放回 5 秒巡检节拍上（**ISSUES I109** 丙 被改回去）",
+         "tests/integration/test_status_readout.py::test_自动节拍不现数全库OCR页数",
+         [Edit("src/pdfarchiver/ui/pages/status_page.py",
+               "        self._render(with_ocr_pages=False)", "        self._render(with_ocr_pages=True)")]),
     Case("30", "定时器亮灯但不巡检，事件永远没人处理",
          "tests/integration/test_patrol_tick.py::test_巡检一轮就把脏根排成一条扫描任务",
          [Edit("src/pdfarchiver/ui/main_window.py", "",

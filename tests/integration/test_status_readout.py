@@ -238,3 +238,76 @@ def test_S7用户拖过分隔条之后缩放窗口不许抢回分配(window, ctx
     assert sizes[0] < sizes[1], (
         f"用户刚把上半区压到 {dragged}px，放大窗口就被抢回 {sizes[0]}px —— 分配政策赢了用户")
     assert page._split_locked is True, "锁没生效：resize 之后还会继续自动重算"
+
+
+# —— **ISSUES I109** 丁 · 自动路径的计划级守卫 ——————————————
+# 丙 的处理是「把那一格读数从 5 秒巡检节拍与建窗路径上摘掉」。只断言屏上写着「未现数」
+# 是软的：谁把 `with_ocr_pages` 改回 True，那格照样渲染得出来，只是界面线程被按住几分钟
+# —— 而那正是这条问题本身。所以这里问的是**计划**：把这一轮真执行过的每条 SQL 拿去
+# `EXPLAIN QUERY PLAN`，出现逐行扫 `text_pages` 全表就红。
+
+def _statements_during(ctx, run) -> list[str]:
+    """跑 `run()`，回它这一轮在主线程连接上真执行过的 SQL 原文。
+
+    用 sqlite 的 trace 回调捞，而不是在测试里重打一遍自认为会跑的查询 —— 重打的那份
+    产品改了它看不见，就成了"测试自己造证据"（AGENTS.md 排障只认原始证据）。
+    """
+    conn = ctx.engine.thread_connection()
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        run()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def _full_scans_of_text_pages(conn, statements: list[str]) -> list[str]:
+    """把每条 SQL 拿去问计划，回那些逐行扫 `text_pages` 全表的（带 `USING` 的不算）。
+
+    判据与 **ISSUES I109** 甲 的证据同一条：`EXPLAIN QUERY PLAN` 里
+    `SCAN text_pages` = 全表逐行；走索引会打成 `SEARCH … USING INDEX` 或
+    `SCAN … USING COVERING INDEX`，那两种都不该判红。
+    """
+    bad: list[str] = []
+    for sql in statements:
+        if "text_pages" not in sql:
+            continue
+        head = sql.lstrip().upper()
+        if not head.startswith(("SELECT", "DELETE", "UPDATE", "INSERT")):
+            continue
+        for row in conn.execute("EXPLAIN QUERY PLAN " + sql).fetchall():
+            detail = row["detail"]
+            if detail.startswith("SCAN text_pages") and "USING" not in detail:
+                bad.append(f"{detail}｜{sql.strip()}")
+    return bad
+
+
+def test_自动节拍不现数全库OCR页数(window, ctx, qapp) -> None:
+    """建窗与 5 秒巡检节拍走 `reload_progress()`：这一轮一条 SQL 都不许扫正文全表。
+
+    真库实测那条 `count(*) … source_kind='ocr'` 单条 201–212s（1,975,611 行、`source_kind`
+    无索引），而这条路径的节拍是 5 秒一次 —— 挂回去等于每 tick 把界面线程按住几分钟。
+    """
+    block = _status_block(window, qapp)
+    seen = _statements_during(ctx, block.reload_progress)
+    assert seen, "trace 回调一条 SQL 都没抓到 —— 这条守卫会永真，先修捕获再谈结论"
+    bad = _full_scans_of_text_pages(ctx.engine.thread_connection(), seen)
+    assert not bad, f"自动路径上出现了逐行扫 text_pages 全表的查询：{bad}"
+    text = block.view.toPlainText()
+    assert "库里已存 OCR 正文 未现数" in text, f"没数过的那一格要明写未现数，不许显示成 0 页：{text}"
+
+
+def test_探测器在按钮路径上真的抓得到那条扫描(window, ctx, qapp, qtbot) -> None:
+    """上面那条的反面配对：只有按钮会现数那一格，所以探测器必须在那里报出来。
+
+    没有这一条，`_full_scans_of_text_pages` 可以写成永远返回空列表而上面照样绿 ——
+    不会变红的断言就是摆设（AGENTS.md）。顺带钉住按钮确实把那格数出来了（空夹具库 = 0 页，
+    0 要显示成 `0 页` 而不是「未现数」）。
+    """
+    block = _status_block(window, qapp)
+    seen = _statements_during(ctx, lambda: qtbot.mouseClick(block.refresh,
+                                                           QtCore.Qt.MouseButton.LeftButton))
+    bad = _full_scans_of_text_pages(ctx.engine.thread_connection(), seen)
+    assert len(bad) == 1, f"按钮路径应当恰好出现一条全表扫描，实际 {len(bad)} 条：{bad}"
+    assert "库里已存 OCR 正文 0 页" in block.view.toPlainText()

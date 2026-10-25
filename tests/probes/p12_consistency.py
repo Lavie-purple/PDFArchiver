@@ -23,7 +23,7 @@
 十四条对账：
 
     C0  水位停在迁移目录里的最新版          C6  状态列取值都在口径内
-    C1  库自身健康（integrity / fk_check）   C7  向量状态取值都在口径内（产品里没人推进它）
+    C1  库自身健康（integrity / fk_check）   C7  向量状态取值都在口径内（写入方 = VectorService）
     C2  路径唯一性与 path_key 口径           C8  文件操作状态取值都在口径内
     C3  盘上文件 ↔ 库里主记录 双向对账       C9  无进程时队列里不许有 running 残留
     C4  正文表 ↔ 索引花名册 双向对账       C10 分类树父链可达、无环、name_path 一致
@@ -304,17 +304,18 @@ def c6_status_domains(conn: sqlite3.Connection) -> Row:
 def c7_vector_domain(conn: sqlite3.Connection) -> Row:
     """阶段 6 的真口径：`vector_status` 取值必须在 `VECTOR_STATUSES` 内。
 
-    **谁推进它**：全仓 grep 确认没有任何产品代码推进 `vector_status`（只有 `Document` 默认值
-    `na` 落库），所以它是**读数**不是判定；非 `na` 只可能来自测试夹具或手工写入（**ISSUES I63**）。
+    **谁推进它**：只有 `services/vector_service.py` 的 `VectorService.build_vectors()`（重嵌前
+    `delete_by_doc` → 逐页嵌入 → `add_batch` → `set_vector_status`）；`Document` 的默认值 `na`
+    由 `documents.py` 的 INSERT 落库。接线历史见 **ISSUES I63**。
     """
     bad = _domain_problems(conn, "documents", "vector_status", VECTOR_LEGAL)
     dist = {r[0]: r[1] for r in conn.execute(
         "SELECT vector_status, count(*) FROM documents GROUP BY vector_status").fetchall()}
     non_na = sum(n for v, n in dist.items() if v != "na")
-    return Row("C7", "向量状态取值都在口径内（产品里没有任何代码推进它，见 ISSUES I63）",
+    return Row("C7", "向量状态取值都在口径内（写入方 = VectorService，见 ISSUES I63）",
                not bad,
                f"非 na 的行 {non_na} 条｜分布 {dist or '空'}｜"
-               + (bad[0] if bad else "全部合法（产品里没人写它，所以恒为 na 或测试夹具值）"))
+               + (bad[0] if bad else "全部合法（非 na 来自真跑或测试夹具）"))
 
 
 def c8_op_domain(conn: sqlite3.Connection) -> Row:

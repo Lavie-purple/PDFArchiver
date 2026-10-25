@@ -6,7 +6,9 @@
 - 暴力搜索（ANN 列为待测档）
 
 存储结构：
-- vectors.npy：内存映射的 int8 数组（N, 512）
+- vectors.npy：**整份读进内存**的 int8 数组（N, 512）—— 不做内存映射：Windows 上
+  `np.load(..., mmap_mode="r+")` 之后同一个文件再 `np.save` 原地重写，实测
+  `OSError: [Errno 22] Invalid argument`（2026-10-25 现场复现，明细见 **ISSUES I111** 证据格）
 - vector_meta 表：doc_id, page_no, vector_idx 映射。**由迁移 `0007` 建**，本模块只读不建
   （运行时建表会让同一个 `schema_version` 对应两种库形状 —— **ISSUES I62**）
 """

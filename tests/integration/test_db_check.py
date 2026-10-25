@@ -1,6 +1,6 @@
 """S7「库体检」（#198 · 1甲 2甲 3甲 4甲）—— 服务口径 + 面板接线。
 
-三条分开验，因为它们会各自坏掉：
+四条分开验，因为它们会各自坏掉：
 
 1. **服务口径**：快速档 10 行、全库档 13 行；每条判据与 p12 同源。坏法注入：
    把 C13 的比较改成恒真 → 第二条红；删掉 C11 的 0 字节分支 → 第三条红。
@@ -8,12 +8,20 @@
    六个键 —— 明细不落盘这件事写成"键集合相等"，多存一个字段就红。
 3. **1甲 面板接线**：设置页里翻页（不另开窗口）、点「快速体检」后表格真的铺上 10 行、
    「上次体检」行跟着更新、返回设置页。坏法注入：把 `finished` 接到空 lambda → 这张表停在 0 行。
+4. **成本读数（**ISSUES I110** 丙）**：文案里四场读数都在且明说跨度没定位；确认框那一个
+   点上的时长回读 `db_check.last.elapsed_s`，且只认 `mode == full` 的记录。
 """
 from __future__ import annotations
 
 import time
 
-from pdfarchiver.services.db_check import FULL, LAST_KEY, QUICK, DbCheckService
+from pdfarchiver.services.db_check import (
+    FULL,
+    LAST_KEY,
+    QUICK,
+    DbCheckService,
+    last_full_elapsed,
+)
 
 
 def _row(report, code: str):
@@ -169,11 +177,62 @@ def _mode_is_quick(window) -> bool:
 
 
 def test_全库档的确认框先给成本(window) -> None:
-    """2甲：全库档是真慢动作，按钮上要写明时长，点下去先问一次。"""
+    """2甲：全库档是真慢动作，按钮上要写明时长，点下去先问一次。
+
+    钉的是**读数都在**（**ISSUES I110** 丙）：安静档四项（C1 18 分 16 秒 / C5 22 分 23 秒 /
+    C11 19 分 16 秒 / C4 3 分 40 秒）与「合计约 64 分钟」，加上界面里那两场（26 分 58 秒 / 56 分 30 秒），
+    并明说跨度没定位、点下去按本机上次实测报。
+    只留「57–67 分钟」那种准点数就是回到被自家读数打破的老写法 —— 原先这里断言的正是那两个数。
+    """
     window._select_by_page_id("monitor")
     page = window._pages["monitor"]
     page.show_health()
-    assert "57 分钟" in page.health_panel.cost_label.text()
-    assert "不可中断" in page.health_panel.cost_label.text()
-    assert "57 分钟" in page.health_panel.full_btn.toolTip()
+    for where in (page.health_panel.cost_label.text(), page.health_panel.full_btn.toolTip()):
+        assert "26 分 58 秒" in where and "56 分 30 秒" in where, where
+        assert "18 分 16 秒" in where and "22 分 23 秒" in where, where
+        assert "19 分 16 秒" in where and "3 分 40 秒" in where, where
+        assert "合计约 64 分钟" in where, where
+        assert "57 分钟" in where and "67 分钟" in where, where
+        assert "跨度没定位" in where, where
+        assert "按本机上次实测报" in where, where
+        assert "不可中断" in where, where
+        assert "**" not in where, where
     assert "约 12 秒" in page.health_panel.quick_btn.toolTip()
+
+
+def test_确认框的时长回读本机上次实测(window) -> None:
+    """I110 丙：点下去那一句里的时长来自 `db_check.last.elapsed_s`，不是文案里的第四个数。
+
+    坏法注入（真跑过）：把 `full_confirm_text` 改成只回 `FULL_COST`（不读记录）→ 本条红在
+    「上次在本机本库实测」；把 `last_full_elapsed` 里 `mode != FULL` 那道闸删掉 → 本条红在
+    「快速档那 12 秒被当成全库档的时长」。
+    """
+    window._select_by_page_id("monitor")
+    page = window._pages["monitor"]
+    page.show_health()
+
+    window.ctx.app_settings.set(LAST_KEY, {"ts": 1, "mode": FULL, "total": 13, "red": 0,
+                                           "readings": 1, "elapsed_s": 1618.2}, kind="ui")
+    body = page.health_panel.full_confirm_text()
+    assert "上次在本机本库实测：26 分 58 秒" in body, body
+    assert "本机还没有全库档的实测读数" not in body, body
+
+    window.ctx.app_settings.set(LAST_KEY, {"ts": 1, "mode": QUICK, "total": 10, "red": 0,
+                                           "readings": 1, "elapsed_s": 12.3}, kind="ui")
+    body = page.health_panel.full_confirm_text()
+    assert "本机还没有全库档的实测读数" in body, body
+    assert "12 秒" not in body, "快速档的时长不能出现在全库档确认框里冒充实测"
+
+
+def test_上次实测只认能用的记录(ctx) -> None:
+    """`last_full_elapsed` 的闸：没记录 / 档位不对 / 值不是数 / 数是 0，一律回 None 而不是 0。"""
+    assert last_full_elapsed(ctx.app_settings) is None, "没跑过时必须是 None，界面才有「没有读数」可说"
+    ctx.app_settings.set(LAST_KEY, {"ts": 1, "mode": FULL, "elapsed_s": 1618.2}, kind="ui")
+    assert last_full_elapsed(ctx.app_settings) == 1618.2
+    for bad in ({"ts": 1, "mode": QUICK, "elapsed_s": 12.3},
+                {"ts": 1, "mode": FULL},
+                {"ts": 1, "mode": FULL, "elapsed_s": "不是数"},
+                {"ts": 1, "mode": FULL, "elapsed_s": 0.0},
+                "不是字典"):
+        ctx.app_settings.set(LAST_KEY, bad, kind="ui")
+        assert last_full_elapsed(ctx.app_settings) is None, bad

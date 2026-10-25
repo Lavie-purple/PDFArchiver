@@ -10,6 +10,10 @@
 - 「重试中」= `attempts>1` 且未终结的任务条数，`max_attempts` 由队列层给；
 - 「还欠一次索引」= `documents.NEEDS_INDEX_STATUSES`（pending/stale），与扫描侧、重启侧同一份，
   不在这里另列一遍状态名 —— 那是第二个口径。
+- 「库里已存 OCR 正文」= `text_pages` 里 `source_kind='ocr'` 的行数（一份的数由
+  `count_ocr_pages(doc_id)` 给，两者只差范围，算法一份）。它要扫全表，是这里唯一一条
+  量级跟着库走的读数，所以有一个开关能不要它（`with_ocr_pages`，**ISSUES I109** 丙），
+  不要它时界面上写「未现数」而不是 `0 页`。
 
 这里不出现"就绪/正常"这类笼统结论，也不出现任何不是从查询里算出来的数。
 """
@@ -112,7 +116,11 @@ class TaskStatus:
     max_attempts: int
     fts_by_status: dict[str, int]
     ocr_by_status: dict[str, int]
-    ocr_pages: int
+    #: 库里已存 OCR 正文页数。算法只有一份 —— `TextRepository.count_ocr_pages_all()`，
+    #: 别把它换成写入侧的累计计数（`ocr_stats`），那是**第二个口径**（**ISSUES I109** 乙 未勾）。
+    #: `None` 不是「0 页」而是「这一轮没数」：那条 SQL 要扫 `text_pages` 全表，
+    #: 真库 1,975,611 行实测单条 201–212s，所以自动节拍上不要它（**ISSUES I109** 丙）。
+    ocr_pages: int | None
     documents: int
     errors: list[TaskError]
     roots: list[MonitoredRoot]
@@ -124,6 +132,17 @@ class TaskStatus:
     def index_backlog(self) -> int:
         """还欠一次索引的文档数。口径 = `NEEDS_INDEX_STATUSES`，唯一一份。"""
         return sum(self.fts_by_status.get(s, 0) for s in NEEDS_INDEX_STATUSES)
+
+    def _pages_text(self) -> str:
+        """「库里已存 OCR 正文 …」那一小段的两种说法。
+
+        没数过的时候不许显示 `0 页` —— "库里一页 OCR 文本都没有"和"这一轮没数"
+        在界面上必须是两句不同的话（**ISSUES I109** 丙：那条计数要扫 `text_pages` 全表，
+        已经从 5 秒巡检节拍与建窗路径上摘掉，只有状态块上那颗按钮会要它）。
+        """
+        if self.ocr_pages is None:
+            return "未现数（这条要全库扫描，按「重新读取数据库状态」才数）"
+        return f"{self.ocr_pages:,} 页"
 
     def lines(self) -> list[str]:
         """固定顺序的读数块。空队列也要有行，否则"没输出"和"还没跑"在界面上分不开。"""
@@ -145,7 +164,7 @@ class TaskStatus:
                    + f"｜还欠一次索引 {self.index_backlog}（口径 pending+stale）")
         out.append("  OCR 状态："
                    + ("｜".join(f"{s}={n}" for s, n in sorted(self.ocr_by_status.items())) or "无一行")
-                   + f"｜库里已存 OCR 正文 {self.ocr_pages:,} 页")
+                   + f"｜库里已存 OCR 正文 {self._pages_text()}")
         retried = "｜".join(f"{k}={n}" for k, n in sorted(self.retried_by_kind.items()))
         out.append(f"  重试中：{retried or '无'}（每条最多 {self.max_attempts} 次尝试）")
         if self.errors:
@@ -193,11 +212,17 @@ class StatusService:
             db_path=str(self.engine.path),
         )
 
-    def read_tasks(self, *, max_attempts: int) -> TaskStatus:
+    def read_tasks(self, *, max_attempts: int, with_ocr_pages: bool = True) -> TaskStatus:
         """任务面板的读数。SQL 全在 `db/repositories/jobs.py` 与 `documents.py`，这里只做组合。
 
         `max_attempts` 由调用方（组合根）传进来，因为它是**队列层**的口径（`jobs/queue.py`），
         不是库里的列；在这里读成默认值就会出现"界面说最多 3 次、队列实际按别的数放弃"的两个口径。
+
+        `with_ocr_pages` 是**唯一**一处能把那条全库计数关掉的开关，默认开着（= 完整读数）。
+        要关掉它的只有界面线程（**ISSUES I109** 丙）：`count_ocr_pages_all()` 在 `source_kind`
+        上没有索引可用，真库 1,975,611 行实测单条 **201–212s**，而巡检节拍是 5 秒一次 ——
+        挂在自动刷新上等于让 S7 一在屏就把界面线程按住几分钟。
+        关掉后 `ocr_pages` 是 `None`，界面上显示成「未现数」而不是 0 页。
         """
         rows = self.jobs.recent_errors(MAX_ERROR_LINES)
         ids = {int(r.doc_id) for r in rows if r.doc_id is not None}
@@ -213,7 +238,7 @@ class StatusService:
             max_attempts=max_attempts,
             fts_by_status=self.documents.counts_by_fts_status(),
             ocr_by_status=self.documents.counts_by_ocr_status(),
-            ocr_pages=self.texts.count_ocr_pages_all(),
+            ocr_pages=self.texts.count_ocr_pages_all() if with_ocr_pages else None,
             documents=self.documents.count(),
             errors=errors,
             roots=self.roots.list(),
