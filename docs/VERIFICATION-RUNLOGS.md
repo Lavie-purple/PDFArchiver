@@ -1041,3 +1041,88 @@ consistency 那 3 条要一次产品路径重扫才消；G1 与 g2 的红要安�
 > **会话日志体积（token 代理）**：**341,514,041 B｜106,008 行**（00:20 取）vs 轮二十八基线 **339,082,629 B / 105,405 行** ⇒
 > **+2,431,412 B｜+603 行**。
 
+---
+
+## 4.41 轮三十 · 安静窗定点复跑（G1 / g2 / 回归）+ 产品路径重扫（2026-10-27 04:4x → 06:1x）
+
+用户这一轮的指令逐字：「consistency 3 条：需要一次产品路径重扫…G1 与 g2：安静窗定点复跑才算数…这两个能执行吗」。
+两条都能执行，而且 04:4x 机器自己空下来（`TOTClient-Win64-Shipping.exe` 3,536 MiB 退场：CPU 61.2% → 25.7%、
+可用 1,620 → 3,907 MiB），所以按「先量后写」的顺序：**先跑对负载敏感的两条，再动库**。
+**产品代码 `src/` 与 `tests/` 本轮 0 改动**；新写的只有一次性探针 `.probe_work/u30_rescan.py`（调产品入口，零 SQL）。
+
+**A · 安静窗三处定点复跑（阈值一处没动）**
+- **g2**（段 42.6s）：`P95 326.0ms vs 500ms`（P50 142｜P99 338｜max 338｜100 样本｜最差 `发票`），
+  起跑 **CPU 17.3%｜可用 3,962MiB｜chrome.exe 1,348MiB**（g2 自采时点 CPU 26.0%｜3,889MiB），
+  `classification=green`；分类自检 **6/6**（含 `500ms@60%` 与 `652ms@60%` 两条边界喂数）。
+  对照轮二十九同一套 20 查询 × 5 reps：**608.0ms @ CPU 55.3%｜1,911MiB｜TOTClient 3,486MiB**。
+- **G1**（段 1.9s）：**1.205s**（进程总耗时 1.836s、关窗对账 1 条）；对照轮二十九 **1.519s**。
+  `tests/integration/test_app_shell.py::test_进程级冷启动实测符合G1约定` 单跑 3 次全过（1.77 / 1.97 / 1.75s）。
+- **regression**：按整链同口径 `pytest tests -q` ⇒ **817 passed / 1 skipped / 183.21s / exit 0**
+  （`.probe_work/u30_regression_full.log`）。轮二十九那场是 816 passed / 1 failed，唯一失败就是 G1 计时。
+  口径更正：先前按 `pytest tests/unit tests/integration tests/guards` 跑出 **803** 是**另一个集合**
+  （`segment_regression` 跑的是 `tests` 整目录），两个数不通用。
+- **作废一场**：第一次用 shell 里的 `python` 起段，`ModuleNotFoundError: No module named 'PySide6'`
+  把 g2 与 coldstart 各判一条 RED —— 那是解释器选错，不是产品红；换 `.venv/Scripts/python.exe` 重跑，
+  有效读数在 `.probe_work/u29b_g2_coldstart.log`，前一场不计入任何结论。
+
+**B · 产品路径重扫（`.probe_work/u30_rescan.py`，零 SQL / 零手改库）**
+- 只调 `ScanService.reconcile_path()` + `IndexService.index_document()`：5 份新 PDF → doc **10995–10999**
+  （3 份原生正文 162 / 110 / 132 页 `ocr_status=na`；2 份扫描件 262 / 236 页 `stored_pages=1 / 0`、
+  `text_status=none`、`ocr_status=pending` —— 按设计等用户点「送去识别」，不自动烧 OCR）；
+  删掉的 qwenwork mock `sample.pdf` → doc 10980 走 `OSError → _vanish → mark_missing`，
+  `missing_since=1793047826`。
+- 改前逐条核对 6 条路径（5 条 `in_db: false`、sample.pdf `in_db: true`），改后 5 条 `added` + 1 条 `missing`，
+  逐条落 `.probe_work/u30_rescan.json`；跑完 `queue: null`（无残留任务）。
+- 为什么必须走产品路径：那 3 条红是**数据漂移**不是代码缺陷；手写 `UPDATE documents SET missing_since=…`
+  只会让库与盘看着对上，索引/正文/向量仍缺口。与「探针自己的传感器也是代码」同一条理由。
+
+**C · p12 真根 19 条（04:59:23 → 06:08:37，4,154s，`.probe_work/u30_p12_real.json`）**
+`合计 19 条｜红 0 条｜未验 0 条`、末行 `VERDICT: ALL GREEN`、`walk: true`。
+- C3 六行（同一趟走盘，各计 820,094ms）：lavie 68/68/缺 0｜**D: 94/95/缺 1**｜E 1969/1969/0｜
+  F 5352/5352/0｜G 1655/1655/0｜**H: 1856/1857/缺 1**。D 与 H 的「库多 1」就是那两条 `missing_since`
+  （H = 本轮新盖的 doc 10980；D = 跨卷搬家的 doc 93，见 D 段 I113），口径是「盘上 = 库内 − 已标缺失」，
+  所以 6 行全绿 —— **不是把缺失记录算作通过，而是它本来就该在「已标缺失」那一栏**。
+- 逐条计时：C0 27ms｜C1 997,851ms（`integrity_check=ok`、外键 0 条）｜C2 2,949ms（主记录 10,996 唯一）｜
+  C3 820,094ms｜C4 196,592ms（1,976,016 ↔ 1,976,016，漏索引 0 / 残留 0）｜C5 1,202,780ms（1,976,016 页六项自洽）｜
+  C6 210ms｜C7 25ms（`done 8,687 / na 2,309`）｜C8 1ms｜C9 2.4ms（`running 0`、`done 10,941 / failed 75`）｜
+  C10 0.6ms（分类 14 个）｜C11 930,361ms（最新快照整库体检）｜C12 4,474ms（超页 0）｜C13 3ms（监测根 6 个）。
+- 同一探针比轮二十九那场 **6,186.3s 快 2,032s（−33%）**：那场与整链 8 段背靠背、本场独占。
+  **两场都是真读数，不互相换算**（同「门禁计时特性」的口径）。
+
+**D · 新开 ISSUES I113（OPEN，等勾选）**
+doc 93（`D:/6.Communication Social/MemoTrace/…这本书能让你睡得好…pdf`，`missing_since=1792790831`）与
+doc 10994（`H:/others software/MemoTrace/…` 同名同书、341 页）是**同一本书**（`.probe_work/u30_namecheck.txt`）：
+MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_adopt_renamed`
+（`src/pdfarchiver/services/scan_service.py:290-305`，按 `(device, file_id)` 认改名）认不出，
+旧记录被 `_vanish`（同文件 `:282-288`）盖成缺失戳后留成死记录。
+三条出路：**甲 删死记录（推荐）／乙 保留但在界面隐藏／丙 保持现状**，等勾选。
+
+**E · 本轮没跑到的 / 仍欠的**
+- **整链一条命令全绿仍未拿到**：轮二十九 34/35；本轮是**定点复跑**（g2 / coldstart / regression / consistency
+  四段），不许写成「整链全绿」—— e2e / injection / ui-inject / ocr / soak / package 沿用轮二十九读数。
+- **⑤ 新文档的向量**：5 份新文档 `vector_status=na`（非 na 仍是 8,687 份），新增 **405 页**正文
+  （162 + 110 + 132 + 1 + 0）还没 embed ⇒ 语义搜索到不了它们，要单独一次向量回填。
+- 2 份扫描件（262 / 236 页）等用户点「送去识别」；OCR 是用户触发，不自动跑。
+- ④ 24 小时 soak 仍未验（12 小时是已验上限）；⑨ injection 真空载（CPU<10%）仍无读数
+  —— 本场 17.3% 是起跑瞬间，不构成真空载。
+- 安装包与代码签名仍未交付；隐私政策按用户「以后再处理」挂起（2026-10-27）。
+- **没有一处分支是靠抬阈值或改判据变绿的**：g2 的 500ms、G1 的 1.5s、忙线 60% 一个字没动。
+
+> **本册末行现数（2026-10-27 轮三十收尾取）**：`CHANGELOG 1,109（余 91）｜DECISIONS 687（余 513）｜
+> 本册 1,043 → 1,110（余 90）｜分册 757（余 443）｜ISSUES 151｜UI-WIREFRAMES 1,009（余 191）`；
+> **最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`** —— 下一轮若要再往 `CHANGELOG.md` 里写长条目，先切册。
+> **台账**：`113 行｜I1–I113 连续不重号｜CLOSED 87｜MITIGATED 24｜WONTFIX 1｜OPEN 1`；
+> 本轮**新增 I113 一行（OPEN）**，其余 112 行零状态迁移 —— 四条红都不占台账（两条 G1 计时同一处、
+> 一条数据漂移、一条尾部长尾），I113 是新逮到的数据残留不是本轮回归。
+> **测试**：`pytest tests -q` **817 passed / 1 skipped（183.21s）**；p12 真根 **19/19**；
+> `src/` 与 `tests/` 本轮 **0 改动**（新写的只有 `.probe_work/` 里的一次性探针）。
+> **真库现数（只读，2026-10-27 取）**：`catalog.db 12,112,449,536 B`｜`documents 10,996`｜`text_pages 1,976,016`｜
+> 队列 `{'done': 10,941, 'failed': 75}`｜`running 0`｜`vector_status {'done': 8,687, 'na': 2,309}`｜监测根 6 个。
+> **临时文件**：`.probe_work/` 顶层 **698 项（13 个子目录）｜递归 1,139 文件｜857.8 MiB｜顶层 0 字节 75 个**；
+> 新增承重：`.probe_work/u30_rescan.py`、`.probe_work/u30_rescan.json`、`.probe_work/u30_rescan.log`、
+> `.probe_work/u30_p12_real.json`、`.probe_work/u30_p12_real.log`、`.probe_work/u30_p12_summary.txt`、
+> `.probe_work/u30_p12_sel.txt`、`.probe_work/u30_namecheck.txt`、`.probe_work/u30_vectorcheck.txt`、
+> `.probe_work/u30_regression_full.log`、`.probe_work/u29b_g2_coldstart.log`；`injection_inflight` **不在场**。
+> **会话日志体积（token 代理）**：**344,040,730 B｜106,653 行** (06:2x 取) vs 轮二十九基线 **341,514,041 B / 106,008 行** ⇒
+> **+2,526,689 B｜+645 行**。
+

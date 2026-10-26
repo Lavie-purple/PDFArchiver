@@ -6,6 +6,39 @@
 
 ---
 
+## 轮三十（2026-10-27）—— 安静窗定点复跑（G1 / g2 / 回归）+ 产品路径重扫（consistency 19/19 转绿）
+
+用户这一轮的指令逐字：「这两个能执行吗」（指上一轮记下的两条出路：① consistency 需要一次产品路径重扫、
+② G1 与 g2 要安静窗定点复跑）。两条都能执行，而且 04:4x 机器正好空下来（`TOTClient-Win64-Shipping.exe`
+3,536 MiB 退场，CPU 61.2% → 25.7%、可用 1,620 → 3,907 MiB），所以按「先量后写」的顺序做：
+**先跑对负载敏感的两条，再动库。产品代码与测试代码本轮 0 改动**。
+
+- **安静窗定点复跑（三处阈值一处没动）** —— g2 真库 P95 **326.0ms**（P50 142 / P99 338 / max 338 /
+  100 样本 / 最差 `发票`），起跑 **CPU 26.0%｜可用 3,889MiB**，`classification=green`；对照轮二十九
+  同一套 20 查询 × 5 reps 的 **608.0ms @ CPU 55.3%｜1,911MiB**。G1 冷启动 **1.205s**（进程总耗时 1.836s、
+  关窗对账 1 条）；`test_进程级冷启动实测符合G1约定` 单跑 ×3 全过（1.77 / 1.97 / 1.75s）。
+  回归按整链同口径 `pytest tests -q` ⇒ **817 passed / 1 skipped / 183.21s / exit 0**
+  （轮二十九那场是 816 passed / 1 failed，唯一失败就是这条 G1 计时）。
+- **产品路径重扫（`.probe_work/u30_rescan.py`，零 SQL、零手改库）** —— 只调
+  `ScanService.reconcile_path()` 与 `IndexService.index_document()`：5 份新 PDF → doc **10995–10999**
+  （3 份原生正文 162 / 110 / 132 页；2 份扫描件 262 / 236 页 `text_status=none / ocr_status=pending`，
+  按设计等用户点「送去识别」）；删掉的 qwenwork mock `sample.pdf` → doc 10980 走
+  `OSError → _vanish → mark_missing`，`missing_since=1793047826`。改前 6 条路径全 `in_db: false`、
+  改后 5 条 `added` + 1 条 `missing`，逐条落 `.probe_work/u30_rescan.json`。
+- **p12 真根 19 条：红 0 / 未验 0 / `VERDICT: ALL GREEN`**（04:59:23 → 06:08:37，**4,154s**）。
+  C3 六行（各 820,094ms，并发）：lavie 68/68/缺 0｜**D: 94/95/缺 1**｜E 1969/1969/0｜F 5352/5352/0｜
+  G 1655/1655/0｜**H: 1856/1857/缺 1** —— D 与 H 的「库多 1」正是那两条 `missing_since`，
+  口径是「盘上 = 库内 − 已标缺失」。其余：C1 997,851ms `integrity_check=ok`｜C2 2,949ms 主记录 10,996
+  全部唯一｜C4 196,592ms 1,976,016 ↔ 1,976,016（漏 0 / 残留 0）｜C5 1,202,780ms 1,976,016 页六项自洽｜
+  C11 930,361ms 最新快照整库体检｜C12 4,474ms 超页 0。同一条探针比轮二十九那场快 **2,032s（−33%）**，
+  差别是负载（那场与整链 8 段背靠背、本场独占）；**两场都是真读数，不互相换算**。
+- **一个坑记一次**：第一次用 shell 里的 `python` 跑段，`ModuleNotFoundError: No module named 'PySide6'`
+  把 g2 与 coldstart 各判了一条 RED —— 那是解释器选错（要用 `.venv/Scripts/python.exe`），
+  不是产品红，`.probe_work/u29b_g2_coldstart.log` 那一场作废。
+- **新开 ISSUES I113（OPEN，等勾选）**：doc 93 与 doc 10994 是同一本书 —— MemoTrace 目录从
+  `D:\6.Communication Social\` 搬到 `H:\others software\`，Windows 跨卷搬移换 inode ⇒
+  `_adopt_renamed` 按设计认不出是改名，旧记录留成缺失戳。三条出路（删死记录 / 不显示 / 保持现状）待定。
+
 ## 轮二十八（2026-10-25）—— **I111 ⑥ 甲**（死行超量取样）/ **I112 ③ 甲**（容量只增不减定案）/ ⑨ injection 真空载窗口
 
 用户这一轮的指令逐字：「按推荐方案执行」⇒ 按上一轮那张 3×3 编号表执行 ⑥ 甲、③ 甲、⑨ 甲。
