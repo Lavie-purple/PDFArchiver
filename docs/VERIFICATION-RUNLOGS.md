@@ -966,3 +966,78 @@ daemon `threading.Thread` + `_text_ready = Signal(str, str)` + `finished`；点�
 > **会话日志体积（token 代理）**：**339,082,629 B｜105,405 行** vs 轮二十七基线 **337,053,182 B / 104,887 行** ⇒ **+2,029,447 B｜+518 行**。
 > **本轮 `src/` 改了 1 份**（`semantic/vector_store.py`，+16/−3）、**`tests/` 改了 1 份**（`test_vector_store.py`，+29）、
 > **`docs/` 改了 3 份**（本册、`CHANGELOG.md`、`ISSUES.md`）；**零新界面、零新入口**。
+
+---
+
+## 4.40 轮二十九 · 12 段整链 + 4 分钟 soak / package / 低负载 injection（2026-10-25 23:3x → 2026-10-27 00:01）
+
+用户这一轮的指令：「1+2」（先跑 coldstart+e2e+ocr+ui-inject+g2，再跑 injection 整段）→「soak 4 分钟档 + package
+（约 9 分钟；package 会重建冻结产物）都做」→「3+5+6 都做」（3 ⊂ 5：整链已含冷启动与一致性，6 = 照实记账）。
+**产品代码零改动**：这一轮只跑门禁与记账，所以 `CHANGELOG.md` 不加条目（它只记实际改过的产品代码），读数全在本节。
+
+**A · 五段一批（2026-10-25 23:4x–23:51，起跑 CPU 67.2%｜可用 1,888MiB｜Ld9BoxHeadless.exe 2,263MiB）**
+- `coldstart` **RED 2.415s**（阈值 1.5s），同场 `e2e` 的冷启动读数 1.437s ⇒ 同一次开机、同一份代码，两次差 0.98s。
+- `e2e` / `ocr` / `ui-inject`（36 条坏法全抓）/ `g2` 四段 **PASS**（`g2` 这一场是绿的）。
+- 段末 `合计判定 9 条｜本次未跑 6 段`、末行 `VERDICT: RED（1 条未过）`（`.probe_work/u28_seg1.log`）。
+- G1 隔离复跑三次（`.probe_work/u28_coldstart_isolated.log`）：**1.929s（CPU 49.6%，RED）／1.450s（59.7%，PASS）／1.358s（73.3%，PASS）**
+  —— 与 CPU 非单调，这条对整机环境敏感、对 CPU% 不敏感。
+- 次日 **20:58:33** 安静窗（CPU 28.7%｜可用 4,714MiB）同一段 **1.130s PASS**（`.probe_work/u28_coldstart_retry_quiet.log`）
+  ⇒ 2.415s 是环境读数，**不是回归**；阈值 1.5s 一个字没动。
+
+**B · injection 整段（2026-10-26 20:58:42 → 21:11:42，780.0s）**
+9 条判定全绿：p9 **70/70**、p10 **45/45**、p16 11 条（8 坏法全抓 + 3 条反向对照成立）、p17 **3/3**、p18 **3/3**、
+p21 **24/24**、p22 **33/33**、p23 **23/23**、p24 **17/17**（`.probe_work/u28_seg2_injection.log`）。这一段**不是真空载**
+（起跑 CPU 47.5%），⑨ 那一行照旧不销账。
+
+**C · 4 分钟 soak + package（2026-10-26 20:52 / 20:58 收工）**
+- soak **325.4s ALL GREEN**：内存首段中位 111.3 → 末段中位 111.5MiB（**增长 +0.2**，G8 余量 1,088.5MiB）；
+  S6 排空 1.0s、S7 盘上 82 = 库里 82、S8 日志 1 份、S9 p12 十四项 0 红 0 未验（`.probe_work/u28_seg4_soak.log`）。
+- package **350.4s ALL GREEN**：构建 201.1s + 冻结产物冒烟 149.3s，**整包 400.1 MiB**；迁移 8 份 `.py` 与源码清单逐份相等、
+  ONNX 3 个、DLL 3 个、`.dist-info` 6 份；冒烟里强杀留 1 条 `running` 残尸→重启 `recovered=1`→续跑完、documents 273 = 磁盘 273、
+  运行目录在仓库外（`.probe_work/u28_seg4_package.log`）。
+
+**D · 12 段整链（2026-10-26 21:45 起 → 2026-10-27 00:01:31；`.probe_work/u29_chain.log` 418 行）**
+起跑负载 **CPU 40.8%｜可用 2,033MiB｜WorkBuddy.exe 1,054MiB**；段末 `合计判定 35 条｜本次未跑 0 段`、末行
+**`VERDICT: RED（4 条未过）`**（4 = 段级：regression / coldstart / consistency / g2；consistency 内部另计 3 行红）。
+- **全绿 8 段**：docs-inject 0.0s｜guards 3.7s｜e2e 15.5s（冷启动 1.278s、11 条端到端）｜injection 832.7s（9 条全绿）｜
+  ui-inject 95.7s（36/36）｜ocr 32.5s（3 PASS，含每日页预算真停机）｜soak 327.9s（内存 112.8 → 113.0MiB）｜
+  package 399.6s（构建 233.4s + 冒烟 166.2s）。
+- **红 ① regression（244.6s）**：**816 passed / 1 failed / 1 skipped**，唯一失败是
+  `tests/integration/test_app_shell.py::test_进程级冷启动实测符合G1约定` —— 与 ② 同一条 G1 计时，不是两处坏。
+- **红 ② coldstart（2.3s）**：**1.519s**，超线 **19ms**；同场 e2e 1.278s、A 段安静窗 1.130s。
+- **红 ③ consistency（6,186.3s）**：19 条 **红 3、未验 0** —— `C3·D:\` 盘上多 3 份、`C3·E:\` 多 2 份（漏索引），
+  `C3·H:\` 库里有 1 条盘上没了却没标 `missing_since`。**根因是数据漂移，不是代码**：六个监测根的
+  `last_full_scan_at` 全停在 **2026-10-16 00:21–00:28**，而多出来的 5 份 PDF mtime 是
+  **2026-10-24 21:55 – 2026-10-25 03:07**（2026-10-27 现读，`.probe_work/u29_drift_files.txt`），
+  缺的那 1 份是 qwenwork 应用自带的 mock `sample.pdf`（2026-10-27 现读 `FileNotFoundError`）。
+  逐条计时：C1 1,086.3s｜C2 4.9s｜六行 C3 各 1,701.9s｜C4 266.1s｜C5 1,940.2s｜C11 1,178.9s｜C12 5.6s（其余 <1s）。
+  消这条要走**产品路径重扫一次**，改代码消不掉。
+- **红 ④ g2（63.0s）**：**P95 608.0ms vs 500ms**（P50 261｜P99 720｜max 720｜100 样本｜最差查询 `PDF`）；
+  起跑 **CPU 55.3%｜可用 1,911MiB｜TOTClient-Win64-Shipping.exe 3,486MiB**。分类自检 6/6 全对；55.3% 在 60% 的「忙」线之下，
+  按门禁自己的规则**判产品红、不许归因给负载**，本节照红记，不赦免。三条旁证说明红在尾部而非固定成本：
+  ① 同一套 20 查询 **两小时前**在 CPU 67.2% 的场子里（A 段）是绿的；② 同一查询 5 次背靠背差 2.5 倍
+  （`发票` 488–720ms、`PDF` 282–720ms）；③ `环境影响评价`（16 命中）111ms，200 命中的落在 150–450ms，成本仍随命中数走。
+  与 **I110** 已定位的「系统页缓存装不装得下决定快慢」同向：3.5 GiB 常驻进程 + 只剩 1.9 GiB 可用。
+  要在安静窗定点复跑才算数 —— 本轮两次（23:5x / 00:0x）都没等到，**没有为凑绿重跑到绿**。
+
+**E · 本轮没跑到的**
+consistency 那 3 条要一次产品路径重扫才消；G1 与 g2 的红要安静窗定点复跑；④ 24 小时 soak 仍未验（4 分钟档只是本轮档位）；
+⑨ injection 真空载（CPU<10%）仍无读数（B 段 47.5%）。**没有一处分支是靠抬阈值或改判据变绿的**。
+
+> **本册末行现数（2026-10-27 轮二十九收尾取）**：`CHANGELOG 1,076（余 124）｜DECISIONS 687（余 513）｜本册 968 → 1,028（余 172）｜
+> 分册 757（余 443）｜ISSUES 150｜UI-WIREFRAMES 1,009（余 191）`；**最紧的仍是 `CHANGELOG-ARCHIVE 1,064（余 136）`**。
+> **台账**：`112 行｜I1–I112 连续不重号｜CLOSED 87｜MITIGATED 24｜WONTFIX 1｜OPEN 0` —— 本轮**零新增行、零状态迁移**：
+> 四条红没有一条是代码缺陷（两条 G1 计时是同一处、一条是数据漂移、一条是尾部长尾），所以不占台账格子，只在本节留读数。
+> **测试**：整链内 `pytest` **816 passed / 1 failed / 1 skipped（241.73s）**，唯一失败是 G1 计时那一条（见 D ①②）；
+> A 段同一条断言在安静窗 **1.130s 过**。**产品代码 `src/` 与 `tests/` 本轮 0 改动**。
+> **真库现数（只读，2026-10-27 取）**：`catalog.db 12,109,783,040 B`｜`documents 10,991`｜`text_pages 1,975,611`｜
+> 队列 `{'done': 10,941, 'failed': 75}`｜`running 0`｜`vector_status {'done': 8,687, 'na': 2,304}`｜监测根 6 个、
+> 六个 `last_full_scan_at` 全停在 2026-10-16 00:21–00:28。
+> **临时文件**：`.probe_work/` 顶层 **688 项（13 个子目录）｜递归 1,129 文件｜857.7 MiB｜顶层 0 字节 75 个**；
+> 新增承重：`.probe_work/u28_seg1.log`、`.probe_work/u28_coldstart_isolated.log`、`.probe_work/u28_coldstart_retry_quiet.log`、
+> `.probe_work/u28_seg2_injection.log`、`.probe_work/u28_seg4_soak.log`、`.probe_work/u28_seg4_package.log`、
+> `.probe_work/u29_chain.log`、`.probe_work/p12_real_root.json`、`.probe_work/u29_drift_files.txt`、`.probe_work/u29_roots.txt`；
+> `injection_inflight` **不在场**。
+> **会话日志体积（token 代理）**：**341,514,041 B｜106,008 行**（00:20 取）vs 轮二十八基线 **339,082,629 B / 105,405 行** ⇒
+> **+2,431,412 B｜+603 行**。
+
