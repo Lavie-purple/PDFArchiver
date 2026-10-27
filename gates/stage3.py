@@ -43,7 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stage1 import (REPO, Row, _num, _run,  # noqa: E402
-                    PYTEST_ERROR_RE, PYTEST_FAILED_RE, PYTEST_PASSED_RE)
+                    harden_stdio, PYTEST_ERROR_RE, PYTEST_FAILED_RE, PYTEST_PASSED_RE)
 
 
 def gate_search_functionality() -> Row:
@@ -86,6 +86,7 @@ def gate_regression() -> Row:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_stdio()
     ap = argparse.ArgumentParser(prog="gates/stage3.py", description="阶段 3 验收门禁")
     ap.add_argument("--no-injection", action="store_true",
                     help="跳过反向注入探针（慢，约 3–5 分钟）")

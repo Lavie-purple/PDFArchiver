@@ -6,6 +6,40 @@
 
 ---
 
+## 轮三十一（2026-10-27）—— 新文档向量回填 404 页 + 12 段整链一条命令第一次全绿（修掉打印阶段的编码崩链）
+
+用户这一轮的指令逐字：「整链一条命令全绿（本轮是定点复跑，不写成整链全绿）；5 份新文档 vector_status=na、
+新增 405 页正文未 embed（语义搜索还到不了）；执行这些把」。两件事都做了，中间逮到一条**不在原计划里**的缺陷
+（I114），所以这一轮比计划多跑一场整链。
+
+- **⑤ 向量回填 404 页**（`.probe_work/u31_vector_backfill.py`，零 SQL、只调产品 `VectorService`）—— 5 份新文档里
+  3 份原生正文全部写入：doc 10996 **162 页**（3,244ms）、doc 10998 **110 页**（1,139ms）、doc 10999 **132 页**（1,441ms），
+  合计 **404 页**；`vector_meta 1,968,159 → 1,968,563`、`vector_status done 8,687 → 8,690 / na 2,309 → 2,306`。
+  另 2 份（doc 10995 262 页 / doc 10997 236 页）`text_status=none` **被如实跳过**，回执逐字「这份还没有可搜的正文
+  （text_status=none），先索引才能建向量」—— 它们是扫描件，要先走用户触发的 OCR；**没有替它们造正文**，
+  也没有把 `na` 改成 `pending` 来凑数。
+- **第一场整链（07:19:21 → 08:57:36）在第 10 段后崩** —— docs-inject / guards / injection / ui-inject / ocr /
+  consistency / soak 七段全绿；regression（816 passed / 1 failed）、coldstart（**1.663s**）、e2e（**1.604s**）
+  三条 G1 同源红（起跑 **CPU 56.7%｜2,194MiB**）；随后 `gates/final.py:561` 打「现场」时 `UnicodeEncodeError`，
+  package 与 g2 没跑。根因 = `packaging/frozen_smoke.py:425` 的 `text_pages − content_fts`（U+2212）进了 note ⇒
+  **ISSUES I114（CLOSED）**。
+- **修法：`gates/stage1.py::harden_stdio()`** —— 只把 stdout/stderr 的 `errors` 改 `replace`，**编码仍是控制台原样**
+  （改 UTF-8 会让 GBK 屏上中文全成乱码）；`gates/stage1.py`–`stage6.py`、`gates/final.py`、`scripts/precheck.py`
+  八处 `main()` 第一条语句调用。守卫 `tests/guards/test_gate_stdio_encoding.py` 五条，其中两条在 **GBK 子进程里真跑**：
+  带兜底必须 exit 0 且那行以 `?` 留下，不带兜底必须 `UnicodeEncodeError` 非 0 退出。**900 字截断没动、阈值没动**。
+- **修后 package 定点复跑**：290.3s 全绿（build 142.9s + smoke 147.5s；整包 400.1 MiB、documents 273 / 磁盘 273）。
+- **第二场整链（09:05:46 → 10:43:47，5,877.1s）—— 「整链一条命令全绿」第一次拿到**：
+  `合计判定 35 条｜本次未跑 0 段｜VERDICT: ALL GREEN`；起跑 **CPU 36.3%｜2,804MiB｜chrome.exe 1,784MiB**。
+  逐段：docs-inject 0.0s｜guards 2.4s｜**regression 199.5s（822 passed / 1 skipped）**｜coldstart 2.0s（**G1 1.342s**、
+  关窗对账 1 条）｜e2e 13.7s（11 条端到端）｜injection 790.6s（p9 70/70、p10 45/45、p16 11 条、p17 3/3、p18 3/3、
+  p21 24/24、p22 33/33、p23 23/23、p24 17/17）｜ui-inject 86.6s（p15 36/36）｜ocr 32.6s（真引擎 6 页落库 +
+  预算 2 页真停机 + 4 passed 套件）｜**consistency 4,116.9s（p12 真根 19 条 / 红 0 / 未验 0）**｜soak 320.7s
+  （9 条全绿，RSS 112.9 → 113.1 MiB）｜package 261.2s｜**g2 50.9s（P95 320ms，P50 137 / P99 341 / 100 样本 /
+  最差 `发票`，起跑 CPU 3.5%｜2,787MiB，`classification=green`，分类自检 6/6）**。
+- **台账**：新增 **I114（CLOSED）** ⇒ `114 行｜I1–I114 连续不重号`；**I113 仍等勾选**，本轮没动真库一行。
+- **阈值一处没动**：G1 1.5s、g2 500ms、忙线 60%、900 字截断全部原样；第一场那 3 条 G1 红**照记不赦免**（负载场），
+  **没有「重跑到绿」**。
+
 ## 轮三十（2026-10-27）—— 安静窗定点复跑（G1 / g2 / 回归）+ 产品路径重扫（consistency 19/19 转绿）
 
 用户这一轮的指令逐字：「这两个能执行吗」（指上一轮记下的两条出路：① consistency 需要一次产品路径重扫、

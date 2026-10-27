@@ -41,6 +41,24 @@ class Row:
     note: str = ""
 
 
+def harden_stdio() -> None:
+    """让门禁的打印阶段不会因为控制台编不出来而把整条链打死。
+
+    2026-10-27 的真事故：整链跑到 package 段，`packaging/frozen_smoke.py` 输出里的
+    `text_pages − content_fts`（U+2212）原样进了 `Row.measured`，`gates/final.py` 把它
+    往 GBK 控制台打印时 `UnicodeEncodeError`，链在第 10 段前断掉 —— 前 9 段跑完的读数
+    差点跟着陪葬。同类事故 2026-10-22 在 `p13_soak.log()` 里已经犯过一次，当时只在那一条
+    探针里兜住了（**VERIFICATION-RUNLOGS §4.2x**），所以这次收在门禁入口：编码保持控制台
+    原样（不改成 UTF-8，否则 GBK 屏上全是乱码），只把编不出来的字符降级成 `?`。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            # pytest 的 capsys / 已被替换成非 TextIOWrapper 的流：没有可改的编码，放行
+            pass
+
+
 #: 全链共享的子进程超时天花板。**这一档是按临时小库反算的，不是按真语料量级** ——
 #: 真根 p12 一场实测 3,661.7s（**ISSUES I91**），所以带 `--data-root` 的一致性核查在链里
 #: 会结构性超时；那一档单独给了更大的值，改法与出处见 `gates/final.py::REAL_ROOT_TIMEOUT`。
@@ -141,6 +159,7 @@ def _num(pat: re.Pattern[str], text: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_stdio()
     ap = argparse.ArgumentParser(prog="gates/stage1.py", description="阶段 1 验收门禁")
     ap.add_argument("--no-injection", action="store_true",
                     help="跳过 18 条反向注入（慢，约 1 分钟）；只在临时改动后想快速复查回归时用")

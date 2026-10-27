@@ -1126,3 +1126,50 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > **会话日志体积（token 代理）**：**344,040,730 B｜106,653 行** (06:2x 取) vs 轮二十九基线 **341,514,041 B / 106,008 行** ⇒
 > **+2,526,689 B｜+645 行**。
 
+---
+
+## 4.42 轮三十一 · 新文档向量回填 404 页 + 12 段整链一条命令第一次全绿（2026-10-27 07:1x → 10:4x）
+
+用户指令逐字：「整链一条命令全绿（本轮是定点复跑，不写成整链全绿）；5 份新文档 vector_status=na、新增 405 页正文未 embed（语义搜索还到不了）；执行这些把」。两件事都做了，中间逮到一条计划外的缺陷（**ISSUES I114**），所以多跑了一场整链。
+
+**A · 向量回填 404 页**（`.probe_work/u31_vector_backfill.py`，07:18:53 → 07:19:10，零 SQL，只调产品 `VectorService`）
+- 3 份原生正文全部写入：10996 **162 页**（3,244ms）｜10998 **110 页**（1,139ms）｜10999 **132 页**（1,441ms）⇒ **404 页**，`pages_skipped_empty 0`、`last_error null`。
+- `vector_meta 1,968,159 → 1,968,563`；`done 8,687 → 8,690`、`na 2,309 → 2,306`。
+- 2 份扫描件（10995 262 页 / 10997 236 页）`text_status=none` **被如实跳过**（回执写明「先索引才能建向量」）—— 要先走用户触发的 OCR，不代跑、不造正文。
+- 真库只读现数（2026-10-27 07:19 之后未再写入）：`catalog.db 12,112,449,536 B｜documents 10,996｜text_pages 1,976,016｜vector_meta 1,968,563｜missing_since 2`。
+
+**B · 第一场整链（07:19:21 → 08:57:36）在第 10 段后崩 —— 入账 I114**
+- 起跑 **CPU 56.7%｜2,194MiB｜chrome.exe 1,553MiB**；七段全绿（docs-inject 0.0s｜guards 3.0s｜injection 752.6s｜ui-inject｜ocr｜consistency｜soak 320.9s）。
+- 三条 G1 同源红：regression **816 passed / 1 failed**（`test_进程级冷启动实测符合G1约定`）｜coldstart **1.663s**｜e2e **1.604s** —— 负载场，照记不赦免。
+- 崩点逐字：`File "gates/final.py", line 561, in main / print(f"        现场：{row.note[:900]}") / UnicodeEncodeError: 'gbk' codec can't encode character '\u2212' in position 24`，`EXIT=1`，package 与 g2 没跑。源字符 = `packaging/frozen_smoke.py:425` 的 `text_pages − content_fts`；`Row.note` 只留 `text[-900:]`，U+2212 在不在窗口里随那段输出的长度而变。
+
+**C · 修法 + 守卫**
+- `gates/stage1.py::harden_stdio()` 只把 stdout/stderr 的 `errors` 改 `replace`，**编码保持控制台原样**；`gates/stage1.py`–`stage6.py`、`gates/final.py`、`scripts/precheck.py` 八处 `main()` 第一条语句调用。
+- `tests/guards/test_gate_stdio_encoding.py` 五条：静态位置 + 正对照（≥6 入口）+ GBK 子进程真跑两遍（带兜底 exit 0 且那行以 `?` 留下 / 不带兜底必须崩）+ 五例位置坏法。上架当场逮到 `gates/stage6.py` 没调，补上后 guards **59 passed**。
+
+**D · 修后 package 定点复跑（290.3s 全绿）**
+- build **142.9s** + smoke **147.5s**；整包 **400.1 MiB**、documents **273 / 磁盘 273**；`合计判定 2 条｜本次未跑 10 段｜VERDICT: ALL GREEN`。**边界**：这一场的 900 字窗口里恰好没有 U+2212 ⇒ 它只证明「链不再被这条路径打死」；「字符真被兜住」由 C 段 GBK 子进程那两条证明。
+
+**E · 第二场整链（09:05:46 → 10:43:47，5,877.1s）—— 一条命令 12 段全绿，第一次**
+- 起跑 **CPU 36.3%｜2,804MiB｜chrome.exe 1,784MiB**；末行 `合计判定 35 条｜本次未跑 0 段｜VERDICT: ALL GREEN`。
+- docs-inject 0.0s（台账 113 行｜失效测试名 6/6）｜guards 2.4s｜**regression 199.5s → 822 passed / 1 skipped**｜coldstart 2.0s → **G1 1.342s**（进程总耗时 1.990s、关窗对账 1 条）｜e2e 13.7s（11 条端到端、带页码 6 行）｜injection **790.6s**（p9 70/70 267.5s｜p10 45/45 152.4s｜p16 11 条 29.5s｜p17 8.8s｜p18 9.9s｜p21 24/24 85.5s｜p22 33/33 99.8s｜p23 23/23 80.9s｜p24 17/17 56.4s）｜ui-inject 86.6s（p15 36 条）。
+- ocr 32.6s（真引擎 6 页落库 + 预算 2 页真停机 + 4 passed）｜**consistency 4,116.9s**（注入 21/21 + 边界 1/1｜p14 1.2s｜真根 4,107.3s 19 条红 0 未验 0；C1 1,084,218ms｜C2 2,939ms｜C3 六行各 774,855ms｜C4 184,250ms｜C5 1,146,161ms｜C11 908,250ms｜C12 4,334ms）｜soak 320.7s（RSS 112.9 → 113.1 MiB、线程 15 → 12、句柄 321 → 321、积压峰值 27 / 排空 1.0s / done 123、盘上 82 / 库内 82 / 缺失 10、app.log 35KiB）｜package 261.2s（build 119.8s + smoke 141.4s）｜**g2 50.9s → P95 320ms**（P50 137 / P99 341 / 100 样本 / 最差 `发票`；起跑 CPU 3.5%｜2,787MiB；`classification=green`；分类自检 6/6）。
+- 段耗时合计 **5,877.1s ≈ 98 分钟**，与墙钟对得上。**阈值一处没动**；第二场是「修完必须重跑一次完整链」，**不是跑到绿灯为止**。
+
+**F · 仍欠的**
+- 2 份扫描件（doc 10995 / 10997）要用户点「送去识别」才有正文与向量；**ISSUES I113** 仍等勾选。
+- ④ 24 小时 soak 未验（12h 是上限）；⑨ injection 真空载（CPU<10%）仍无读数（本场 36.3%）；安装包与代码签名未交付；隐私政策挂起（2026-10-27）。
+- 本册已贴 1,200 红线：**下一轮写长条目前先切册**。
+
+> **本册末行现数（2026-10-27 轮三十一收尾取）**：`CHANGELOG 1,143（余 57）｜DECISIONS 687（余 513）｜本册 1,162 → 1,175（余 25）｜
+> 分册 757（余 443）｜ISSUES 152｜UI-WIREFRAMES 1,009（余 191）`；**最紧的是本册自己** —— §4.42 F 已写死：下一轮写长条目前先切册。
+> **台账**：`114 行｜I1–I114 连续不重号｜CLOSED 88｜MITIGATED 24｜OPEN 1（I113）｜WONTFIX 1｜结构不合格 1 行（上限 1：I35）｜失效测试名 6 处 / 上限 6`；
+> 本轮新增 I114 一行并当场 CLOSED（打印编码兜底），其余 113 行零状态迁移。
+> **测试**：整链 regression **822 passed / 1 skipped（199.5s）**｜guards **59 passed**｜p12 真根 **19/19**｜
+> 12 段一条命令 `合计判定 35 条｜本次未跑 0 段｜VERDICT: ALL GREEN`（5,877.1s）；`scripts/precheck.py` 末行 ALL GREEN（114 行台账在场）。
+> **真库现数（只读，收尾取）**：`catalog.db 12,112,449,536 B｜documents 10,996｜text_pages 1,976,016｜vector_meta 1,968,563｜
+> vector_status {'done': 8,690, 'na': 2,306}｜missing_since 2｜队列 {'done': 10,941, 'failed': 75}｜监测根 6 个｜schema 8`。
+> **临时文件**：`.probe_work/` 顶层 **716 项（13 个子目录）｜递归 1,157 文件｜857.9 MiB｜顶层 0 字节 75 个**；
+> `injection_inflight` **不在场**；本轮承重 `u31_*`（回填 / 两场整链 / precheck / 现数）留在顶层，§4.42 的 scratch 已清空。
+> **会话日志体积（token 代理）**：**347,987,493 B｜107,596 行**（10:52 取）vs 轮三十基线 **344,040,730 B / 106,653 行**
+> ⇒ **+3,946,763 B｜+943 行**。

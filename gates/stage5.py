@@ -38,7 +38,8 @@ from shutil import rmtree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stage1 import (PYTEST_ERROR_RE, PYTEST_FAILED_RE, PYTEST_PASSED_RE,  # noqa: E402
-                    PYTEST_SKIPPED_RE, REPO, Row, _last_line, _num, _run)
+                    PYTEST_SKIPPED_RE, REPO, Row, _last_line, _num, _run,
+                    harden_stdio)
 
 P11 = "tests/probes/p11_ocr_shipped.py"
 P10 = "tests/probes/p10_reverse_injection_ocr.py"
@@ -292,6 +293,7 @@ def _machine_load() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_stdio()
     ap = argparse.ArgumentParser(prog="gates/stage5.py", description="阶段 5 验收门禁")
     ap.add_argument("--no-injection", action="store_true",
                     help="跳过 p9 + p10 两个反向注入探针（慢，约 8 分钟）")

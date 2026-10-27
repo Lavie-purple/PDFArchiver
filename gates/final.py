@@ -33,7 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stage1 import (GATE_TIMEOUT_SECONDS, REPO, Row, _last_line, _run)  # noqa: E402
+from stage1 import (GATE_TIMEOUT_SECONDS, REPO, Row, _last_line, _run,  # noqa: E402
+                    harden_stdio)
 from stage5 import _machine_load  # noqa: E402 复用同一份负载读数口径，不写第二份
 
 P12 = "tests/probes/p12_consistency.py"
@@ -505,6 +506,7 @@ def preflight_injection_residue() -> Row | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_stdio()
     ap = argparse.ArgumentParser(prog="gates/final.py", description="最终交付门禁（分段链）")
     ap.add_argument("--only", action="append", default=None, choices=list(SEGMENTS) + ["docs-inject"],
                     help="只跑指定段，可重复")

@@ -22,6 +22,8 @@ from pathlib import Path
 # 把 src 加到路径
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stage1 import harden_stdio  # noqa: E402
 
 JUDGED: list[tuple[str, bool]] = []    # 真判定过的项目，用来数「合计判定 N 条」
 
@@ -38,6 +40,7 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 
 def main() -> int:
+    harden_stdio()
     print("=" * 70)
     print("阶段 6 门禁 · 语义搜索层")
     print("=" * 70)

@@ -26,6 +26,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 
+sys.path.insert(0, str(REPO / "gates"))
+from stage1 import harden_stdio  # noqa: E402  与门禁链同一个兜底，不写第二份
+
 #: 顺序固定：守卫全量在最前，门禁两段在后（门禁自己也会起子进程，放后面少一次冷启动叠加）。
 STEPS: list[tuple[str, list[str]]] = [
     ("tests/guards（守卫全量）", [PY, "-m", "pytest", "tests/guards", "-q"]),
@@ -47,6 +50,7 @@ def _tail(text: str, lines: int) -> str:
 
 
 def main(argv: list[str] | None = None, runner=_run) -> int:
+    harden_stdio()
     ap = argparse.ArgumentParser(prog="scripts/precheck.py", description=__doc__.splitlines()[0])
     ap.add_argument("--verbose", action="store_true", help="透传两步的全部输出")
     args = ap.parse_args(argv)
