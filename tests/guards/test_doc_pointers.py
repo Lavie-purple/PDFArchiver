@@ -72,6 +72,7 @@ LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/CHANGELOG-ARCHIVE.md",
                "docs/DECISIONS.md", "docs/DECISIONS-ARCHIVE.md",
                "docs/ISSUES.md", "docs/VERIFICATION.md",
                "docs/VERIFICATION-RUNLOGS.md", "docs/VERIFICATION-RUNLOGS-ARCHIVE.md",
+               "docs/VERIFICATION-RUNLOGS-ARCHIVE-2.md",
                "docs/REPO-JOURNAL.md")
 LEDGER_DIR = "docs/stage-reports/"
 

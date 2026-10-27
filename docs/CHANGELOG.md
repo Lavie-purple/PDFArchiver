@@ -6,6 +6,37 @@
 
 ---
 
+## 轮三十二（2026-10-27）—— I113 甲：删掉跨卷搬家留下的死记录；两份扫描件 OCR 出 497 页正文；顺带逮到 OCR 正文进不了向量入口（I116）
+
+用户这一轮的指令逐字：「均跟进你的建议来执行」。三件都做了，第三件（向量回填）**被产品自己的入场券挡住**，
+据实入账 **I116**，没有改口径凑绿。
+
+- **① I113 甲 · 先备份后单事务删 doc 93**（`.probe_work/u32_i113_backup_delete.py` → `.json` / `_delete.log`）——
+  快照 `%TEMP%\pdfarchiver-i113-backup\catalog.db` **12,112,449,536 B / 47.4s**，八张表逐表计数与源库全等
+  （`mismatch {}`）、`schema_version [8, 8]`、doc 93 原行（sha256 `043dc424…d9d7`、341 页、`missing_since=1792790831`）
+  在快照里可查 ⇒ **BACKUP GOOD**。
+- 单事务（`BEGIN IMMEDIATE`；六张子表显式删再删主记录，`PRAGMA foreign_key_check` 非空即不提交）：
+  `documents 10,996 → 10,995`、`text_pages 1,976,016 → 1,975,678`（−338）、`content_fts` 同步 **−338**、
+  `document_metadata −1`、`processing_jobs −1`、`vector_meta` **不变**（doc 93 正是全量索引里唯一缺文件的那份）、
+  孤儿页 **0**、外键核查 **OK**，整段（含前后各一次全表计数）**160.1s** ⇒ **DELETE GOOD**。**没动磁盘文件**（那条路径本就不存在）。
+- **② 两份扫描件 OCR 497 页**（`.probe_work/u32_ocr_vectors.py`，只调产品 `OcrService.request_ocr` +
+  `AppContext.start_background()`，与界面那颗「送去识别」同一条链路）—— doc 10995 **261/262 页**（OCR 56,139 字，
+  第 262 页本就是原生 894 字、不算漏页）、doc 10997 **236/236 页**（157,331 字），合计 **497 页 / 13.0 分钟（38.1 页/分）**，
+  两份 `ocr_status=done`、`last_error` 空、今日预算 **497 / 6,000 页**（剩 5,503）。全文搜索当场验
+  （`.probe_work/u32_after_ocr_checks.py`）：`"赫拉巴尔"` 本页 5 行命中全在 doc 10997（正文 11 行）、
+  `"倪匡散文"` 本页 5 行命中全在 doc 10995（正文 114 行），来源串「OCR 识别（可能有错字）」。
+- **③ 向量回填被入场券挡住 → I116（OPEN）**：`request_vectors((10995,10997))` 回执逐字「点名 2 份｜该建 0 份｜
+  新增任务 0 条｜没有可搜的正文，先索引 2 份」，`skipped={'not_searchable': [10995, 10997]}`。根因：入场券按
+  `TEXT_SEARCHABLE=("native","mixed")`（`index_service.py:47`）判，而 OCR 的唯一写入口 `mark_ocr_result`
+  （`documents.py:429-442`）只写 `ocr_status`、**不碰 `text_status`**，两份仍是 `text_status=none`。**没有把
+  `text_status` 改成 `native` 凑绿** —— 那会让「有没有原生正文」这一列说假话。甲/乙/丙 已入台账，**推荐甲**。
+- **RUNLOGS 再切一册（D-059）**：`docs/VERIFICATION-RUNLOGS.md` 1,175 → **459 行**，§4.26–§4.37 逐字迁入
+  `docs/VERIFICATION-RUNLOGS-ARCHIVE-2.md`（**727 行**，`splitlines()` 口径），节号不变、标题数守恒 18 = 18、
+  原册 md5 备份留在 `.probe_work/`；`tests/guards/test_doc_pointers.py` 的 `LEDGER_DOCS` 加新分册，
+  guards 全量 **59 passed**。
+- **台账**：I113 **OPEN → CLOSED**；新开 **I115**（跨卷搬移认不出改名的根因，等勾选）与 **I116**（OCR 正文进不了
+  向量入口，等勾选）⇒ `116 行｜I1–I116 连续不重号｜OPEN 2`。**阈值与产品代码这一轮 0 改动**。
+
 ## 轮三十一（2026-10-27）—— 新文档向量回填 404 页 + 12 段整链一条命令第一次全绿（修掉打印阶段的编码崩链）
 
 用户这一轮的指令逐字：「整链一条命令全绿（本轮是定点复跑，不写成整链全绿）；5 份新文档 vector_status=na、
