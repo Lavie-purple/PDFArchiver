@@ -17,7 +17,8 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
 4. **重嵌先清旧向量（丙的 `delete_by_doc` 调用方）**：连建两次，向量总数不翻倍。
 5. **模型没装不许伪装成功**：`embed` 抛 `FileNotFoundError` 时写 `failed` + 原文进
    `last_error`，绝不写 `done`，也绝不停在 `na`（"跑不了"≠"没跑"）。
-6. **没正文不建空向量**：`text_status` 不在 `TEXT_SEARCHABLE` 的那份直接拒，状态一个字节不动。
+6. **没正文不建空向量**：既没有原生正文、也没有 OCR 正文的那份直接拒，状态一个字节不动
+   （**ISSUES I116** 甲：入场券是「有没有可搜的正文」，OCR 出的正文同样算）。
 7. **空正文页跳过**：`char_count=0` 的那一页不塞进语义索引 —— 与"这一页本来就没字"同一件事。
 8. **全进程只许一只 `VectorStore`（**ISSUES I111** 丁）**：装配层把同一只实例注入读侧、写侧与
    AI 分类建议。这条是结构判据，防的是"再长回两只"。
@@ -34,6 +35,10 @@ delete_by_doc` 在 `src/` 下零产品调用方（只有 `gates/stage6.py` 夹�
     迁移 0007 声明的那条 FK 才真的执行。
 16. **全进程只养一份 `EmbeddingService`（**ISSUES I111** ⑤）**：查询向量与建向量共用一次加载，
     不再为语义搜索另养一个 ONNX session。
+17. **OCR 出的正文也能建向量（**ISSUES I116** 甲）**：`text_status=none｜ocr_status=done` 的扫描件
+    必须能进队列、能建完；坏法是把谓词改回只看 `text_status`，那一条必须红。
+18. **入场券四象限（**ISSUES I116** 甲）**：`partial` 算有正文、`na/pending/failed` 不算 ——
+    直接钉谓词本身，不靠端到端结果反推。
 
 跑法：
     .venv/Scripts/python.exe -m pytest tests/integration/test_vector_write_path.py -q
@@ -52,6 +57,7 @@ from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure
 from pdfarchiver.semantic.vector_store import DEFAULT_CAPACITY, VectorStore
 from pdfarchiver.services.bootstrap import AppContext, bootstrap
+from pdfarchiver.services.index_service import has_searchable_text
 from pdfarchiver.services.vector_service import (
     SKIP_NOT_SEARCHABLE, VECTOR_DONE, VECTOR_FAILED, VECTOR_STALE, VectorService)
 
@@ -121,10 +127,11 @@ def ctx(tmp_path: Path):
 
 
 def _seed(ctx: AppContext, tmp_path: Path, name: str, bodies: list[str],
-          *, text_status: str = "native") -> int:
+          *, text_status: str = "native", source_kind: str = "native") -> int:
     """在盘上放一个真文件（`build_vectors` 会核对它还在），写入这些页正文，返回 doc_id。
 
     `bodies` 里空串代表"这一页本来就没字"（`char_count=0`），用来验空页不建向量。
+    `source_kind="ocr"` 用来摆出"扫描件 OCR 完之后"的形状（正文来自识别，`text_status` 仍是 none）。
     """
     file = tmp_path / name
     file.write_bytes(b"%PDF-1.7 fake")
@@ -133,7 +140,7 @@ def _seed(ctx: AppContext, tmp_path: Path, name: str, bodies: list[str],
         size_bytes=8, mtime_ns=1_760_000_000_000_000_000, sha256=f"{name!r:0<64}"[:64],
         text_status=text_status, fts_status="done"))
     doc_id = int(doc.id)
-    pages = [TextPage(doc_id=doc_id, page_no=n, source_kind="native",
+    pages = [TextPage(doc_id=doc_id, page_no=n, source_kind=source_kind,
                       body=b, char_count=len(b)) for n, b in enumerate(bodies, 1)]
     ctx.texts.replace_pages(doc_id, pages)
     return doc_id
@@ -242,6 +249,44 @@ def test_没正文的那份拒绝建且状态一个字节不动(ctx, tmp_path) -
         _fresh_vector_service(ctx, StubEmbedding()).build_vectors(doc_id)
 
     assert ctx.documents.get(doc_id).vector_status == "na"
+
+
+def test_OCR_出过正文的扫描件也能建向量(ctx, tmp_path) -> None:
+    """**ISSUES I116** 甲：入场券问「有没有可搜的正文」，不是「有没有原生正文」。
+
+    OCR 的唯一写入口 `mark_ocr_result` 不碰 `text_status`（那一列的口径是「有没有**原生**正文」，
+    `parsing/classify.py` 那张表），所以 OCR 完的扫描件是 `text_status=none｜ocr_status=done`，
+    而它的正文确实在 `text_pages` 里、全文搜索也搜得到。按 `text_status` 判就把这类书永久挡在
+    语义搜索之外 —— 真库 doc 10995 / 10997（497 页）2026-10-27 当场就是这么被拒的。
+    """
+    doc_id = _seed(ctx, tmp_path, "扫描件.pdf", ["识别出来的第一页", "识别出来的第二页"],
+                   text_status="none", source_kind="ocr")
+    ctx.documents.mark_ocr_result(doc_id, ocr_status="done", ocr_pages_done=2)
+
+    svc = _fresh_vector_service(ctx, StubEmbedding())
+    receipt = svc.request_vectors([doc_id])
+    assert receipt.queueable == 1 and not receipt.skipped, receipt.describe()
+
+    outcome = svc.build_vectors(doc_id)
+
+    assert outcome.vector_status == VECTOR_DONE, outcome.describe()
+    assert outcome.pages_embedded == 2 and outcome.vectors_written == 2, outcome.describe()
+    assert _store(ctx).count() == 2, "OCR 正文没进语义索引 ⇒ 扫描件的语义搜索永远到不了"
+
+
+def test_入场券两个条件任一成立即放行(ctx) -> None:
+    """谓词本身：`text_status` 原生/混合，或 OCR 已产出正文（done/partial）—— 任一成立即放行。
+
+    这条单独钉判据本身，不靠上一条的端到端结果反推；`partial` 必须算有正文，
+    否则"236 页里有两页识别失败"的书又会被挡在门外。
+    """
+    cases = [("native", "na", True), ("mixed", "na", True),
+             ("none", "done", True), ("none", "partial", True), ("pending", "done", True),
+             ("none", "na", False), ("none", "pending", False), ("none", "failed", False),
+             ("failed", "failed", False)]
+    wrong = [(t, o) for t, o, want in cases
+             if has_searchable_text(Document(text_status=t, ocr_status=o)) is not want]
+    assert not wrong, f"这些 text_status / ocr_status 组合判错了：{wrong}"
 
 
 def test_空正文页不建向量(ctx, tmp_path) -> None:
@@ -460,4 +505,11 @@ def test_孤儿_doc_id_插不进元数据(ctx) -> None:
 #   坏法 11｜`ai_classify` 那只改成 `AIClassifyService(…, EmbeddingService(paths.root), …)`
 #          ⇒ 同样 **1 failed, 15 passed**，红在第二句 `AI 分类建议另养了一个 EmbeddingService`
 #          —— 两句断言各查一个消费者，不是同一条的两次复读。
+#
+# `I116` 甲 两条新断言（2026-10-28 轮三十三，坏法真注入过再还原）：
+#   坏法 12｜`index_service.has_searchable_text` 改回只看原生正文
+#          （`return doc.text_status in TEXT_SEARCHABLE`）⇒ **2 failed, 16 passed**，
+#          一条红在 `OCR 正文没进语义索引 ⇒ 扫描件的语义搜索永远到不了`（端到端），
+#          一条红在 `这些 text_status / ocr_status 组合判错了：[('none','done'), ('none','partial'), ('pending','done')]`
+#          （谓词四象限）—— 两条各钉一层，不是同一句话的两次复读。
 

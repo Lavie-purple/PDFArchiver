@@ -685,6 +685,14 @@ S4 是**阶段 4** 的屏。第 3 问选了"执行跑在后台队列"，**这是
 `tests/integration/test_vector_write_path.py` 用桩 embedding 绕开模型，验证的是编排与落库口径，
 不是模型本身（模型在场性由 ISSUES I37 的路径守卫与 ISSUES I84 的失败可见另行覆盖）。
 
+**追注 · 2026-10-28（第 2 条入场券被 **ISSUES I116** 甲 改写）**：本条原第 2 条写的是
+「入场券是一份可搜的正文（`text_status ∈ TEXT_SEARCHABLE`）」。轮三十二在真库上撞到：OCR 出来的正文
+进了 `text_pages`／FTS，但 `text_status` 仍是 `none`（`mark_ocr_result` 有意不碰它 —— 那一列的
+口径是「有没有**原生**正文」），于是扫描件永远进不了向量入口。轮三十三按用户勾选的
+**甲**把入场券换成 `has_searchable_text(doc)`（`index_service.py`）：
+`text_status in ("native","mixed")` **或** `ocr_status in ("done","partial")`，`vector_service.py`
+两处调用点同源改判。**本条其余三条不变**；第 2 条的旧措辞保留在上只作历史，现行口径以这段追注为准。
+
 ## D-062 · 四项按用户决定不做：24h soak / 真空载 CPU<10% / 安装包与签名 / 隐私政策（2026-10-27，用户原话「这些都不做」）
 
 **背景**：轮三十二收尾把「仍欠」清点成六条，用户对其中四项回「这些都不做」——

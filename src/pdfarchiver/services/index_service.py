@@ -38,13 +38,24 @@ from pdfarchiver.db.repositories.metadata import MetadataRepository
 from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.indexing.normalize import normalize_page_text
 from pdfarchiver.jobs.queue import PROGRESS_STEP_PAGES, JobCancelled, PermanentFailure
-from pdfarchiver.parsing.classify import PageTally, TEXT_FAILED, ocr_status_for
+from pdfarchiver.parsing.classify import OCR_DONE, OCR_PARTIAL, PageTally, TEXT_FAILED, ocr_status_for
 from pdfarchiver.parsing.pdf import PdfOpenError, PdfReader
 
 log = logging.getLogger("pdfarchiver.index")
 
 HASH_CHUNK_BYTES = 1 << 20   # 1 MiB。分块读是"绝不整本进内存"的唯一实现处，所以给它一个名字好断言
 TEXT_SEARCHABLE = ("native", "mixed")   # 只有这两种 text_status 才可能从正文里搜出东西
+
+
+def has_searchable_text(doc: Document) -> bool:
+    """这份有没有可搜的正文 —— 全文与向量共用的唯一入场券（**ISSUES I116** 甲）。
+
+    `text_status` 只回答「有没有**原生**正文」（`parsing/classify.py` 那张表），OCR 出来的字
+    不该改它：改了「原生」这一列就说假话，状态页与统计跟着失真。可 OCR 完的扫描件正文是
+    真进了 `text_pages` / `content_fts` 的 —— 全文搜得到、向量却建不了，就是字面口径分叉。
+    所以判据是两条任一成立：原生/混合正文，或 OCR 已产出正文（`done` / `partial`）。
+    """
+    return doc.text_status in TEXT_SEARCHABLE or doc.ocr_status in (OCR_DONE, OCR_PARTIAL)
 
 
 @dataclass

@@ -84,8 +84,10 @@ src/pdfarchiver/
                           #   进同一张 FTS；回执分四类（点名/该跑/新增/为什么没进，D-031）；限量在这里判停（D-028）；
                           #   `plan_ocr()` 是同一条 `_split()` 的预览档（一行任务也不写），S1 面板与排队回执因此同数
     vector_service.py★    #   vector 任务体（**ISSUES I63** 丙+丁 / **D-061**）：`request_vectors(doc_ids)` 是"用户点名建
-                          #   向量"的唯一入口（沿用 OCR Q3=甲 的显式点名，不做全库自动）；入场券 = `text_status ∈
-                          #   TEXT_SEARCHABLE`；重嵌前先 `delete_by_doc` 清旧；模型没装写 `failed`+原文、绝不伪装 `done`；
+                          #   向量"的唯一入口（沿用 OCR Q3=甲 的显式点名，不做全库自动）；入场券 =
+                          #   `has_searchable_text(doc)`（**ISSUES I116** 甲：`text_status ∈ TEXT_SEARCHABLE`
+                          #   或 `ocr_status ∈ (done, partial)`，扫描件 OCR 出的正文同样放行，定义在 `index_service.py`）；
+                          #   重嵌前先 `delete_by_doc` 清旧；模型没装写 `failed`+原文、绝不伪装 `done`；
                           #   这是 `VectorStore.add_batch/delete_by_doc` 与 `vector_status` 在产品里的写入方
     patrol.py★            #   界面定时器上的巡检：只排任务，自己绝不扫目录（慢路 = 周期全量校验）
     bootstrap.py★         #   装配顺序就是规矩：目录→日志→设置→连接→迁移→模板→自检

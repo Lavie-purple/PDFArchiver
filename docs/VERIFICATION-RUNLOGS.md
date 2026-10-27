@@ -504,3 +504,66 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > **真库现数（只读，18:1x 取）**：`catalog.db 12,113,543,168 B（vs 轮三十一末 +1,093,632 B）｜documents 10,995｜text_pages 1,976,175 = content_fts 1,976,175｜vector_meta 1,968,563｜vectors.npy 1,073,741,952 B｜vector_status {'done': 8,690, 'na': 2,305}｜ocr_status {'done': 2, 'na': 8,537, 'pending': 2,456}｜missing_since 1｜队列 {'index:done': 10,935, 'index:failed': 75, 'ocr:done': 2, 'scan:done': 5}｜监测根 6 个｜schema 8`。
 > **临时文件**：`.probe_work/` 顶层 **737 项（13 个子目录）｜递归 1,179 文件｜858.1 MiB｜顶层 0 字节 79 个**；`injection_inflight` **不在场**；本轮承重 `u32_i113_backup_delete.*`、`u32_ocr_vectors.*`、`u32_after_ocr_checks.*`、`u32_db_counts.*`、`u32_regression_full.log` 留在顶层。
 > **会话日志体积（token 代理）**：**352,780,358 B｜108,813 行**（18:2x 取）vs 轮三十一基线 **347,987,493 B / 107,596 行** ⇒ **+4,792,865 B｜+1,217 行**。
+
+---
+
+## 4.44 轮三十三 · I116 甲改向量入场券 + 497 页 OCR 正文补建 492 条向量 + CHANGELOG 再切一册 + 整链 12 段（3 红）（2026-10-28 00:0x → 02:2x）
+
+用户指令逐字：「I116 甲（做完③，你勾一下就行）→ 下一轮开篇切 CHANGELOG + 跑一场整链。」三件按序做完；整链这一场 **35 条判定 / 3 红**，三条都据实入账，没有重跑到绿、没有抬阈值。
+
+**A · I116 甲：向量入场券归一到 `has_searchable_text(doc)`**
+- 定义只一处（`services/index_service.py`）：`doc.text_status in TEXT_SEARCHABLE or doc.ocr_status in (OCR_DONE, OCR_PARTIAL)`，`TEXT_SEARCHABLE` 仍是 `("native","mixed")`；`services/vector_service.py` 的 `_why_skipped()` 与 `build_vectors()` 两处改走它，跳过标签改成「没有可搜的正文，先索引或先识别」，失败原文同时带 `text_status` / `ocr_status` 现场值。
+- **没改的东西**：OCR 的唯一写入口（`mark_ocr_result` 不碰 `text_status`）、`TEXT_SEARCHABLE` 本身、数据形状与列语义。
+- `tests/integration/test_vector_write_path.py` **18 passed**（新增 2 条：`test_OCR_出过正文的扫描件也能建向量`、`test_入场券两个条件任一成立即放行`——9 组合真假表）；**坏法真注入**：谓词退回只看 `text_status` ⇒ **2 failed / 16 passed**，红的正是这两条；撤掉还原 18 passed。
+
+**B · ③ 真库补建 492 条向量（00:0x，走产品入口、零裸 SQL）**
+- `.probe_work/u33_vector_backfill.py` → `.json`：只调 `VectorService.request_vectors()` + `build_vectors()`（与界面「送去识别」之后的回填同一条路）。回执逐字「点名 2 份｜该建 2 份｜新增任务 2 条」、`skipped {}`（轮三十二这里是 `not_searchable` 两条）。
+- doc 10995（《不寄的信》，`text_status=none` / `ocr_status=done`）：`pages_expected 262｜pages_embedded 256｜pages_skipped_empty 6｜4,769ms｜done`；doc 10997（《雪绒花的庆典》）：`236 / 236 / 0 / 2,563ms / done`。合计 **+492 条向量 / 7.33s**。
+- 库内：`vector_meta 1,968,563 → 1,969,055`（**+492 = 256 + 236**）、`vector_status done 8,690 → 8,692`、`na 2,305 → 2,303`。
+- **可搜证明用自检索**（`.probe_work/u33_selfcheck.json`，只读）：四页拿自己的正文查回 **rank 1** —— 10997 p235 **0.9262**（285 字）、p14 **0.9340**（718 字）；10995 p1 **0.9283**（21 字）、p3 **0.9308**（22 字）。197 万页的全局 top-k 争 20 个名额不是合格判据。
+- **如实记两条反面/边界读数**：`"倪匡散文"` 全库 top-20 里 **3 行来自 10995** 且包揽前二（p1 `0.7035` / p3 `0.6946`）；`"赫拉巴尔"` top-20 里 **10997 零行**，扩到 top-200 才 3 行（最好 p16 `0.5458`）—— 书名查询不能代表全书召回，向量确实建了。
+- **副作用（自己留下的，一行没清）**：探针先 `request_vectors()` 再直接 `build_vectors()` ⇒ 队列里留了两条 `vector:queued`（**11019 → doc 10995、11020 → doc 10997**，`attempts 0`，`created_at 1793117160`）。这两条在整链 C9 的现场读数里可见（`'queued': 2`），但 C9 判据是「running 无主」，所以仍绿。
+
+**C · CHANGELOG 再切一册（D-059 第 4 条：活册 > 600 行）**
+- `.probe_work/u33_changelog_split.py` 自检不过就拒写：切点与文末指针各须命中**恰好 1 次**，拼回去必须**逐字等于原文**才落盘；切前原件 md5 备份 `791e9ea4…`。
+- 结果：活册 **1,178 → 550 行**，`勾选轮（十九）` … `勾选轮（七）` **13 段 / 631 行**逐字搬进 `docs/CHANGELOG-ARCHIVE-2.md`（**647 行**）；`勾选轮（六）` 及更早在 `CHANGELOG-ARCHIVE.md`（**1,064 行，一字未动**）。轮次标题数守恒 **26 = 13 + 13**。
+- `tests/guards/test_doc_pointers.py` 的 `LEDGER_DOCS` 加新册 ⇒ guards **59 passed**。写完本轮条目后活册 **599 行（余 1）**。
+
+**D · 整链 12 段一条命令（00:07 → 01:56:51，约 110 分钟）—— 35 条判定 / 3 红**
+- 起跑负载逐字：`CPU 70.7%｜可用内存 3570MiB｜最吃内存进程 ZCode.exe 505MiB`（regression 段期间我自己还跑过两次短 pytest）；末行 `合计判定 35 条｜本次未跑 0 段` + **`VERDICT: RED（3 条未过）`**。
+- 段耗时：docs-inject 0.0s｜guards 3.5s｜regression **253.3s**｜coldstart 2.0s｜e2e 18.4s｜injection **917.1s**｜ui-inject 93.0s｜ocr 33.9s｜consistency **4,535.9s**｜soak 322.5s｜package 355.1s｜g2 44.1s（合计 ≈ 6,429s）。
+- **红①regression**：`823 passed / 1 failed / 0 error / 1 skipped（250.68s）`，唯一失败 `tests/integration/test_app_shell.py::test_进程级冷启动实测符合G1约定`。
+- **红②e2e**：`冷启动 1.674s｜进程总耗时 2.946s｜worker 1 线程｜回收中断 0`，现场「冷启动 1.674s 超过约定 1.5s」。**同一场链的 coldstart 段自己是 `1.329s｜1.979s｜关窗对账 1 条` PASS** —— 两次冷启动差 0.345s，阈值 **1.5s 一个字没动**（I102 / I25 的 MITIGATED 残留：负载下冷启动会越线）。
+- **红③consistency p12 真根**：`VERDICT: RED（2 条未过）｜4,528.6s｜合计 19 条｜红 2 条｜未验 0`。
+  - `C3·D:\`：盘上 PDF **96** / 该子树主记录 **94**（已标缺失 0）⇒ 盘上有、库里没有 2 份，都是 2026-10 新落的微信 PDF（`dify安装攻略20261020.pdf`、`互联网流量集中、平台变现与商家经营成本研究.pdf`）——**数据漂移，不是代码**，与轮三十的 5 份同类。
+  - `C5`：正文 **1,976,175** 页（其中 ocr 497）**6 行正文是空串** —— 定位 doc **10995** 页 **17 / 27 / 39 / 73 / 135 / 217**，`source_kind='ocr'`、`char_count=0`、`ocr_version` 非空，正是 OCR 的**页级完成标记**（`texts.ocr_versions_of()` → `pages_needing_ocr()` 靠它判 `reused`）⇒ 与 C5「不许养零信息行」正面冲突，新开 **ISSUES I117**（推荐甲：给标记行豁免），**本轮不改判据**。
+- 其余九段全绿：docs-inject（三条坏法全红 + 好台账不误判）｜guards（G21 / 架构 / 四份文档 / 五分栏 / 占位符 / 实测引用 / 台账 / 失效测试名 全 PASS）｜coldstart `1.329s` PASS｜injection **917.1s**（p9 **70/70** 303.8s、p10 **45/45** 179.1s、p16 11 条 31.4s、p17 8.7s、p18 10.6s、p21 **24/24** 95.5s、p22 **33/33** 131.4s、p23 **23/23** 94.7s、p24 **17/17** 61.9s）｜ui-inject 93.0s｜ocr 33.9s（单页推理 1,798.6 / 2,143.6 / 2,912.2 ms、6 页、整本墙钟 13.74s）｜soak 322.5s（**9 条 0 红**、注入 **13/13** + 好读数 **4/4**、RSS 首段中位 112.7 → 末段中位 112.8MiB、S6 峰 35 排空 1.0s、采样 60 点最大空洞 2.0s）｜package 355.1s（构建 207.3s + 冒烟 147.8s、整包 **400.1 MiB**、documents **273 / 磁盘 273**、冻结冒烟 ALL GREEN）｜g2 44.1s（负载分类自检 **6/6**；这一段日志只落 `VERDICT: ALL GREEN`，**没打印 P95 数字**，不引用）。
+- **口径纪律**：三条红都是**一场跑出来的**，没有为凑绿重跑；G1 1.5s、G2 500ms、忙线 60% 三处阈值与本轮 `src/` 代码零改动。
+- **链跑的时点**：docs-inject/guards 在 00:07 读的是**切册前**的台账（`116 行｜CLOSED 89｜OPEN 2`），此时 I117 还没写 ⇒ 收尾在最终树上复跑 `scripts/precheck.py` 补这一格。
+
+**E · 台账与文档**
+- 台账：I116 **OPEN → CLOSED**（两格都贴了实测读数）；新开 **I117**（`OCR 空正文标记行 ↔ C5 口径冲突`，甲/乙/丙，**推荐甲**，明确「本轮不改判据、不改 OCR 路径」）⇒ **117 行｜I1–I117 连续不重号｜CLOSED 90｜MITIGATED 24｜OPEN 2（I115 / I117）｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**（`gates.final.ledger_check()` 现读，不是手数）。
+- 文档：`CHANGELOG`（本轮条目 + 两册指针）、本册 §4.44、`DECISIONS` D-061 追注、`ARCHITECTURE`（`vector_service.py` 注释）、`README`（日志索引指向两册）。
+
+**F · 仍欠的**
+- **I115**（跨卷搬家 `_adopt_renamed` 认不出改名）、**I117**（C5 与 OCR 标记行的口径）—— 两条都等勾选，本轮零改动。
+- 两处**要勾选才动**的现场：① 队列里 2 条 `vector:queued`（11019 / 11020，甲 单事务删 / 乙 开应用让 worker 跑完 / 丙 只记不动）；② `C3·D:\` 2 份未索引 PDF（走产品路径 `ScanService.reconcile_path` + `IndexService.index_document` 重扫）。
+- **CHANGELOG 599 行（余 1）**：下一轮**开篇先切册再写**。
+- ④ 24 小时 soak、⑨ injection 真空载（CPU<10%）、安装包与代码签名、隐私政策 —— **D-062 已定案「不做」**，不再列为待办；历史读数保留原样。
+
+> **本册末行现数（2026-10-28 轮三十三收尾取）**：`CHANGELOG 599（余 1）｜DECISIONS 720（余 480）｜本册 506 → 569（余 631）｜
+> 分册一 757（余 443）｜分册二 727（余 473）｜ISSUES 155｜UI-WIREFRAMES 1,009（余 191）`；**最紧的是 CHANGELOG（余 1）** ——
+> 下一轮开篇先切册再写（切法与轮三十三 ① 同一套：切前 md5 备份 + 拼回去逐字比对的脚本自检）。
+> **台账**：`117 行｜I1–I117 连续不重号｜CLOSED 90｜MITIGATED 24｜OPEN 2（I115 / I117）｜WONTFIX 1｜结构不合格 1 行（上限 1：I35）｜失效测试名 6 处 / 上限 6`；
+> 本轮 I116 **OPEN → CLOSED**、新开 I117 一行 OPEN，其余零状态迁移。
+> **测试**：整链 regression **823 passed / 1 failed / 1 skipped（250.68s，唯一失败是负载下的 G1 冷启动断言）**｜
+> guards 全量 **59 passed**（预检六场，末场＝待提交树 **19.61s**；此前 12.71 / 13.15 / 16.49 / 13.41 / 16.79s，快慢差来自负载不是代码）｜p12 真根 **19 条红 2**（C3·D 数据漂移 + C5 口径冲突）｜
+> 12 段一条命令 `合计判定 35 条｜本次未跑 0 段｜VERDICT: RED（3 条未过）`（≈6,429s）；`scripts/precheck.py` 末行 **ALL GREEN**（6/6，门禁 9 判定 / 未跑 10 段、台账 117 行在场）。
+> **真库现数（只读，02:01 取；链与回填之后零写入）**：`catalog.db 12,113,543,168 B｜documents 10,995｜text_pages 1,976,175 = content_fts 1,976,175｜
+> vector_meta 1,969,055｜vectors.npy 1,073,741,952 B（93.9% 容量）｜vector_status {'done': 8,692, 'na': 2,303}｜
+> ocr_status {'done': 2, 'na': 8,537, 'pending': 2,456}｜missing_since 1｜队列 {'index:done': 10,935, 'index:failed': 75, 'ocr:done': 2, 'scan:done': 5, 'vector:queued': 2}｜监测根 6 个｜schema 8`。
+> **临时文件**：`.probe_work/` 顶层 **752 项（13 个子目录）｜递归 1,194 文件｜861 MiB｜顶层 0 字节 79 个**；
+> `injection_inflight` **不在场**；本轮承重 `.probe_work/u33_changelog_split.py`、`.probe_work/u33_vector_backfill.*`、
+> `.probe_work/u33_selfcheck.*`、`.probe_work/u33_db_counts*`、`.probe_work/u33_precheck_final.*`、
+> `.probe_work/final_chain_r33.log` / `.probe_work/final_chain_r33.utf8.log`、`.probe_work/p12_real_root.json` / `.probe_work/p12_red_rows.txt` 留在顶层。
+> **会话日志体积（token 代理）**：**358,659,988 B｜110,220 行**（02:2x 取）vs 轮三十二基线 **352,780,358 B / 108,813 行** ⇒ **+5,879,630 B｜+1,407 行**。

@@ -69,6 +69,7 @@ SELF_DEFINING = ("DECISIONS.md", "DECISIONS-ARCHIVE.md", "ISSUES.md")
 #: 这批文档**仍然**受编号 / 节号两条检查约束 —— 编号是稳定的，改名不改变它指哪一条。
 #: 现存的失效测试名指针逐条记在 **ISSUES I70**，不是没人看过。
 LEDGER_DOCS = ("docs/CHANGELOG.md", "docs/CHANGELOG-ARCHIVE.md",
+               "docs/CHANGELOG-ARCHIVE-2.md",
                "docs/DECISIONS.md", "docs/DECISIONS-ARCHIVE.md",
                "docs/ISSUES.md", "docs/VERIFICATION.md",
                "docs/VERIFICATION-RUNLOGS.md", "docs/VERIFICATION-RUNLOGS-ARCHIVE.md",

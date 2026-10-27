@@ -16,8 +16,11 @@ p12 C7「向量状态取值都在口径内」恒绿，但那个"在口径内"只
 1. **只跑用户显式点名的文档**（沿用 OCR 的阶段 5 决策 Q3=甲）。这一层没有"扫一遍全库把
    pending 都排上"的入口 —— 一条 embedding 任务对一份 946 页的文件就是 946 次模型前向，
    全库自动建向量会把 GPU 时间烧在没有明确诉求的地方。`request_vectors(doc_ids)` 是唯一入口。
-2. **入场券是一份可搜的正文判定**（`TEXT_SEARCHABLE`：`native` / `mixed`）：没正文就没东西可嵌。
-   对一份从没索引过的文档直接建向量，只会得到一堆"空页向量"污染语义搜索。
+2. **入场券是"有没有可搜的正文"**（`index_service.has_searchable_text`：`text_status ∈ TEXT_SEARCHABLE`
+   或 `ocr_status ∈ done/partial`，**ISSUES I116** 甲）：没正文就没东西可嵌，对一份从没索引过的
+   文档直接建向量，只会得到一堆"空页向量"污染语义搜索。OCR 出来的字也进了 `text_pages` /
+   `content_fts`，所以扫描件与原生文档共用同一张入场券 —— 按"原生正文"判会把 OCR 完的书永久
+   挡在语义搜索之外，而同一条查询在全文搜索里明明搜得到。
 3. **一页一向量**（D-036：1 chunk/页）。取 `texts.pages_of(doc_id)` 的每一页正文，
    整页交给模型（模型自己按 `MAX_LENGTH` 截断），不给一页造多个向量 —— 存储侧的
    `vector_meta(doc_id, page_no)` 就是按页唯一键设计的。
@@ -53,7 +56,7 @@ from pdfarchiver.db.repositories.jobs import JobRepository
 from pdfarchiver.db.repositories.text import TextRepository
 from pdfarchiver.jobs.queue import JobCancelled, PermanentFailure
 from pdfarchiver.semantic.embedding import EmbeddingService
-from pdfarchiver.services.index_service import TEXT_SEARCHABLE
+from pdfarchiver.services.index_service import has_searchable_text
 
 log = logging.getLogger("pdfarchiver.vector.service")
 
@@ -70,7 +73,7 @@ SKIP_NOT_SEARCHABLE = "not_searchable"
 
 SKIP_LABELS = {
     SKIP_ABSENT: "库里没有这份主记录",
-    SKIP_NOT_SEARCHABLE: "没有可搜的正文，先索引",
+    SKIP_NOT_SEARCHABLE: "没有可搜的正文，先索引或先识别",
 }
 
 
@@ -160,7 +163,7 @@ class VectorService:
         """点名的一份能不能进队列；能进返回 None，不能进返回理由常量。"""
         if doc is None:
             return SKIP_ABSENT          # 主记录不在了就不排，别让 worker 拿到一条空任务
-        if doc.text_status not in TEXT_SEARCHABLE:
+        if not has_searchable_text(doc):
             return SKIP_NOT_SEARCHABLE  # 没可搜的正文就没东西可嵌
         return None
 
@@ -180,10 +183,10 @@ class VectorService:
         if doc.missing_since is not None or not os.path.exists(doc.path):
             self.documents.mark_missing(doc.path_key)
             raise PermanentFailure(f"文件已不在磁盘上：{doc.path}")
-        if doc.text_status not in TEXT_SEARCHABLE:
+        if not has_searchable_text(doc):
             raise PermanentFailure(
-                f"这份还没有可搜的正文（text_status={doc.text_status}），"
-                f"先索引才能建向量：{doc.path}")
+                f"这份还没有可搜的正文（text_status={doc.text_status}，"
+                f"ocr_status={doc.ocr_status}），先索引或先识别才能建向量：{doc.path}")
 
         started = time.perf_counter()
         outcome = VectorOutcome(doc_id=doc_id)
