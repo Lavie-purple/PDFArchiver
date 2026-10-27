@@ -239,6 +239,10 @@ def c5_pages(conn: sqlite3.Connection) -> Row:
     而产品写的 char_count 恒等于 Python len，所以真正字数分家的行必然也进候选 → 候选集是安全超集，
     不会漏报），再把候选行取回 Python 侧用 `len(body)` 定生死。顺带数出正文里夹 NUL 的行（**I90 乙**
     入库前该剥掉、真库那批该重写，这条让它在 p12 上如实红，而不是藏在字数红灯背后）。
+
+    空串行按来源分开数（**ISSUES I117** 甲）：OCR 的页级完成标记（`source_kind='ocr'`、
+    `char_count=0`、`ocr_version` 非空）是幂等记录、不是垃圾 —— 删掉会让那几页重跑；
+    只有真垃圾（豁免之外的空串，K > 0）才判红。
     """
     char_bad = nul_bad = 0
     char_examples: list[str] = []
@@ -256,6 +260,13 @@ def c5_pages(conn: sqlite3.Connection) -> Row:
     native_with_version = int(_scalar(conn, "SELECT count(*) FROM text_pages"
                                             " WHERE source_kind='native' AND ocr_version IS NOT NULL"))
     empty_body = int(_scalar(conn, "SELECT count(*) FROM text_pages WHERE body=''"))
+    # **ISSUES I117** 甲：OCR 为做页级幂等，会给「识别过但这页没字」的页写一行 0 字正文 ——
+    # 完成标记（`ocr_version`）就落在这行里，删掉它们会让那几页重跑。它不是零信息垃圾，
+    # 按「谁写的、为什么写」把标记行与真垃圾分开数，只有真垃圾判红。
+    empty_marker = int(_scalar(conn, "SELECT count(*) FROM text_pages"
+                                     " WHERE body='' AND source_kind='ocr' AND char_count=0"
+                                     " AND ocr_version IS NOT NULL"))
+    empty_junk = empty_body - empty_marker
     total = int(_scalar(conn, "SELECT count(*) FROM text_pages"))
     ocr_rows = int(_scalar(conn, "SELECT count(*) FROM text_pages WHERE source_kind='ocr'"))
     problems = []
@@ -272,10 +283,11 @@ def c5_pages(conn: sqlite3.Connection) -> Row:
                         f"下次会把同一页再烧一遍")
     if native_with_version:
         problems.append(f"{native_with_version} 行原生正文带着 ocr_version（来源口径混了）")
-    if empty_body:
-        problems.append(f"{empty_body} 行正文是空串（索引里养着零信息行）")
+    if empty_junk:
+        problems.append(f"{empty_junk} 行正文是空串且不是 OCR 页级标记（索引里养着零信息行）")
     return Row("C5", "正文页自洽（字数口径 / 无 NUL / 来源 / OCR 版本列）", not problems,
                f"正文 {total} 页（其中 ocr {ocr_rows}）｜"
+               f"空串 {empty_body} 行（其中 OCR 页级标记 {empty_marker}、真垃圾 {empty_junk}）｜"
                + ("；".join(problems) if problems else "六项全部自洽"))
 
 

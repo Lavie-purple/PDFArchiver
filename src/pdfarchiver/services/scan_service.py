@@ -17,7 +17,8 @@
 4. **删除只改状态，不删数据**：`missing_since` 打时间戳，正文页与索引行留着。
    检索层默认口径 `missing_since IS NULL`（`documents.where_for_filter`）已经把缺失文档挡在
    结果之外，所以"虚假的有效结果"不会出现；而文件被移动/改名后又能原地回来，不必重抽 200 万页。
-   改名/移动另外靠 `(device_id, file_id)` 认：单条候选且旧路径已消失才 `adopt_path`，
+   改名/移动另外靠 `(device_id, file_id)` 认，跨卷搬移（inode 换了）退回
+   `(name, size_bytes, mtime_ns)` 认：单条候选且旧路径已消失才 `adopt_path`，
    **换路径不换主键**，用户打在这份文档上的分类、标签、备注全部原地保留；认不出来就老实建新记录，不猜。
 
 错误处理遵循"一个坏目录不许中断整场扫描"：`fs.scanner` 把打不开的目录作为条目交出来，
@@ -289,23 +290,17 @@ class ScanService:
 
     def _adopt_renamed(self, identity: FileIdentity,
                        scanned_sink: list[int] | None = None) -> _Outcome | None:
-        """新路径没记录 → 用 `(device_id, file_id)` 找回它原来的记录。
+        """新路径没记录 → 找回它原来的记录，两条路：先按 `(device_id, file_id)`，
+        认不到再按文件事实 `(name, size_bytes, mtime_ns)`（**ISSUES I115** 甲）。
 
-        只在两个条件同时成立时才认：旧记录只有**一条**候选（多条 = 硬链接，认哪条都是猜），
-        且旧路径**已经不在磁盘上**（还在 = 这真的是一份新文件，不是改名）。
+        两条路都只在两个条件同时成立时才认：候选**恰好一条**（多条 = 硬链接/同名同大小，
+        认哪条都是猜），且旧路径**已经不在磁盘上**（还在 = 这真的是一份新文件，不是改名）。
         内容与名字同时变（改名后又编辑过）也认：先换路径，再按 (size, mtime) 判要不要重索引。
         """
-        if identity.device is None or identity.file_id is None:
-            return None
-        candidates = self.documents.by_inode(identity.device, identity.file_id)
-        others = [c for c in candidates if c.path_key != identity.path_key]
-        if len(others) != 1:
-            if len(others) > 1:
-                log.warning("同一 inode 有 %d 条记录（硬链接？），不自动认改名：%s",
-                            len(others), identity.path)
-            return None
-        old = others[0]
-        if os.path.exists(old.path):
+        old = self._renamed_by_inode(identity)
+        if old is None:
+            old = self._renamed_by_facts(identity)
+        if old is None:
             return None
         content_changed = old.size_bytes != identity.size_bytes or old.mtime_ns != identity.mtime_ns
         if not self.documents.adopt_path(
@@ -319,6 +314,32 @@ class ScanService:
         self._mark_seen(old.doc_id, scanned_sink)
         return _Outcome(ADOPTED, old.doc_id,
                         needs_index=content_changed or _needs_index(old.fts_status))
+
+    def _renamed_by_inode(self, identity: FileIdentity):
+        """同卷改名：inode 没变，认 `(device_id, file_id)`。"""
+        if identity.device is None or identity.file_id is None:
+            return None
+        candidates = self.documents.by_inode(identity.device, identity.file_id)
+        others = [c for c in candidates if c.path_key != identity.path_key]
+        if len(others) != 1:
+            if len(others) > 1:
+                log.warning("同一 inode 有 %d 条记录（硬链接？），不自动认改名：%s",
+                            len(others), identity.path)
+            return None
+        return None if os.path.exists(others[0].path) else others[0]
+
+    def _renamed_by_facts(self, identity: FileIdentity):
+        """跨卷搬移：inode 换了（Windows 是「复制 + 删源」），退回文件事实认。
+        三项全等且**恰好一条**已判缺失的记录才认；多于一条或任一项不等，一律不认 ——
+        「不猜」这条规则在两条旁路上是同一条硬条件。"""
+        matches = self.documents.missing_by_facts(
+            identity.name, identity.size_bytes, identity.mtime_ns)
+        if len(matches) != 1:
+            if len(matches) > 1:
+                log.warning("有 %d 条缺失记录的文件事实全等（同名同大小同时间），不猜改名：%s",
+                            len(matches), identity.path)
+            return None
+        return None if os.path.exists(matches[0].path) else matches[0]
 
     def _mark_seen(self, doc_id: int, scanned_sink: list[int] | None) -> None:
         """`scanned_sink` 是批量出口：全量扫描把 doc_id 攒给调用方一次刷库；

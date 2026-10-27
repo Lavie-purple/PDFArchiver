@@ -58,6 +58,10 @@ INJECTIONS: list[tuple[str, str, str]] = [
     ("C5", "正文夹着 U+0000（字数没写错，但 SQL 侧 length/substr 遇 NUL 即截断，入库前该剥掉）",
      "INSERT INTO text_pages(doc_id, page_no, char_count, body, indexed_at)"
      " VALUES(1, 3, 3, 'A' || char(0) || 'B', 1);"),
+    # ISSUES I117 甲：C5 只对「OCR 页级完成标记」豁免；原生正文写空串仍是零信息行，必须红。
+    ("C5", "原生正文页写成空串（不是 OCR 页级标记，豁免不覆盖它）",
+     "INSERT INTO text_pages(doc_id, page_no, source_kind, char_count, body, indexed_at)"
+     " VALUES(1, 41, 'native', 0, '', 1);"),
     ("C6", "text_status 写成库里根本没有的值",
      "UPDATE documents SET text_status='no_text' WHERE id=1;"),
     ("C6", "队列 state 写成口径外的值",

@@ -6,6 +6,61 @@
 
 ---
 
+## 轮三十四（2026-10-28）—— I115 甲：跨卷搬移按文件事实认改名；I117 甲：C5 给 OCR 页级标记行豁免；删掉 2 条残留 `vector:queued`；2 份微信 PDF 走产品路径入库
+
+用户这一轮的指令逐字：「① I115 跨卷搬移根因（推荐甲）｜② I117 C5 给 OCR 页级标记行豁免（推荐甲）｜
+③ 两条 vector:queued（甲 删 / 乙 开应用让 worker 跑完 / 丙 只记）｜④ C3·D 那 2 份微信 PDF 重扫。
+都跟进你的建议来」。四件都按推荐项做完。
+
+- **① I115 甲 · 认改名补一条按文件事实的旁路** —— `services/scan_service.py` 把 `_adopt_renamed` 拆成两条路：
+  `_renamed_by_inode`（同卷改名，`(device_id, file_id)`，原逻辑原样搬过去）与 `_renamed_by_facts`
+  （Windows 跨卷搬移是「复制 + 删源」、inode 换了，退回 `(name, size_bytes, mtime_ns)` 认）。
+  两条路共用同一条硬条件：候选**恰好一条**、且**旧路径已经不在磁盘上**；多于一条或任一项不等，一律不认 ——
+  「不猜」这条规则没有因为多开一条旁路而放宽。仓储侧新增 `documents.missing_by_facts(name, size, mtime)`：
+  只查 `missing_since IS NOT NULL`、`ORDER BY id LIMIT 2`（取两条只为分辨「恰好一条」）。
+  认出来走的是 `adopt_path`，**主键不变** —— 分类、标签、备注、正文索引原地保留。
+- **① 测试** —— `tests/integration/test_scan_service.py` **38 passed**，新增 4 条：跨卷搬移换 inode 后认回同一
+  主键（并断言 `documents.count()==1`、`missing_since` 清掉、`fts_status` 仍是 `done`）｜只差 mtime｜只差 size
+  （参数化 2 条）｜文件事实对上**多条**缺失记录时不猜。坏法真注入两次：把兜底整个摘掉 ⇒ 跨卷那条红；
+  把「恰好一条」放宽成「取第一条」⇒ 那份三份同名（丙盘）的红。撤掉还原全绿。
+- **② I117 甲 · C5 只豁免「OCR 页级完成标记」** —— `tests/probes/p12_consistency.py` 的 `c5_pages()` 把空串行
+  拆成两半数：`source_kind='ocr' AND char_count=0 AND ocr_version IS NOT NULL` 是**标记行**
+  （`texts.ocr_versions_of()` 靠它判 `reused`，删了那几页会重烧一遍），其余空串才是零信息垃圾。
+  读数格式改成「空串 N 行（其中 OCR 页级标记 M、真垃圾 K）」，**只有 K > 0 判红**。
+  判据没有整体放宽：`--inject` 里补了一条坏法「原生正文页写成空串（豁免不覆盖它）」。
+- **② 测试** —— 新文件 `tests/integration/test_consistency_c5.py` **2 passed**；坏法两向都真做过
+  （删掉豁免 ⇒ 「标记的那条」红；把豁免放宽成「任何空串都算标记」⇒ 「垃圾那条」红）。`p12 --inject`
+  **22/22 条坏法 + 口径边界 1/1 ALL GREEN**。
+- **③ 甲 · 单事务删 2 条 `vector:queued`** —— `.probe_work/u34_clear_vector_queue.py`：先用
+  `%TEMP%\pdfarchiver-u34-vector-queue-backup\catalog.db` 那份 **12,113,543,168 B** 快照（00:06 做的，
+  尺寸与删除前的库逐字节一致），再一个事务删 `kind='vector' AND state='queued'` 的两行
+  （11019 → doc 10995、11020 → doc 10997，`attempts 0`）。只读复核（`.probe_work/u34_clear_vector_queue.json`）：
+  `processing_jobs 11,019 → 11,017`、两条 id 都不在、`vector:queued` **0 行**、外键孤儿 **0**、
+  doc 10995 / 10997 仍是 `vector_status=done` ⇒ `DELETE GOOD`。
+- **④ · 2 份微信 PDF 走产品路径入库（零裸 SQL）** —— `ctx.scan.reconcile_path()` →
+  `IndexService.index_document()` → `VectorService.request_vectors()`：`dify安装攻略20261020.pdf` **1/1 页**、
+  `互联网流量集中、平台变现与商家经营成本研究.pdf` **32/32 页**，两份都 `text=native / fts=done`（doc 11000 / 11001）；
+  向量回执「点名 2 份｜该建 2 份｜新增任务 2 条」，随后 `vector:done 2`。文档 **10,995 → 10,997**，
+  正文 **1,976,175 → 1,976,208 页**（+33 = 1 + 32，与页数对得上），向量 `done 8,692 → 8,694`。
+  自检索 **4/4 拿自己的正文查回 rank 1**（`1/1` @0.9296 与 `3/3` @0.9268 / 0.9309 / 0.9329）。
+  **据实记一条自己的失误**：`.probe_work/u34_rescan.py` 的等待循环调了**不存在**的
+  `status.queue_counts()`（`grep -rn "def queue_counts" src/` 零命中），脚本会白睡 40 分钟；
+  向量任务跑完后我停了进程，收口证据改用独立只读脚本 `.probe_work/u34_selfcheck.py` 补，
+  JSON 里也写明了这件事。
+- **p12 真根复跑（71 分钟，19 条 / 2 红）** —— `.probe_work/u34_p12_real.log`，末行 `VERDICT: RED（2 条未过）`。
+  三件待验的都转绿：**C3·D:\ 96 / 96**（轮三十三是盘上 96 / 库里 94）、**C5「空串 6 行（其中 OCR 页级标记 6、
+  真垃圾 0）」**、**C9 `running 0`＋`{'done': 10,944, 'failed': 75}`**（队列里再没有 `vector:queued`）。
+  另两处**新红，都是数据漂移、不是代码**：`C3·lavie` 盘上 69 / 库里 68（漏 1 份
+  `20260812第196回 在AI时代，用AI完成弯道超车.pdf`，文件 mtime **02:11**）；`C3·H:\` 盘上 1,860 / 库里 1,857
+  （漏 4 份，全在 `h:/others software/xjpdfeditor/` 与 `…/xunjiepdfconverter/sample/` 下，那两个目录的时间戳
+  是 **02:04**）—— 两份都落在轮三十三那一场链（01:56 收）之后。**没有为凑绿重扫，也没有动任何阈值**；
+  这两根要不要补索引等勾选（本轮新开 **ISSUES I118** 记这一类）。
+- **台账**：I115 / I117 **OPEN → CLOSED**，两格都贴了实测读数、坏法与销账条件。
+- **文档**：本文件按 **D-059** 第 4 条先切册再写 —— 活册 **599 → 338 行**，`轮二十四` … `勾选轮（二十）`
+  **262 行**逐字搬进 [`docs/CHANGELOG-ARCHIVE-2.md`](CHANGELOG-ARCHIVE-2.md)（**647 → 914 行**，排在
+  `勾选轮（十九）` 之前），标题数守恒 **29 = 9 + 20**；`docs/VERIFICATION-RUNLOGS.md` 追加 §4.45；
+  `docs/ISSUES.md` 两行销账 + 新开 I118。
+
 ## 轮三十三（2026-10-28）—— I116 甲：向量入场券改判「有没有可搜的正文」；497 页 OCR 正文补建向量；CHANGELOG 再切一册
 
 用户这一轮的指令逐字：「I116 甲（做完③，你勾一下就行）→ 下一轮开篇切 CHANGELOG + 跑一场整链。」
@@ -326,274 +381,13 @@ injection 整段未空载复跑；体检面板只有 offscreen 几何证据。 �
   台账 110 行、逐条走到 **I102** 补了一条 2026-10-25 同场读数（状态 CLOSED 不变）；一次性脚本按规矩**截成 0 字节**，
   证据类 `.txt/.json/.png` 留在 `.probe_work/`（不入库）。
 
-## 轮二十四（2026-10-24）—— S7「库体检」按钮（#198 · 1甲 2甲 3甲 4甲）
 
-用户这一轮勾了 **1甲 + 2甲 + 3甲 + 4甲**，并让其余门禁照跑。四件定案各落一处：
-**就地翻页**（S7 下半区第二页，不另开窗口）、**两档**（快速 10 项 / 全库 13 项）、
-**只报证据**（没有重跑/修复按钮）、**只存上次时间 + 四个计数**（明细不落盘）。
-
-- **取数层 `db/repositories/health.py`（新）** —— 十四项检查的 SQL/PRAGMA 唯一落点（架构守卫要求
-  SQL 只在 repositories 里），口径与 `tests/probes/p12_consistency.py` 一致；`TEXT_LEGAL` /
-  `PARSE_LEGAL` / `OCR_LEGAL` / `VECTOR_LEGAL` 四个合法值集合只写在这一处，**p12 反过来 import 它**
-  （原先探针自带一份，那是第二个口径）。读快照走 `mode=ro`，不写真库。
-- **服务层 `services/db_check.py`（新）** —— `run(mode)` 是唯一取数与判定口：快速档 C0/C2/C4(行数)/
-  C6/C7/C8/C9(读数)/C10/C12/C13 十行，全库档插入 C1、C5 并把最慢的 C11 放最后；每条单独计时，
-  **异常变成带原文的红行**而不是带走整场（`failure_report()` 兜住完全没跑起来的情况）。
-  `_remember()` 只写 `ts/mode/total/red/readings/elapsed_s` 六个键到 `app_settings['db_check.last']`。
-  构造零成本，真正取数只在用户点按钮时发生；`expected_version` 取迁移目标版本（C0 才是问"水位停在
-  本版没有"）。线程在 `finally` 归还连接。
-- **界面 `ui/pages/health_panel.py`（新）** —— `threading.Thread(daemon=True)` + 跨线程 `Signal(object)`
-  回主线程（不用 QThread：关窗时不会打 "Destroyed while thread is still running"）；两颗按钮运行中同时
-  禁用，`QTimer` 每 500ms 只刷新已用时长。全库档点下去先弹 57–67 分钟成本确认。表格是**第 9 张**
-  `set_table_columns` 的表（定宽 220/90 + 读数列 stretch + tooltip 回读），单行行高。
-- **S7 `ui/pages/settings_page.py`** —— 下半区改 `QStackedWidget`（设置页 / 体检页），标题栏右端
-  `[库体检…]` 就地翻页、`[← 返回设置]` 翻回；「上次体检」行放在**体检页内**而不是标题栏 ——
-  标题栏多一行会把下半区最低高度顶高 36px，720 窗高下上半区只看得见 13 行
-  （`test_S7上半区按内容给高…` 实测红，故改位置；改后返回 15 行以上）。
-- **守卫同步** —— `tests/integration/test_ui_tier.py` 两处 `seen == 8` → **9**（全站表格数），
-  `ui/table_layout.py` 与 `docs/ARCHITECTURE.md` 的"八张表"文案同步；`p12` 的合法值改为 import。
-- **回归与坏法** —— `tests/integration/test_db_check.py` 新增 **8 条**（快速十行零红 / 坏根键点名 C13 /
-  0 字节快照在全库档判红且 C11 只体检最新一份 / 上次体检恰好六个键 / 异常变红行 / 没跑起来也给原文 /
-  设置页翻页跑快速体检并回写 / 全库档审计成本文案），首次即 **8 passed**；受影响守卫与集成测试
-  **62 passed**。五组坏法真注入全部红并点名后还原：C13 恒绿、C11 跳过 0 字节、`finished` 断线、
-  `_remember` 多写 `detail` 键、临时加第 10 张表（两条 `seen` 守卫同时红）。
-- **真库跑了一次产品的快速档（只读，真库零写）** —— 11GB 真库（主记录 10,991 / 正文 1,975,611）
-  用服务层 `_specs` + `_one` 取数判定：**10 行｜9 通过 + 1 读数（C9）｜0 红｜整场 11,755ms**
-  （最慢三项 C2 4,333 / C12 3,798 / C4 3,461ms）。**故意不调 `_remember()`** ⇒ 真库 `app_settings`
-  里没有多出 `db_check.last`。这条读数**推翻了线框里「秒级」那句成本说明**（那是没测过的估计）：
-  `QUICK_COST` 改成「11GB 真库实测约 12 秒」，`FULL_COST` 改成同口径两场的「约 57 分钟与约 67 分钟」，
-  线框 §S7 补页、`health_panel` 状态行、`test_db_check.py` 那条断言（`"秒级"` → `"约 12 秒"`）同步。
-- **其余 10 段门禁（一场后台命令，20:45:17 → 22:54:54 = 7,776.8s ≈ 2h09m）** ——
-  `26 条判定｜4 红｜1 段未跑（guards，已由预检两步覆盖）`，末行 `VERDICT: RED（4 条未过）`。
-  四条红**同源于 G1 冷启动**（不是四个问题）：regression（801 passed / 1 failed，唯一红仍是
-  `test_进程级冷启动实测符合G1约定`）、coldstart 3.554s、e2e 2.454s、injection 的 p9 **基线**里含同一条 G1
-  （其后 8 条探针全绿）。`soak / package / g2 / consistency / ocr / ui-inject` 六段当场全绿。
-  起跑负载 CPU **69.5%**、可用内存 **1,333MiB**、`TOTClient-Win64-Shipping.exe` **4,296MiB**。
-- **四条红逐条定点复跑（负载压下去之后；与上面那场不是同一时刻，不谎称同场全绿）** ——
-  p9 **抓到 69/69 条坏法｜ALL GREEN**；e2e 段 **ALL GREEN**、冷启动 **1.266s**；coldstart 段五次读数
-  **1.298 / 1.456 / 1.506 / 1.523 / 2.400s**（同一套代码，抖动全在 1.5s 线附近）；全量回归第三场
-  **802 passed / 0 failed / 1 skipped（228.7s）｜ALL GREEN**（起跑 CPU 52.3%）。
-- **真根一致性（consistency 段 5,599.4s ≈ 93.3 分）** —— p12 注入自检 **21/21 + 口径边界 1/1**、
-  p14 仪表 **四种坏法 × 五种口径全绿**、真根 **19 条｜红 0｜未验 0**（库 **v8**、`running 0`、
-  `done 10,941 / failed 75`）。四个慢项比轮二十二那场同向变慢 8–24%（C1 1,200,867 / C5 1,541,084 /
-  C11 1,036,524 / C4 259,539ms）而**行数一字未变** ⇒ 差额是机器负载，所以成本文案把两场读数都写出来，
-  不挑对自己有利的那一个。
-- **负载事实** —— 全量回归首场 **800 passed / 1 failed / 1 skipped（335.02s）**，唯一红仍是
-  `test_进程级冷启动实测符合G1约定`（2.094–2.603s；当场 CPU 74–84%，`window.ready` 的
-  `import_to_run 1.826s` 占 78%）—— 与 **ISSUES I25 / I102** 同源的负载绑定项；G1 单条 10 次连测
-  **1.217–2.0s、9/10 次 ≤1.5s**，拆分 `import_to_run 1.059–1.178s`（占 87%）/ `assemble 0.045–0.055s` /
-  `window 0.113–0.121s` ⇒ 本轮新增的三张模块**不在启动路径上**（自测 `health_panel import 46ms`、
-  `HealthPanel 构造 14ms`）。G1 阈值一处没动。
-
----
-
-## 轮二十三（2026-10-24）—— 先拆再写（RUNLOGS 切册 + p13 拆分）、收尾预检一键脚本、真库小样本语义实跑
-
-用户这一轮勾了 **1 + 4 + 5②**，另加一句「本轮三条红全是自伤，处理了」。三条红（裸探针名 ×2、
-`--data-root` 传深一层）的第二条腿就是「先拆再写」与预检脚本 —— 拆掉会超线的文件，
-把上一轮踩过的坑变成起跑前的一次判定。
-
-- **A · 先拆再写** —— ① `tests/probes/p13_soak.py` 687 行 + `tests/probes/p13_soak_inject.py`
-  142 行：反向注入整段搬出，`main()` 里延迟导入，顶层不反向依赖（否则两模块成环）。
-  ② `docs/VERIFICATION-RUNLOGS.md` **1,113 → 372 行**，§4.17–§4.25 九块整批逐字搬进
-  `docs/VERIFICATION-RUNLOGS-ARCHIVE.md`（757 行，**D-059**）：节号序列不改、标题数守恒
-  （搬前 17 = 分册 9 + 活册 8）、跨文件指针只改文件名且同一行不许混两个册的引用（共改 16 行）。
-  分册同时进 `tests/guards/test_doc_pointers.py` 的 `SELF_DEFINING` 与 `LEDGER_DOCS`。
-  ③ 顺带修掉**守卫自己的**可扩展性缺陷：`_resolve_md()` 每解析一个引用就 `rglob` 一次全仓，
-  把 `.venv`（16,393 文件 / 1,424 目录）走一遍 —— 三个守卫文件同跑 **>18 分钟挂死**，
-  `faulthandler` 堆栈点名的就是它。改成 `os.walk` 剪枝**建一次索引**：doc_pointers
-  **9 passed / 5.35s**、guards 全量 **54 passed / 30.56s**。④ `test_subprocess_encoding.py`
-  里那条 `p13_soak.py:416` 的过期行号改成不带行号的描述（拆分后它挪到 465，行号一挪就是假指针）。
-- **B · 收尾预检一键脚本** —— `scripts/precheck.py`：两步固定顺序（`pytest tests/guards` →
-  `gates/final.py --only docs-inject --only guards`），子进程显式 `encoding="utf-8"`，
-  任一红即停，末行唯一 `VERDICT:`。实测 **PASS 1/2（54 passed, 39.11s）+ PASS 2/2（门禁 9 条
-  ALL GREEN）→ VERDICT: ALL GREEN**，总 ~60s。接线由 `tests/guards/test_precheck.py` 三条盯着：
-  argv 必须带上两个 `--only`、假红 runner 只许跑 1 步且 VERDICT 为红、假绿 runner 必须打出
-  `PASS  1/2` / `PASS  2/2` —— 后两条就是坏法注入（改坏 argv 接线或吞掉红步，测试立刻红）。
-- **C · 真库小样本语义实跑** —— `tests/probes/p25_semantic_sample.py`：真库以 `mode=ro` +
-  `pragma query_only=1` 打开，`random.Random(20261024).sample(300)` 抽 `text_status ∈ {native,
-  mixed}`、`page_count 1–60` 的 300 份，每份前 7 页 → **300 份 / 1,709 页 / 651,964 字**。
-  嵌入走产品的 `EmbeddingService`（bge-small-zh int8，DirectML）：加载 **1.66s**、
-  **23.46s / 1,709 页 = 13.7 ms/页 = 72.86 页/秒**、RSS **130.3 → 281.7 MiB**；
-  全量 **1,975,611 页 ÷ 72.86 = 7.53 小时**、int8 **0.94 GiB** / fp32 **3.77 GiB**。
-  召回（top-10）：**语义按文档 19/20、按页 16/20｜全文自然句 0/20｜全文关键词 12/20｜互补 16/20**；
-  4 条按页错的里有 3 条是**同一份文档的别的页**（277/286/332），只有 346 连文档都没进。
-  三条关键词 0 命中是**带空格的两词串**（产品按口径把整串当一个短语，不拆词）—— 口径而不是坏。
-
-**两处探针自己的 bug（先修再报数，旧读数作废）**：① 命中判定写的是
-`[d, p] in [(d, p)]` —— **列表 vs 元组恒为 False**，所以首跑全文通道恒 0；② 2 字关键词
-（如「塔罗」）在 trigram 下恒 0，产品口径本应走 LIKE（`MIN_FTS_CHARS=3`），探针却一律进 FTS。
-直接查库反证过：`竞品分析` 能命中 `(255,1)` 第 2 名、`数据的本质` 命中 `(245,1)`。
-另：上一场报的「全量 47.77 小时」是 **120 页小样本被首跑预热摊薄**（11.49 页/秒），
-本场 1,709 页把预热摊薄掉后是 7.53h —— **以本场为准，上一场那个数作废**。
-
-- **D · 收尾回归（第一场是负载场，不许记成全绿）** —— 全量回归第一场 **793 passed / 1 failed /
-  1 skipped（466.21s）**，唯一红 `test_进程级冷启动实测符合G1约定` **5.439s**（单跑仍 3.593s）；
-  同场 `TOTClient-Win64-Shipping.exe` **365% CPU / 2.9GiB**、可用内存 **2.1GiB** —— 本轮没动启动路径。
-  按既有口径 deselect 后 **793 passed / 1 skipped / 1 deselected（216.29s）**；负载降下来单条复跑
-  **1 passed，冷启动 1.055s**（`import_to_run 0.797s｜assemble 0.179s｜window 0.079s`）。
-
-**口径**：查询仍是**我模拟的** 20 条，不是用户手里那 20 条真查询，所以 **ISSUES I11 不销账**；
-按页严格算 16/20 **低于** D-035 的 18/20 门槛，不许拿 19/20 的文档级读数宣布 G15 绿。
-G1 那行的绿来自**负载撤掉后的单条复跑**，不是第一场同一时刻的读数。
-
----
-
-## 整链补跑（二十二·续）—— 2026-10-24 · 12 段 35 判定：整链 32/35，3 条红定点复跑后全绿
-
-`gates/final.py --all --data-root "C:/Users/lavie/AppData/Local/PdfArchiver"`，整链那场 14:38:22 → 15:09:14
-（1,852.6s），**32/35 绿**；三条红都不是产品缺陷：① 回归红在同一份文档 —— §4.32 又留下 **9 处裸探针名**，
-「台账旧文件名」46 > 37（补 `.probe_work/` 前缀，上限未动，复跑 37 处 ALL GREEN）；② p16 同根因，
-复跑 11 条（8 坏法 + 3 对照）全绿；③ p12 真根红是我把 `--data-root` **传深了一层**（探针自己会拼 `data/`），
-改传基目录后真根 **19/19、0 红 0 未验**（C11 整库体检 961s）。回归复跑 **791 passed / 1 skipped / 289.71s**。
-其余九段：冷启动 1.045s、e2e 11 条、注入 p9 69/69 与 p10 45/45、p15 36 条、OCR 三条、4 分钟 soak
-（60 点 / 空洞 2.0s / 积压峰 18 排空 1.0s）、package 400.0MiB、G2 **P95 326.0ms**。
-**口径**：定点重跑只替换那三行，不许把整链写成 35/35；另 14:36 起跑的第一场因块缓冲误杀子进程已作废，不回填读数。
-
-## 勾选轮（二十二）—— 2026-10-24 · 用户本人十屏全过（**I17 CLOSED**）+ **I108 甲**：S4 详情区补空态提示；顺带被守卫逮到轮二十一的 4 处裸探针文件名
-
-轮二十一交出的十屏核对清单，用户逐屏看完给出「10 屏全过」（含 05「状态框需框内滚动」与
-09「未选批次时详情为空」两处取舍）。同一轮同时勾了 **I108 甲**：09 的空表要有一句话解释，
-但**不做默认选中**——乙方案会让「撤销选中批次」一进页面就可点，而撤销是写磁盘的不可逆动作。
-
-- **A · I17 CLOSED（用户本人逐屏）** —— `screens_r18/I17_CHECKLIST.md` 十项全部勾「过」，
-  05 的滚动取舍与 09 的空表取舍都确认接受。至此 I17 的三层证据齐了：自动断言 + 我逐张看图 +
-  **用户本人观感**；台账那一行补了 2026-10-24 的勾选追记，状态维持 **CLOSED**。
-- **B · I108 甲（一处界面改动）** —— `ui/pages/operations_page.py` 在「操作项详情」标题与表格
-  之间加 `item_hint` 一行「先点上面一条批次，详情才会列出它搬了哪些文件」；新增
-  `_sync_item_hint()`，在 `reload()` 与 `_on_op_selected()` 之后统一同步
-  `setVisible(op_table.currentRow() < 0)`。选中批次后提示撤掉，不占版面、不盖住真详情。
-  `reload()` 仍然**不设默认选中**（撤销按钮的可用性保持由用户主动点击决定）。
-- **C · 守卫与坏法** —— `tests/integration/test_archive_execute_ui.py` 新增
-  `test_没选中批次时详情区写明先点批次`：断言 `reload()` 后批次表 1 行但 `currentRow() < 0`、
-  详情 0 行、提示可见且文案含「先点上面一条批次」；选中后详情 1 行、提示不可见。
-  **坏法真注入**（把 `setVisible(...)` 改成恒 `False`）→ `1 failed` 并点名
-  `test_archive_execute_ui.py:346`；还原后 **16 passed**。
-- **D · 十屏重拍（15 项断言）** —— `.probe_work/r18_screens_real.py` 加
-  `operations_item_hint` 断言后整包重跑：`platform=windows`、10 张非空且互不相同，
-  `report.json` **15 项 ALL GREEN**；09 屏读得到那句提示（`.probe_work/_r21_09_hint_crop.png`）。
-  `contact_sheet.png` 按新 md5 重建（1980×3698）；`I17_CHECKLIST.md` 十项改「☑ 过」并注明
-  **勾选时看的是 14 项那版、09 随后按甲多了一行**，不把两者的时间顺序含混过去。
-- **E · 守卫先报：轮二十一的 §4.31 写了 4 处裸探针文件名** —— `docs-inject` 的
-  「台账旧文件名 ≤ 37」当场红（41 → 38 处），多出来的全是 `.probe_work/` 下那些
-  `.probe_work/r20_plan_repro.py` / `.probe_work/r20_ink_probe.py` / `.probe_work/_i107_backup.py` / `.probe_work/r21_contact_sheet.py`
-  —— 写成裸名就等于宣称「仓库里该有这些文件」。修法是逐个补 `.probe_work/` 前缀
-  （守卫的 `PY_EXEMPT_PREFIX` 白名单），**上限 37 一个字没动**。
-- **F · 回归 / 门禁 / 台账** —— 全量回归 **791 passed / 1 skipped / 0 failed（291.54s）**，
-  比轮二十一 +1（C 段那条新用例）；`docs-inject + guards` **9 条 ALL GREEN（本次未跑 10 段）**；
-  台账 **108 行｜I1–I108 连续｜CLOSED 87｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜
-  结构不合格 1 行（上限 1）：I35**。本轮 **I108 CLOSED**，OPEN 回到 **0**。
-
----
-
-## 修复轮（二十一）—— 2026-10-24 · I17 逐屏核对逮到 **I107**（表格把「反斜杠 + CJK」路径画成 `C…`）并全站修掉；十屏重拍、清单措辞按实现改
-
-轮二十把十屏交给用户勾选。交出去之前我自己逐屏过了一遍，08（S3 归档预览）的「目标路径」三行
-全部只剩一个 `C…` —— 用户根本看不出这份文件会被搬到哪。同一次核对还发现 07 / 09 两屏的
-**清单措辞与实现不一致**（备份表没有「大小」列、批次表没有时间列），05 的两块任务读数在状态框
-的滚动线以下。本轮把真缺陷修掉、把清单改成对着截图能逐字核对的措辞。
-
-- **A · 复现与定位（四个对照）** —— 用产品路径复现（`bootstrap` → `MainWindow` →
-  `archive._load_documents()` → 勾 3 份 → `_generate_preview()`），不改数据、不另写渲染：
-  同一张计划表里 `C:\Users\lavie\AppData\Local\Temp…` 画成 `C…`，而 `C:/Users/...` 正斜杠串
-  正常；`setWordWrap(False)` 与 `ElideMiddle` 两种改法都恢复；单元格宽度 260px、文本长度
-  99/103 字符均正常写进模型。结论：**单行行高 + `ElideRight` 对「反斜杠 + CJK 混排的整段
-  不可断词」会退化成只画首字符**，不是列宽或取数问题（`.probe_work/_plan_repro_full.png` /
-  `_plan_nowrap.png` / `_plan_elidemid.png` / `_plan_slashes.png` / `_plan_mix.png`）。
-- **B · 修复（一处中心改动）** —— `ui/table_layout.py::set_table_columns()` 加
-  `table.setWordWrap(False)`，覆盖全站 8 张表（archive 2 / backup 2 / library 1 /
-  operations 2 / dedup 1）。8 张表都是单行行高，没有一张靠换行表达内容。
-- **C · 守卫与坏法** —— `tests/integration/test_ui_tier.py` 新增
-  `test_每张表都是单行行高_不许开自动换行`：逐屏切页、`reload()`、`findChildren(QTableWidget)`
-  后断言 `wordWrap() is False` 且扫到 **8** 张。**坏法真注入**（注释掉那行）→ `1 failed`，
-  点名 `test_ui_tier.py:307` 与具体页面；还原后 **21 passed**。离屏平台**不复现**这条绘制
-  退化（无 CJK 字形，wrap True/False 的 ink 宽都是 248px），所以守卫钉的是开关位，绘制结果
-  由真桌面截图复核 —— 这一半写进 docstring，不冒充。
-- **D · 十屏重拍 + 拼图 + 清单** —— `.probe_work/r18_screens_real.py` 原样重跑（真 windows
-  平台、`%TEMP%` 合成语料、10 张 1400×880）：`report.json` **14 项 ALL GREEN**，10 张非空且
-  互不相同；08 的目标路径读作 `C:\Users\lavie\AppData\Local\Temp…`。`contact_sheet.png` 按新
-  md5 重建。`I17_CHECKLIST.md` 改为可逐字核对的措辞：05 明写两块任务读数**要在状态框内向下滚动**；
-  07 改成「文件名 / 版本 / 修改时间」（无大小列）；08 明写目标路径修前是 `C…`、修后是什么；
-  09 改成「ID / 类型 / 状态 / 总数 / 完成 / 失败」并写明**详情表要先点中批次**；另注明
-  01/02/10 的横向滚动条是 I48/I61 的定宽口径。
-- **E · 新开 I108（等勾选，不动代码）** —— 09 的「操作项详情」在未选中批次时是一张没有任何
-  提示的空表。甲＝加一行「先点一条批次」的空态文案；乙＝`reload()` 后默认选中最新一条。
-  两种都要过界面确认。
-- **F · 回归 / 门禁 / 台账** —— 全量回归 **790 passed / 1 skipped / 0 failed（289.17s）**；
-  `docs-inject + guards` **9 条 ALL GREEN（本次未跑 10 段）**；台账 **108 行｜I1–I108 连续｜
-  CLOSED 86｜MITIGATED 20｜OPEN 1｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35**，本轮 **I107
-  CLOSED**、**I108 OPEN**。文件长度：`213 个 .py / 31 个 .md｜临近线 6 份`，`test_ui_tier.py`
-  711（余 89）新进临近表；`p13_soak.py` 仍是最紧的 **794（余 6）**。
-
-**I17 仍未 CLOSED**：十屏要用户本人逐屏打勾；自动断言与我自己的看图都不能替代。
-（2026-10-24 追记：用户当天逐屏勾选 **10/10 过**，并选了 I108 甲 —— 见上一节「勾选轮（二十二）」。）
-
----
-
-## 勾选轮（二十）—— 2026-10-24 · **24 小时 soak 按用户选择缩到 12 小时并跑满**（9/9 全绿）/ p12 增 `--c11-deep` / consistency·injection 跨轮 A/B / I17 十屏核对包；途中逮到并修掉 I106（探针 churn 撞 Windows 文件锁）
-
-用户原要求 24 小时连续 soak。前两场分别在本机外部重启（13h40m）与探针自身的删除动作撞上
-Windows 文件锁（17h05m）处被切断；第二场是**探针缺陷**，不是产品故障，修掉后按用户勾选
-②「缩到 12h 并如实写明边界」，第三场按 12 小时跑满。本轮文档统一写「**12 小时已验、24 小时未验**」。
-
-- **A · 12 小时连续 soak（`--minutes 720`）** —— **9/9 全绿、0 红**：采样 **21,067 点｜跨度 43,201.2s｜
-  最大采样空洞 2.6s**、churn **2,880 轮**、`churn_unlink_skipped=0`。S1 rc=0；S2 `crash.log 0 字节 /
-  Traceback 0`；S3 **12→12**（峰 17）；S4 **321→321**（峰 323）；S5 **75.3 → 75.6MiB（+0.3）**、
-  中位 **76.4**、全程 3.0–120.6、G8 余量 1,079.4；S6 **峰值 17 / 排空 7.1s / `{'done': 12711}`**；
-  S7 **5810/5810**（已标缺失 1,110）；S8 **2 份 / 3,546KiB / 当前 7,032 行**；S9 p12 14 条 0 红、未验 0
-  （`.probe_work/round20_soak_720min_r1.log` / `p13_soak_result_720min_r1.json` / `round20_soak_720min_app.log` /
-  `round20_soak_720min_state.log`）。`state.log`：`startup.begin` 2026-10-23T08:58:35Z → `shutdown`
-  2026-10-23T20:59:53Z（43,201.2s）。
-- **A′ · 两场 24 小时未跑满（如实留档）** —— 第一场 **05:31:45 → 19:11:39（57%）**：被
-  `optionalfeatures.exe` / `winlogon` 发起的外部重启切断，应用 `app.log` 到 19:11:39 仍在正常索引、
-  无 Traceback。第二场 **19:21:59 → 12:27:07（71.2%，17h05m）**：探针 `_churn` 删除刚投放的
-  `soak_add_61500_2.pdf` 时撞上应用正在读该文件，Windows `PermissionError [WinError 32]` 冒到 `main()`
-  把整场切断；产品侧 `app.log` 正常写到 12:27:07、无 Traceback、`crash.log` 不存在
-  （**ISSUES I106**，已 CLOSED）。第三场 24h 在 **4h28m**（12:28:46 → 16:57:00）按用户 ② 主动中止，
-  读数作废、现场保留。
-- **B · I106 修复 · churn 删除走 `_unlink_retry`** —— `tests/probes/p13_soak.py` 新增
-  `_unlink_retry(path, attempts=5, delay=0.2)`：5 次 ×0.2s 重试仍失败就**跳过并计数**，不再让
-  `PermissionError` 冒到 `main()`；结果 JSON/打印新增 `churn_unlink_skipped`。复现验证 held-open
-  0.4s（3 次）→ 跳过、after-close → 成功、released-mid-retry → 成功
-  （`.probe_work/r20_unlink_repro.log`）。12 小时场 `churn_unlink_skipped=0`。
-- **C · p12 增 `--c11-deep`（全部快照整库体检）** —— 默认口径不变：只对**最新**快照跑整库体检，
-  其余快照仅开库读版本（I98 乙边界）。新开关让每份快照都跑 `integrity_check` + 外键 + 空值检查；
-  夹具 10 份快照、故意损坏 `older-snapshot.db`：默认 **C11 绿**（按口径不展开旧快照），
-  `--c11-deep` **红并点名** `older-snapshot.db：integrity_check=*** in database main *** /
-  2nd reference to page 9 / Page 3 is never used / NULL value in documents.path_key`，
-  7 条自检 **VERDICT: ALL GREEN**（`.probe_work/r20_p12_deep_e2e.log`）。p12 主体拆出
-  `p12_inject.py`，主文件从 800 行降到 576 行。
-- **D · consistency / injection 跨轮快慢 A/B** —— 同一台机背靠背、顺序跑、不并行：injection
-  **A 852.0s / B 867.5s（+1.8%）**；九条探针单条最大差 +10.6%。与轮十八整链的 **674.2s** 相比，
-  九条**一起**慢到 **1.18–1.43x（均值 1.28x）**，没有一条单独变慢 —— 结论是**整机档位**
-  （负载 / 内存压缩 / 夜间频率），不是探针代码变化（`.probe_work/r20_inject_ab_summary.txt`）。
-- **E · I17 十屏核对包** —— 用轮十九的真桌面 10 张（1400×880，含暗色）拼 `contact_sheet.png`，
-  另出 `I17_CHECKLIST.md`（逐屏「看什么 / 过 / 不过 / 备注」）。**UI 代码零改动，故未重拍**；
-  这仍是**给你本人勾选**的材料，I17 不因此关闭（`.probe_work/screens_r18/`）。
-- **F · 真根漂移补账 + p12 真根复跑 19/19** —— 先做只读漂移速查（6 个监测根、约 22 分钟）：
-  C/E/F/G 零漂移；**D 根盘上 91 / 库内 90**（漏索引 2 份微信 PDF + 1 条约 341 页的 PDF 已被**跨盘
-  移到 H 根**、旧记录没打缺失戳）；**H 根盘上 1857 / 库内 1856**（就是那份被移过来的 PDF；跨盘复制
-  换了 inode，`_adopt_renamed` 认不出）。全部走产品路径：`scan.reconcile_path` × 3 建记录并抽正文
-  （doc **10992** 29 页 / **10993** 7 页 / **10994** 341 页、入库 338 页），`mark_missing` 给 doc 93
-  打戳。收尾库读数：**documents 10,991｜text_pages 1,975,611｜空正文 0｜待办 0**。p12 真根复跑
-  **19/19 全绿、未验 0**（05:30:41 → 06:43:39，4,378s）：C2 10,991；C3 六根 **68 / 91（标缺失 1）/
-  1967 / 5352 / 1655 / 1857** 各相等；C4 **1,975,611 / 1,975,611、漏 0 / 残留 0**；C5 1,975,611 页
-  六项自洽；C9 running 0（done 10,941 / failed 75）；C11 最新快照 11,686,936KiB@v7 整库体检
-  **939,804ms**、ok；C12 超页 0（`.probe_work/p12_real_root_r20.log` / `.json`）。
-  **计时口径**：C3 六行共享同一段函数耗时 **975,995ms**，不是六段相加。
-- **G · 回归 / 门禁 / 文档** —— 全量回归 **789 passed / 1 skipped / 0 failed / 0 error（285.82s，最终树）**；
-  `docs-inject + guards` **9 条 ALL GREEN、本次未跑 10 段**（`.probe_work/round20_regression_final.log` /
-  `round20_docs_guards.log` / `round20_docs_guards_final.log`）；台账 **106 行｜I1–I106 连续｜CLOSED 85｜MITIGATED 20｜OPEN 0｜WONTFIX 1｜
-  结构不合格 1 行（上限 1）：I35**，本轮 **I106 CLOSED**。文件长度守卫：`扫了 213 个 .py 与 31 个 .md｜
-  临近线 5 份`，最紧 `p13_soak.py` **794（余 6）**（p12 拆出 `p12_inject.py` 后从 800 降到 576，
-  `p12_consistency.py` 不再是临近项）。
 
 ## 分册：更早的轮次在两册
 
-2026-10-28 这一册再切一刀（**D-059** 第 4 条的再切线：活册 > 600 行）。切前 1178 行，
-`勾选轮（十九）` … `勾选轮（七）` 共 **631 行**逐字搬进 [`docs/CHANGELOG-ARCHIVE-2.md`](CHANGELOG-ARCHIVE-2.md)；
-`勾选轮（六）` 及更早仍在 [`docs/CHANGELOG-ARCHIVE.md`](CHANGELOG-ARCHIVE.md)。
-标题数守恒（搬前 26 个轮次标题 = 活册 13 + 分册二 13），一条没改、一条没删。
+2026-10-28 这一天第三次切（**D-059** 第 4 条的再切线：活册 > 600 行）。切前 599 行，
+`轮二十四` … `勾选轮（二十）` 共 **262 行**逐字搬进 [`docs/CHANGELOG-ARCHIVE-2.md`](CHANGELOG-ARCHIVE-2.md)（排在 `勾选轮（十九）` 之前，时间上更近）；
+`勾选轮（十九）` 及更早仍在同一册，`勾选轮（六）` 及更早仍在 [`docs/CHANGELOG-ARCHIVE.md`](CHANGELOG-ARCHIVE.md)。
+标题数守恒（搬前全部轮次标题 = 活册 + 分册二 + 第一分册，一条没改、一条没删）。
 
 写新一轮一律追加在本文件；本文件超过 600 行就把最早的一整批轮次整轮迁进**第二分册**（**D-059**）。
-本文件切册当时 **550 行**；写完轮三十三这一条后 **599 行（余 1）** —— 下一轮开篇先切册再写。

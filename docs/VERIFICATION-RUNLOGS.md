@@ -551,19 +551,109 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 - **CHANGELOG 599 行（余 1）**：下一轮**开篇先切册再写**。
 - ④ 24 小时 soak、⑨ injection 真空载（CPU<10%）、安装包与代码签名、隐私政策 —— **D-062 已定案「不做」**，不再列为待办；历史读数保留原样。
 
-> **本册末行现数（2026-10-28 轮三十三收尾取）**：`CHANGELOG 599（余 1）｜DECISIONS 720（余 480）｜本册 506 → 569（余 631）｜
-> 分册一 757（余 443）｜分册二 727（余 473）｜ISSUES 155｜UI-WIREFRAMES 1,009（余 191）`；**最紧的是 CHANGELOG（余 1）** ——
-> 下一轮开篇先切册再写（切法与轮三十三 ① 同一套：切前 md5 备份 + 拼回去逐字比对的脚本自检）。
-> **台账**：`117 行｜I1–I117 连续不重号｜CLOSED 90｜MITIGATED 24｜OPEN 2（I115 / I117）｜WONTFIX 1｜结构不合格 1 行（上限 1：I35）｜失效测试名 6 处 / 上限 6`；
-> 本轮 I116 **OPEN → CLOSED**、新开 I117 一行 OPEN，其余零状态迁移。
-> **测试**：整链 regression **823 passed / 1 failed / 1 skipped（250.68s，唯一失败是负载下的 G1 冷启动断言）**｜
-> guards 全量 **59 passed**（预检六场，末场＝待提交树 **19.61s**；此前 12.71 / 13.15 / 16.49 / 13.41 / 16.79s，快慢差来自负载不是代码）｜p12 真根 **19 条红 2**（C3·D 数据漂移 + C5 口径冲突）｜
-> 12 段一条命令 `合计判定 35 条｜本次未跑 0 段｜VERDICT: RED（3 条未过）`（≈6,429s）；`scripts/precheck.py` 末行 **ALL GREEN**（6/6，门禁 9 判定 / 未跑 10 段、台账 117 行在场）。
-> **真库现数（只读，02:01 取；链与回填之后零写入）**：`catalog.db 12,113,543,168 B｜documents 10,995｜text_pages 1,976,175 = content_fts 1,976,175｜
-> vector_meta 1,969,055｜vectors.npy 1,073,741,952 B（93.9% 容量）｜vector_status {'done': 8,692, 'na': 2,303}｜
-> ocr_status {'done': 2, 'na': 8,537, 'pending': 2,456}｜missing_since 1｜队列 {'index:done': 10,935, 'index:failed': 75, 'ocr:done': 2, 'scan:done': 5, 'vector:queued': 2}｜监测根 6 个｜schema 8`。
-> **临时文件**：`.probe_work/` 顶层 **752 项（13 个子目录）｜递归 1,194 文件｜861 MiB｜顶层 0 字节 79 个**；
-> `injection_inflight` **不在场**；本轮承重 `.probe_work/u33_changelog_split.py`、`.probe_work/u33_vector_backfill.*`、
-> `.probe_work/u33_selfcheck.*`、`.probe_work/u33_db_counts*`、`.probe_work/u33_precheck_final.*`、
-> `.probe_work/final_chain_r33.log` / `.probe_work/final_chain_r33.utf8.log`、`.probe_work/p12_real_root.json` / `.probe_work/p12_red_rows.txt` 留在顶层。
-> **会话日志体积（token 代理）**：**358,659,988 B｜110,220 行**（02:2x 取）vs 轮三十二基线 **352,780,358 B / 108,813 行** ⇒ **+5,879,630 B｜+1,407 行**。
+---
+
+## 4.45 轮三十四 · I115 甲 + I117 甲 + 删 2 条 `vector:queued` + 2 份微信 PDF 入库 + p12 真根 19 条 / 2 红（2026-10-28 02:0x → 04:2x）
+
+用户指令逐字：「① I115 跨卷搬移根因（推荐甲）｜② I117 C5 给 OCR 页级标记行豁免（推荐甲）｜
+③ 两条 vector:queued（甲 删 / 乙 开应用让 worker 跑完 / 丙 只记）｜④ C3·D 那 2 份微信 PDF 重扫。
+都跟进你的建议来」。四件全按推荐项做完；末尾 p12 真根 **19 条 / 红 2**，两条红都是新落盘的数据漂移 ——
+没有重跑到绿、没有抬任何阈值。
+
+**A · I115 甲：认改名补一条「按文件事实」的旁路**
+- `services/scan_service.py`：`_adopt_renamed` 拆成 `_renamed_by_inode`（同卷，`(device_id, file_id)`，
+  原逻辑原样搬过去）+ `_renamed_by_facts`（Windows 跨卷搬移是「复制 + 删源」、inode 换了，
+  退回 `(name, size_bytes, mtime_ns)`）。
+- 两条路共用同一条硬条件：候选**恰好一条**、旧路径**已不在盘上**；多于一条或任一项不等，一律不认 ——
+  「不猜」没有因为多开一条旁路而放宽。仓储新增 `documents.missing_by_facts()`：
+  只查 `missing_since IS NOT NULL` + `ORDER BY id LIMIT 2`（取两条只为分辨「恰好一条」）。
+- `tests/integration/test_scan_service.py` **38 passed**；新增 4 条（跨卷认回同一主键／只差 mtime／
+  只差 size（参数化 2 例）／事实对上多条时仍不猜）。**坏法真注入两次**：摘掉兜底 ⇒ 跨卷那两条红；
+  把「恰好一条」放宽成「取第一条」⇒ 三份同名那条红；撤掉还原全绿。
+
+**B · I117 甲：C5 只豁免「OCR 页级完成标记」**
+- `tests/probes/p12_consistency.py` 的 `c5_pages()` 把空串拆两半：`source_kind='ocr' AND char_count=0
+  AND ocr_version IS NOT NULL` 是标记行（`texts.ocr_versions_of()` 靠它判 `reused`，删了那几页会重烧），
+  其余才是零信息垃圾；**只有真垃圾 > 0 判红**，读数改成「空串 N 行（其中 OCR 页级标记 M、真垃圾 K）」。
+- 新文件 `tests/integration/test_consistency_c5.py` **2 passed**；坏法两向都真做过（删豁免 ⇒ 标记那条红；
+  把豁免放宽成「任何空串都算标记」⇒ 垃圾那条红）。`p12 --inject` **22/22 条坏法 + 口径边界 1/1 ALL GREEN**
+  （新增的那条坏法就是「原生正文页写成空串」）。
+
+**C · ③ 甲：单事务删 2 条 `vector:queued`**
+- 备份在先：`%TEMP%\pdfarchiver-u34-vector-queue-backup\catalog.db`，**12,113,543,168 B**
+  （00:06 那份快照，尺寸与删除前的库逐字节一致）。
+- 一个事务删 `kind='vector' AND state='queued'` 的两行（11019 → doc 10995、11020 → doc 10997，`attempts 0`）。
+  只读复核：`processing_jobs 11,019 → 11,017`｜两条 id 都不在｜`vector:queued` **0 行**｜外键孤儿 **0**｜
+  doc 10995 / 10997 仍 `vector_status=done` ⇒ `DELETE GOOD`。
+- **自己踩的坑（照记）**：第一版探针把两张表各数两遍，12 GB 冷读下 10 分钟没出数（CPU 只 144 → 162s，
+  瓶颈在磁盘）；杀掉自己的进程后改用廉价只读查询收口，没有再跑一次全表 count。
+
+**D · ④ 2 份微信 PDF 走产品路径入库（零裸 SQL）**
+- `ctx.scan.reconcile_path()` → `IndexService.index_document()` → `VectorService.request_vectors()`：
+  `dify安装攻略20261020.pdf` **1/1 页**（171ms）、`互联网流量集中、平台变现与商家经营成本研究.pdf`
+  **32/32 页**（1,129ms），两份 `text=native / fts=done`，doc **11000 / 11001**；向量回执
+  「点名 2 份｜该建 2 份｜新增任务 2 条」→ 随后 `vector:done 2`。
+- 库内：`documents 10,995 → 10,997`｜`text_pages 1,976,175 → 1,976,208`（**+33 = 1 + 32**，与页数对得上）｜
+  `vector_meta 1,969,055 → 1,969,088`（**+33**）｜`vector_status done 8,692 → 8,694`、`na 2,303` 不变。
+- **自检索 4/4 rank 1**：doc 11000 p1 **0.9296**（1,017 字）；doc 11001 p1 **0.9268**（48 字）、
+  p2 **0.9309**（127 字）、p4 **0.9329**（794 字）。
+- **自己踩的第二个坑**：`.probe_work/u34_rescan.py` 的等待循环调了不存在的 `status.queue_counts()`
+  （`grep -rn "def queue_counts" src/` 零命中），一跑就会白睡 40 分钟；向量任务确实跑完后我停了进程，
+  收口证据改用独立只读脚本补，JSON 里写明原因。
+
+**E · p12 真根复跑（02:56 → 04:07，约 71 分钟）—— 19 条 / 红 2 / 未验 0**
+- 末行 `VERDICT: RED（2 条未过）`。逐条计时：C1 **1,004,847ms**｜C3 六行同一个循环累计 **807,038ms**｜
+  C4 188,158ms｜C5 **1,341,650ms**｜C11 922,237ms｜C12 4,195ms｜C2 3,236ms｜其余 ≤216ms；
+  逐项合计 **4,271,616ms ≈ 4,271.6s**，与墙钟 71 分钟吻合。
+- 三件待验的都转绿：**`C3·D:\` 96 / 96**（轮三十三是盘上 96 / 库里 94）｜**C5「空串 6 行
+  （其中 OCR 页级标记 6、真垃圾 0）」**｜**C9 `running 0` + `{'done': 10,944, 'failed': 75}`**
+  （队列里再没有 `vector:queued`）。同场其余绿：C2 主记录 10,997 两项一致｜C4 正文 = 花名册 **1,976,208**｜
+  C7 `done 8,694 / na 2,303`｜C10 14 类｜C11 快照体检 922,221ms｜C12 0/0/0｜C13 六根同口径。
+- **两条新红，都是数据漂移不是代码**：`C3·lavie` 盘上 69 / 库里 68，漏 1 份
+  `20260812第196回 在AI时代，用AI完成弯道超车.pdf`（文件 mtime **02:11**）；`C3·H:\` 盘上 1,860 /
+  库里 1,857（已标缺失 1），漏 4 份，全在 `h:/others software/xjpdfeditor/` 与 `…/xunjiepdfconverter/sample/`
+  下（那两个目录时间戳 **02:04**）。两份都晚于轮三十三那场链 01:56 的收尾 —— 这一场里 E / F / G
+  三个根全相等（1,969 / 5,352 / 1,655），说明判据本身没问题。
+- **口径纪律**：没有为凑绿重扫、没有动任何阈值、`src/` 在这一段零改动；这一类「库只认上一次扫描」
+  见新开的 **ISSUES I118**。
+
+**F · 收尾**
+- 回归：`830 passed / 1 skipped（188.75s）`（轮三十三整链里是 823 passed + 1 failed，差的 7 条正是本轮新增：
+  4 条跨卷 + 2 条 C5 + 1 条参数化例；G1 冷启动那条这场是绿的 —— 安静窗口，不是改了阈值）。
+- guards **59 passed**（17.06s）；`scripts/precheck.py` 末行 **ALL GREEN**（2 步 / 红 0；门禁 9 判定 / 未跑 10 段）。
+- **预检途中逮到一条守卫到期并当场修掉（不抬线）**：`test_台账旧文件名不超过上限` 红在 **41 > 37**，
+  多出来的 4 处**全是本轮自己新写的空指** —— 两个重扫/自检探针的裸文件名（共三处）
+  与一个**还没建**的入口脚本名（I118 里推荐的那条）。按守卫自己的规矩改文档
+  （探针名写全 `.probe_work/` 前缀、未建的文件名改成描述），改完正好 **37 = 上限**，复跑全绿；
+  `PY_STALE_CAP` 一个字没动。**这条守卫连「描述它自己」的文字也数**：本轮第二节复核时，
+  我把上面这三个裸名原样写进本节又红成 40 > 37 —— 第二次改法是本节不复述文件名，只留描述。
+
+**G · 台账与文档**
+- I115 / I117 **OPEN → CLOSED**（两格都贴了实测读数与坏法）；新开 **I118**（C3 每场红的数据漂移，甲/乙/丙，推荐甲）。
+- `CHANGELOG` 先切册再写：活册 **599 → 338 行**，`轮二十四` … `勾选轮（二十）` **262 行**逐字搬进分册二
+  **647 → 914 行**（排在 `勾选轮（十九）` 之前），标题数守恒 **29 = 9 + 20**；切前两份原件 md5 备份。
+
+**H · 仍欠的**
+- **I118** 等勾选（要不要把「按监测根增量重扫」固定成一个入口）；`C:\` 1 份与 `H:\` 4 份新漂移要不要
+  补索引同样等勾选。
+- 四项「不做」（24 小时 soak / injection CPU<10% 真空载 / 安装包与代码签名 / 隐私政策）按 **D-062**
+  维持不做，不再列为待办。
+
+> **本册末行现数（2026-10-28 轮三十四收尾取，含本轮条目写完后复量）**：`CHANGELOG 393（余 207）｜DECISIONS 720（余 180）｜本册 569 → 659（余 541）｜
+> 分册一 1,064（余 136）｜分册二 914（余 286）｜ISSUES 156｜UI-WIREFRAMES 1,009（余 191）`；**最紧的是分册一（余 136）** ——
+> 它下一次到 1,200 才开第三册；活册切完 338、写进本轮条目后 393，离 600 还有 207 行，不必再切。
+> **台账**：`118 行｜I1–I118 连续不重号｜CLOSED 92｜MITIGATED 24｜OPEN 1（I118）｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35`；
+> 本轮 I115 / I117 **OPEN → CLOSED**、新开 I118 一行 OPEN，其余零状态迁移。
+> **测试**：回归 **830 passed / 1 skipped（188.75s）**｜guards 全量 **59 passed**（预检三场：修空指前 11.67s 红 1、修后 **17.06s** 全绿、
+> 写完全部收尾文档后的最终树复核 **10.91s** 全绿 —— 中间还有一场 40 > 37，见 F 节第二条；快慢差来自负载不是代码）｜
+> p12 真根 **19 条红 2**（C3·lavie 1 份 + C3·H 4 份，都是 02:04 / 02:11 新落盘的文件）｜
+> `p12 --inject` **22/22 + 1/1 ALL GREEN**｜`scripts/precheck.py` 末行 **ALL GREEN**（最终树最后一次：2 步 / 红 0，门禁 9 判定 / 未跑 10 段、台账 118 行在场）。
+> **真库现数（只读，04:1x 取；p12 与回填之后零写入）**：`catalog.db 12,113,711,104 B｜documents 10,997｜text_pages 1,976,208 = content_fts 1,976,208｜
+> vector_meta 1,969,088｜vectors.npy 1,073,741,952 B｜vector_status {'done': 8,694, 'na': 2,303}｜
+> ocr_status {'done': 2, 'na': 8,539, 'pending': 2,456}｜missing_since 1｜队列 {'index:done': 10,935, 'index:failed': 75, 'ocr:done': 2, 'scan:done': 5, 'vector:done': 2}｜
+> 监测根 6 个｜schema 8`。
+> **临时文件**：`.probe_work/` 顶层 **776 项（13 个子目录）｜递归 1,218 文件｜862 MiB｜顶层 0 字节 80 个**；
+> `injection_inflight` **不在场**；本轮承重 `.probe_work/u34_p12_real.log` / `u34_p12_real.json`、`.probe_work/u34_p12_inject.log`、
+> `.probe_work/u34_clear_vector_queue.*`、`.probe_work/u34_rescan.*`、`.probe_work/u34_selfcheck.*`、
+> `.probe_work/u34_regression.log`、`.probe_work/u34_precheck.log` / `u34_precheck2.log`、`.probe_work/u34_changelog_split.py` 留在顶层。
+> **会话日志体积（token 代理）**：**363,787,051 B｜111,516 行**（04:1x 取）vs 轮三十三基线 **358,659,988 B / 110,220 行** ⇒ **+5,127,063 B｜+1,296 行**。

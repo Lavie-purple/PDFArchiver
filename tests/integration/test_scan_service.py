@@ -200,6 +200,121 @@ def test_编辑器原子保存会被当成新文件而不是猜成同一个(ctx,
     assert ctx.documents.get(old_id).fts_status == "done", "旧记录的正文留在库里，找回来自不必重抽"
 
 
+def _cross_volume_move(src: Path, dst: Path) -> None:
+    """模拟 Windows 跨卷搬移：复制内容到新路径、保留 mtime、删源 —— 文件号因此换掉。"""
+    st = src.stat()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(src.read_bytes())
+    os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
+    src.unlink()
+
+
+def _pretend_new_inode(monkeypatch, path: Path, *, bump: int = 10_000_000) -> None:
+    """只给 `path` 换一个文件号，模拟「同一份内容、不同 inode」——
+    NTFS 上删源后号可能被复用，光靠真文件系统不能确定性地走到兜底分支。"""
+    import pdfarchiver.services.scan_service as scan_mod
+    from dataclasses import replace
+
+    target = identity_key(str(path))
+    real = scan_mod.read_identity
+
+    def _read(raw):
+        ident = real(raw)
+        if ident.path_key != target:
+            return ident
+        return replace(ident, file_id=(ident.file_id or 0) + bump)
+
+    monkeypatch.setattr(scan_mod, "read_identity", _read)
+
+
+def test_跨卷搬移换掉inode后按文件事实认改名(ctx, tmp_path, root, make_pdf, monkeypatch) -> None:
+    """**ISSUES I115** 甲：Windows 跨卷搬移 = 复制 + 删源，inode 换了，
+    `by_inode` 认不出来。三条文件事实（名字/大小/mtime）全等且旧记录已判缺失时必须认，
+    而且**主键不变** —— 用户打的分类、标签、正文索引都跟着这份文档走。"""
+    a = root("D盘")
+    b = root("H盘")
+    src = Path(make_pdf("D盘/这本书能让你睡得好.pdf", pages=2))
+    ctx.scan.scan_root(a)
+    doc_id = _doc_id(ctx, src)
+    _mark_done(ctx, doc_id)
+
+    dst = Path(tmp_path) / "H盘" / src.name
+    _cross_volume_move(src, dst)
+    vanished = ctx.scan.scan_root(a)
+    assert (vanished.missing, vanished.added) == (1, 0), vanished.summarize()
+    assert ctx.documents.get(doc_id).missing_since is not None
+
+    _pretend_new_inode(monkeypatch, dst)
+    report = ctx.scan.scan_root(b)
+
+    assert (report.adopted, report.added, report.missing) == (1, 0, 0), report.summarize()
+    assert ctx.documents.count() == 1, "同一本书不许留下两条主记录"
+    moved = ctx.documents.get(doc_id)
+    assert moved is not None and moved.path_key == identity_key(str(dst))
+    assert moved.missing_since is None and moved.fts_status == "done", \
+        "内容没动，正文索引与缺失戳记都要原地跟着主键走"
+
+
+@pytest.mark.parametrize("破点", ["mtime", "size"])
+def test_跨卷搬移差一项文件事实就不认(ctx, tmp_path, root, make_pdf, monkeypatch, 破点) -> None:
+    """兜底的判据是三项全等，差一项就不是同一份文件 —— 宁可多一条记录，不许错并。"""
+    a = root("D盘")
+    b = root("H盘")
+    src = Path(make_pdf("D盘/合同.pdf"))
+    ctx.scan.scan_root(a)
+    _mark_done(ctx, _doc_id(ctx, src))
+
+    dst = Path(tmp_path) / "H盘" / "合同.pdf"
+    _cross_volume_move(src, dst)
+    ctx.scan.scan_root(a)
+    st = dst.stat()
+    if 破点 == "mtime":
+        os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    else:
+        with dst.open("ab") as handle:
+            handle.write(b"%changed\n")
+
+    _pretend_new_inode(monkeypatch, dst)
+    report = ctx.scan.scan_root(b)
+
+    assert (report.adopted, report.added) == (0, 1), report.summarize()
+    assert ctx.documents.count() == 2, "文件名相同不等于同一份文件"
+
+
+def test_文件事实对上多条缺失记录时不猜改名(ctx, tmp_path, root, make_pdf, monkeypatch) -> None:
+    """同名、同大小、同 mtime 的两条缺失记录（用户确实可能有两份一模一样的拷贝）：
+    第三份出现时必须老实建新记录 —— 认哪条都是猜，而猜错就是把两份文档合成一份。"""
+    a = root("甲盘")
+    b = root("乙盘")
+    src = Path(make_pdf("甲盘/同名.pdf"))
+    payload = src.read_bytes()
+    st = src.stat()
+    twin = Path(tmp_path) / "乙盘" / "同名.pdf"
+    twin.parent.mkdir(parents=True, exist_ok=True)
+    twin.write_bytes(payload)
+    os.utime(twin, ns=(st.st_atime_ns, st.st_mtime_ns))
+    ctx.scan.scan_root(a)
+    ctx.scan.scan_root(b)
+    assert ctx.documents.count() == 2
+
+    src.unlink()
+    twin.unlink()
+    ctx.scan.scan_root(a)
+    ctx.scan.scan_root(b)
+    assert ctx.documents.count_missing() == 2
+
+    c = root("丙盘")
+    third = Path(tmp_path) / "丙盘" / "同名.pdf"
+    third.parent.mkdir(parents=True, exist_ok=True)
+    third.write_bytes(payload)
+    os.utime(third, ns=(st.st_atime_ns, st.st_mtime_ns))
+    _pretend_new_inode(monkeypatch, third)
+    report = ctx.scan.scan_root(c)
+
+    assert (report.adopted, report.added) == (0, 1), report.summarize()
+    assert ctx.documents.count() == 3
+
+
 def test_同inode多候选时不猜改名而是各建一条(ctx, root, make_pdf) -> None:
     """硬链接：两条路径同一个 inode。`by_inode` 给出多条候选时**必须**各建一条记录 ——
     认哪条都是猜，而猜错的代价是把用户的两份文档合成一份（SPEC：禁止自动合并）。"""

@@ -360,6 +360,20 @@ class DocumentRepository:
             """, (device_id, file_id)).fetchall()
         return [DocScanState(**dict(r)) for r in rows]
 
+    def missing_by_facts(self, name: str, size_bytes: int, mtime_ns: int) -> list[DocScanState]:
+        """跨卷搬移兜底（**ISSUES I115** 甲）：inode 换了（Windows 是「复制 + 删源」），
+        只能拿文件事实找。只返回**已判缺失**的记录 —— 还在盘上的文件不可能被「改名」过去；
+        `LIMIT 2` 是因为调用方只关心「恰好一条」，多取一条就够分辨歧义。"""
+        rows = self.engine.thread_connection().execute(
+            """
+            SELECT id AS doc_id, path_key, path, size_bytes, mtime_ns, device_id, file_id,
+                   sha256, fts_status, missing_since
+            FROM documents
+            WHERE missing_since IS NOT NULL AND name=? AND size_bytes=? AND mtime_ns=?
+            ORDER BY id LIMIT 2
+            """, (name, size_bytes, mtime_ns)).fetchall()
+        return [DocScanState(**dict(r)) for r in rows]
+
     def adopt_path(self, doc_id: int, *, path: str, path_key: str, name: str, ext: str,
                    size_bytes: int, mtime_ns: int, ctime_ns: int | None) -> bool:
         """移动 / 重命名：换路径、换身份键，**主键 id 不变**，所以分类、标签、集合关系原地保留。
