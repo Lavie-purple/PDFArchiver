@@ -185,6 +185,8 @@ scripts/
   real_corpus_first_scan.py    # 真语料首扫（10,977 份那条一次性链路，不属于产品代码）
   resume_indexing.py           # 续跑无主的 running 任务（**ISSUES I46** 的处置工具）
   g2_search_benchmark.py       # G2 搜索 P95 真库实测
+  rescan_roots.py              # 按监测根 / 点名文件增量重扫（**ISSUES I118** 的固定入口；默认只读预演，`--apply` 才写）
+  precheck.py                  # 收尾预检一键：`tests/guards` + 门禁 `--only docs-inject --only guards` 两段
   fix_bare_issue_refs.py       # 台账裸 `I<n>` 加命名空间的一次性改写（**ISSUES I35**）
   fix_bare_issue_refs_pass2.py # 同上一条的第二轮补漏
 docs/                     # 工程文档，入口是 docs/README.md；文件名见那张表

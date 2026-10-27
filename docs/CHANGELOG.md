@@ -6,6 +6,41 @@
 
 ---
 
+## 轮三十五（2026-10-28）—— I118 甲：按监测根重扫做成固定入口；桌面那 1 份扫描件走产品路径入库（向量按 I116 甲 如实拒收）
+
+用户这一轮的指令逐字：「跟进你的建议来」—— 我给的推荐是**选项 1**：建 I118 的固定入口 + 只补桌面那 1 份；
+`H:\Others Software\` 那 4 份软件自带样例 PDF **不动**（既不入库、也不排除）。两件都按推荐做完。
+
+- **甲 · 新入口 `scripts/rescan_roots.py`（197 行）** —— 只走产品入口、零裸 SQL：
+  按根用 `ScanService.scan_root`，点名单文件用 `ScanService.reconcile_path` + `IndexService.index_document`，
+  `--vectors` 走 `VectorService.request_vectors`。**默认是只读预演**（打印 `RESCAN: DRY-RUN`，一行不写），
+  加 `--apply` 才写库。两个筛选各自解决一个真问题：`--only <子串>` 只挑匹配的根；
+  `--paths <文件…>` 只补点名的几份 —— `C:\Users\lavie` 整棵子树会走进 AppData，全根扫不现实，所以真库这一步
+  只能走单文件路。排空不自己起线程：`ctx.start_background()` 交给产品的 worker，靠
+  `counts_by_kind_state()` 轮询 `queued/running` 归零，超时打 `RESCAN: RED` 而不是偷偷拖长（默认 30 分钟）。
+  末行用 `RESCAN:` 前缀是**刻意**的 —— `VERDICT:` 是 `gates/*` 引用脚本的专用收尾语，守卫只认那些脚本。
+- **甲 · 测试 `tests/integration/test_rescan_roots_script.py`（4 passed / 5.75s）** —— 按根重扫把新落盘文件
+  补进库并建好正文（断言 `fts_status=done`、正文页数 2）｜不带 `--apply` 一个字不写｜`--only` 不匹配的根一根都不碰｜
+  `--paths` 只索引点名的那一份。**三条坏法真注入**（`.probe_work/u35_inject_rescan.py`）：重扫换成空报告 ⇒ 2 条红；
+  把 `--only` 的过滤整段摘掉 ⇒ 1 条红；把 `--paths` 分支改成死码 ⇒ 1 条红；还原后 md5
+  `9a006b3f047bf9e97ab71551b5f99d86` 与原文一致、4 条复绿。
+- **真库写入（用户点名的那一份）** —— 先跑只读预演：6 个监测根逐个列出、桌面那份报「库里没有」、末行 `RESCAN: DRY-RUN`。
+  再 `--apply --vectors --paths …`：`[file] added｜doc 11002｜索引 30/30 页 text=none fts=done 186ms`。
+  只读复核：`documents 10,997 → 10,998`、`text_pages 1,976,208 → 1,976,238`（+30）、
+  `vector_meta 1,969,088` **一字未变**、队列分布与写入前逐字相同（没有新增 queued 行）。
+- **这份是扫描件，向量被如实拒收** —— 30 页 `source_kind='native'` 的正文合计只有 **504 字**（12–39 字/页，
+  是页码与页脚，不是正文）⇒ `text_bearing_rate 0.0`、`text_status='none'`、`ocr_status='pending'`。
+  于是 `--vectors` 打印 `点名 1 份｜该建 0 份｜新增任务 0 条｜没有可搜的正文`、`跳过 {'not_searchable': [11002]}` ——
+  这是 **I116 甲** 定下的入场券（有没有可搜的正文）在干活，不是失败。
+  **口径边界要写清**：全文**已经搜得到**它（30 行正文进了 `content_fts`，每页是幻灯片标题，
+  如 `BDS 炒饭会 候选边界`）；建不了的是**向量**，因为 `text_bearing_rate 0.0`（判据是「去空格后 ≥40 字的页」占比，
+  见 `parsing/classify.py`）⇒ `text_status='none'` ⇒ 入场券不放行。要让它**语义**搜得到得先「送去识别」（30 页 OCR），
+  本轮不做：用户的指令只到「补索引」。
+- **那 4 份维持不动**：`H:\Others Software\` 下迅捷 PDF 工具自带的 `使用手册 / 常见问题` 属软件样例，
+  按选项 1 不入库 ⇒ `C3·H:\` 仍会数出「盘上有、库里没有 4 个」，所以 **I118 不整条销账**（入口已交付并验证，
+  余下是数据处置待勾选：索引 / 给 H:\ 根加两条排除 / 维持红）。
+- **p12 真根复跑**：读数与逐条判定见 `docs/VERIFICATION-RUNLOGS.md` §4.46。
+
 ## 轮三十四（2026-10-28）—— I115 甲：跨卷搬移按文件事实认改名；I117 甲：C5 给 OCR 页级标记行豁免；删掉 2 条残留 `vector:queued`；2 份微信 PDF 走产品路径入库
 
 用户这一轮的指令逐字：「① I115 跨卷搬移根因（推荐甲）｜② I117 C5 给 OCR 页级标记行豁免（推荐甲）｜

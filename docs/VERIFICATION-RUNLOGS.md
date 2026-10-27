@@ -657,3 +657,79 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > `.probe_work/u34_clear_vector_queue.*`、`.probe_work/u34_rescan.*`、`.probe_work/u34_selfcheck.*`、
 > `.probe_work/u34_regression.log`、`.probe_work/u34_precheck.log` / `u34_precheck2.log`、`.probe_work/u34_changelog_split.py` 留在顶层。
 > **会话日志体积（token 代理）**：**363,787,051 B｜111,516 行**（04:1x 取）vs 轮三十三基线 **358,659,988 B / 110,220 行** ⇒ **+5,127,063 B｜+1,296 行**。
+
+
+## 4.46 轮三十五 · I118 甲 按监测根重扫做成固定入口 + 桌面 1 份扫描件入库（2026-10-28 05:0x → 05:5x）
+
+用户指令逐字：「跟进你的建议来」= 我给的**选项 1**：建 I118 的固定入口 + **只补桌面那 1 份**；
+`H:\Others Software\` 那 4 份软件自带样例 PDF 明确不动。两件都做完。
+
+**A · 入口 `scripts/rescan_roots.py`（197 行，零裸 SQL）**
+- 按根走 `ScanService.scan_root`；点名单文件走 `ScanService.reconcile_path` + `IndexService.index_document`；
+  `--vectors` 走 `VectorService.request_vectors`。**默认只读预演**（末行 `RESCAN: DRY-RUN`），`--apply` 才写库。
+  `--only <子串>` 选根、`--paths <文件…>` 只补点名的那几份 —— `C:\Users\lavie` 整棵子树会走进 AppData，
+  真库这一步只能走单文件路。排空不自己起线程：`ctx.start_background()` 交给产品 worker，
+  `counts_by_kind_state()` 轮询 `queued/running` 归零，超时打 `RESCAN: RED` 而不是偷偷拖长（默认 30 分钟）。
+  末行刻意用 `RESCAN:` 前缀 —— `VERDICT:` 是 `gates/*` 引用脚本的专用收尾语，守卫只认那些。
+- `tests/integration/test_rescan_roots_script.py` **4 passed / 5.75s**；**三条坏法真注入**
+  （`.probe_work` 下那个注入脚本：备份 → 改 → 跑 → 按条目名判红 → 还原）：重扫换成空报告 ⇒ 2 条红｜
+  把 `--only` 的过滤整段摘掉 ⇒ 1 条红｜把 `--paths` 分支改成死码 ⇒ 1 条红；还原后 md5
+  `9a006b3f047bf9e97ab71551b5f99d86` 与原文一致、4 条复绿（`INJECT: ALL CAUGHT（3/3）`）。
+
+**B · 真库写入：doc 11002（用户点名的那一份）**
+- 预演先跑：6 个监测根逐个列出（`last_full_scan_at` 都在）、桌面那份报「库里没有」、末行 `RESCAN: DRY-RUN`
+  （`.probe_work/u35_rescan_dry.log`，exit 0）。
+- `--apply --vectors --paths …`：`[file] added｜doc 11002｜索引 30/30 页 text=none fts=done 186ms`
+  （`.probe_work/u35_rescan_apply.log`）。只读复核（`.probe_work/u35_baseline_fast.log` 为写入前基线）：
+  `documents 10,997 → 10,998`、`text_pages 1,976,208 → 1,976,238`（+30）、`vector_meta 1,969,088` **一字未变**、
+  队列分布与写入前逐字相同 ⇒ **零新增 queued 行**。
+
+**C · 口径边界：这份扫描件「全文搜得到、向量建不了」**
+- 30 页 `source_kind='native'` 合计 **504 字**（12–39 字/页，是幻灯片标题，例 `BDS 炒饭会 候选边界`、`BDS 炒饭会 综合结论`）；
+  `text_bearing_rate 0.0`（判据是「去空格后 ≥40 字的页」占实际读到的页，见 `parsing/classify.py`）⇒
+  `text_status='none'`、`ocr_status='pending'` ⇒ `has_searchable_text()` 不放行向量。
+- 于是 `--vectors` 打印 `点名 1 份｜该建 0 份｜新增任务 0 条｜没有可搜的正文`、`跳过 {'not_searchable': [11002]}` ——
+  这是 **I116 甲** 的入场券在干活，不是失败。**全文通道照常**：30 行正文都进了 `content_fts`，搜标题能命中。
+  要让它**语义**可搜得先「送去识别」（30 页 OCR），本轮不做（用户指令只到「补索引」）。
+
+**D · 证据边界（明写，别当门禁读数用）**
+- **p12 真根整场本轮没跑完**：05:23:22 起跑，05:28 主动中止（用户要求收敛，不为复核一行拖 70 分钟），
+  `.probe_work/u35_p12_real.log` 只有数据根那一行 ⇒ **本场不作数、无读数**。
+- 因此 `C3·lavie` 转绿**本轮只有产品路径证据**（doc 11002 在场、path/size 与盘上一致、`fts_status=done`、30 行正文），
+  **没有门禁读数**；归**下一场整链**的 consistency 段复核。`C3·H:\` 按 **I119** 仍会红 4。
+
+**E · 台账与文档**
+- **ISSUES I118 OPEN → CLOSED**（入口已交付并验证，两格都贴读数与坏法）；新开 **I119 OPEN**（那 4 份样例的处置，甲/乙/丙，推荐甲＝给 `H:\` 根加两条排除规则）。
+- `CHANGELOG` 轮三十五条目；`docs/ARCHITECTURE.md` 的 `scripts/` 逐文件表补 **`rescan_roots.py`**，
+  顺带补上一直漏登的 **`precheck.py`**（轮二十三加的，之前没进那张表）。
+
+**F · 测试与收尾**
+- 全量回归 `pytest tests -q`：**834 passed / 1 skipped（217.71s）**，EXIT=0（`.probe_work/u35_regression.log`）。
+  比轮三十四的 830 passed 多 4 条，正是本轮新增的 `tests/integration/test_rescan_roots_script.py`。
+- `tests/guards` 全量：**59 passed（15.38s）**（`.probe_work/u35_guards_full.log`）。
+- **本轮没跑 p12**：真根整场 05:23 起跑、05:28 主动中止（见 D 节），也没为它补跑 `--inject` ——
+  入口的坏法证据是 `.probe_work` 下那个注入脚本的 3 向真注入（3/3 全逮 + md5 还原逐字节一致），不是 p12。
+- `scripts/precheck.py` **两场**：第一场 **红 1**（`tests/guards 58 passed / 1 failed`，13.23s）——
+  `test_doc_pointers.py` 的旧文件名上限 **38 > 37**，原因是我在 runlog 里裸写了 `.probe_work` 那个注入脚本的文件名，
+  守卫按「src/gates/tests/packaging/scripts 之外的文件名 = 旧指针」计；**改文档不抬上限**：三处裸文件名改成描述性写法后
+  复跑 **59 passed（14.01s）**、`gates/final.py docs-inject + guards` 9 判定全绿 ⇒ 末行 **VERDICT: ALL GREEN**（`.probe_work/u35_precheck.log`）。
+- 收尾时顺手清掉一个我自己误建的 0 字节 `Data/PdfArchiver/catalog.db`（只读查询时 sqlite 连接的产物，真库在 `data/` 下），`rm` 前后真库未受影响。
+
+> **本册末行现数（2026-10-28 轮三十五收尾取，含本轮条目写完后复量）**：`CHANGELOG 428（余 172）｜DECISIONS 720（余 180）｜本册 659 → 735（余 465）｜
+> 分册一 1,064（余 136）｜分册二 914（余 286）｜RUNLOGS 分册一 757（余 443）｜分册二 727（余 473）｜ISSUES 157｜UI-WIREFRAMES 1,009（余 191）`；
+> **最紧的仍是分册一（余 136）** —— 它下一次到 1,200 才开第三册；活册 CHANGELOG 切完 338、写进本轮条目后 428，离 600 还有 172 行。
+> **台账**：`119 行｜I1–I119 连续不重号｜CLOSED 93｜MITIGATED 24｜OPEN 1（I119）｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35`；
+> 本轮 I118 **OPEN → CLOSED**、新开 I119 一行 OPEN，其余零状态迁移。
+> **测试**：回归 **834 passed / 1 skipped（217.71s）**（多出的 4 条 = 新增的 `tests/integration/test_rescan_roots_script.py`）｜
+> `tests/guards` 全量 **59 passed（15.38s）**｜**p12 真根本轮无读数**（05:23:22 起跑、05:28 按用户「要收敛」要求主动中止 ⇒ 本场不作数，
+> 不为复核一行再拖 70 分钟）｜`p12 --inject` 本轮**未跑**｜`scripts/precheck.py` 末行 **VERDICT: ALL GREEN**（最终树最后一次）。
+> **真库现数（只读，05:33 取；`--apply` 那次写入之后零写入）**：`catalog.db 12,113,711,104 B｜documents 10,998｜text_pages 1,976,238｜
+> vector_meta 1,969,088｜vectors.npy 1,073,741,952 B｜vector_status {'done': 8,694, 'na': 2,304}｜
+> ocr_status {'na': 8,539, 'pending': 2,457, 'done': 2}｜missing_since 1｜队列 {'index:done': 10,935, 'index:failed': 75, 'ocr:done': 2, 'scan:done': 5, 'vector:done': 2}｜
+> 监测根 6 个`（`content_fts` 是 `text_pages` 的外部内容表，全表计数分钟级，本轮不单独计）。
+> **临时文件**：`.probe_work/` 顶层 **789 项（13 个子目录）｜递归 1,231 文件｜862 MiB｜顶层 0 字节 80 个**；
+> `injection_inflight` **不在场**；本轮承重 `u35_baseline_fast.log` / `u35_rescan_dry.log` / `u35_rescan_apply.log` /
+> `u35_verify_doc.log` / `u35_page_bodies.log` / `u35_guards_full.log` / `u35_inject_rescan`（注入脚本，备份件 `u35_rescan_roots.py.bak` 同留）/
+> `u35_p12_real.log`（中止场，只有数据根一行）/ `u35_regression.log` 留在顶层。
+> **会话日志体积（token 代理）**：**367,152,492 B｜112,278 行**（05:33 取）vs 轮三十四基线 **363,787,051 B / 111,516 行**
+> ⇒ **+3,365,441 B｜+762 行**；token 本身不可得（本环境 usage 恒 0，见内存 `reference-agent-worktime-token-metrics`）。
