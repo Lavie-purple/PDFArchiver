@@ -718,8 +718,8 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > **本册末行现数（2026-10-28 轮三十五收尾取，含本轮条目写完后复量）**：`CHANGELOG 428（余 172）｜DECISIONS 720（余 180）｜本册 659 → 735（余 465）｜
 > 分册一 1,064（余 136）｜分册二 914（余 286）｜RUNLOGS 分册一 757（余 443）｜分册二 727（余 473）｜ISSUES 157｜UI-WIREFRAMES 1,009（余 191）`；
 > **最紧的仍是分册一（余 136）** —— 它下一次到 1,200 才开第三册；活册 CHANGELOG 切完 338、写进本轮条目后 428，离 600 还有 172 行。
-> **台账**：`119 行｜I1–I119 连续不重号｜CLOSED 93｜MITIGATED 24｜OPEN 1（I119）｜WONTFIX 1｜结构不合格 1 行（上限 1）：I35`；
-> 本轮 I118 **OPEN → CLOSED**、新开 I119 一行 OPEN，其余零状态迁移。
+> **台账**：`119 行｜I1–I119 连续不重号｜CLOSED 93｜MITIGATED 24｜OPEN 0｜WONTFIX 2（I14 / I119）｜结构不合格 1 行（上限 1）：I35`；
+> 本轮 I118 **OPEN → CLOSED**、新开 I119 一行，随后按用户「暂时不改，维持现状」（丙）**直接 WONTFIX**，OPEN 归 0。
 > **测试**：回归 **834 passed / 1 skipped（217.71s）**（多出的 4 条 = 新增的 `tests/integration/test_rescan_roots_script.py`）｜
 > `tests/guards` 全量 **59 passed（15.38s）**｜**p12 真根本轮无读数**（05:23:22 起跑、05:28 按用户「要收敛」要求主动中止 ⇒ 本场不作数，
 > 不为复核一行再拖 70 分钟）｜`p12 --inject` 本轮**未跑**｜`scripts/precheck.py` 末行 **VERDICT: ALL GREEN**（最终树最后一次）。
