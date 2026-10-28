@@ -159,6 +159,14 @@ class TextRepository:
             " WHERE doc_id=? ORDER BY page_no", (doc_id,)).fetchall()
         return [TextPage(**dict(r)) for r in rows]
 
+    def body_of_page(self, doc_id: int, page_no: int) -> str | None:
+        """某一页的正文原文；没有这一页返回 None。库内问答的证据摘录取它（轮三十七 丁）——
+        一条证据只看一页，`pages_of` 会把整本拷进内存（946 页的最大单份，p2 实测），不干那个。"""
+        row = self.engine.thread_connection().execute(
+            "SELECT body FROM text_pages WHERE doc_id=? AND page_no=?",
+            (doc_id, page_no)).fetchone()
+        return row[0] if row else None
+
     def search_fts(self, match: str, filters: DocFilter, *, limit: int = 200) -> list[PageHit]:
         """trigram 短语检索。`match` 必须是 `indexing.fts.match_expression()` 产出的**已转义**串，
         不能是用户原始输入 —— FTS5 查询语法里的 `"`、`(`、`AND` 会被当成运算符。

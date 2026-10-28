@@ -46,7 +46,7 @@ def describe_channel(channel: str, query: str) -> str:
 
 
 def format_bm25(score: float) -> str:
-    """bm25 读数的唯一格式（`SearchResult.explain` 的正文分支用它）。
+    """bm25 读数的唯一格式（`SearchResult.suffix` 的正文 trigram 分支用它）。
 
     小库里这个数的绝对值会落到 1e-3 以下，两位小数直接量化成 `0.00` / `-0.00`——
     那与「这条通道没有得分」长得一模一样，正是**ISSUES I11**「界面不许伪装」要防的那类读数。

@@ -41,6 +41,7 @@ from pdfarchiver.ocr.budget import OcrBudget
 from pdfarchiver.ocr.engine import OcrEngine, OcrUnavailable
 from pdfarchiver.search.service import SearchService
 from pdfarchiver.semantic.search_service import SemanticSearchService
+from pdfarchiver.semantic.qa_service import QaService
 from pdfarchiver.semantic.classify_service import AIClassifyService
 from pdfarchiver.semantic.embedding import EmbeddingService
 from pdfarchiver.semantic.vector_store import VectorStore
@@ -96,6 +97,7 @@ class AppContext:
 
     界面**只许用** `paths` / `settings` / `status` / `session` / `scan` / `indexer` / `search` /
     `semantic_search` / `ai_classify` / `ocr` / `vector` / `dedup` / `backup` / `collection` /
+    `qa` /
     `patrol` / `archive` / `export` / `db_check` 这些**服务字段**（`archive` 是阶段 4 的归档与撤销入口，
     `collection` 是 **ISSUES I78** 乙的智能集合入口，`export` 是 **ISSUES I78** 丙 的分类清单导出入口，
     `db_check` 是 S7「库体检」面板的唯一取数口 —— 它自己持有 `HealthRepository` 与
@@ -138,6 +140,7 @@ class AppContext:
     indexer: IndexService
     search: SearchService
     semantic_search: SemanticSearchService
+    qa: QaService
     ai_classify: AIClassifyService
     ocr: OcrService
     vector: VectorService
@@ -290,6 +293,9 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
     # +9 句柄、约 +200 MiB 显存（DirectML），懒加载 276 ms；两个实例的输出逐位相同。
     vector_store = VectorStore(paths.root)
     semantic_search = SemanticSearchService(paths.root, vector_store, embedding)
+    # 库内问答（轮三十七 丁）：抽取式拼装层，共用上面那一只 SemanticSearchService ——
+    # 单例纪律与 ai_classify 同一条（I111 ⑤）。
+    qa = QaService(semantic_search, documents, texts)
     ai_classify = AIClassifyService(catalog, documents, embedding, vector_store)
     ocr_engine = OcrEngine()
     ocr = OcrService(documents, texts, jobs, ocr_engine,
@@ -341,7 +347,7 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       operations=operations, roots=roots, jobs=jobs, texts=texts, metadata=metadata,
                       app_settings=app_settings, status=status, session=session,
                       scan=scan, indexer=indexer, search=search,
-                      semantic_search=semantic_search, ai_classify=ai_classify,
+                      semantic_search=semantic_search, qa=qa, ai_classify=ai_classify,
                       ocr=ocr, vector=vector, archive=archive,
                       dedup=dedup, backup=backup, collection=collection, export=export,
                       patrol=patrol, events=events, db_check=db_check,

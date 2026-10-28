@@ -318,30 +318,30 @@ class SearchResult:
                        f"{hit.snippet.line() if hit.snippet else hit.doc.path}")
         return out
 
-    def explain(self, hit: Hit) -> str:
-        """一条命中"为什么被找到" —— S1 右栏那条解释带的唯一文案来源（轮三十六 丙 · 乙）。
+    def suffix(self, hit: Hit) -> str:
+        """一条命中"为什么被找到"的**行内短后缀**（轮三十七 甲）—— S1 右栏把它接在
+        `rows()` 那句的行尾，界面不自己拼（**ISSUES I60** 那族：文案只有后端一个 owner）。
 
+        轮三十六的整段解释带（选中即出、常驻三行）按线框 §A 甲 改成行内后缀：措辞必须
+        缩短，所以页码与出处**不再重复**——`rows()` 的行首已经带 `[第 N 页]` 与
+        `｜OCR 识别（可能有错字）`，后缀只补行首没有的那两样：通道口径与相关性分数。
         只用本对象与 `Hit` **取回来时本来就带着的**字段：不重跑查询、不新算分数。
-        三处非正文通道（文件名 / 路径 / 元数据）的 `Hit.score` 恒为 0.0，而正文走 LIKE 时
-        也是 0.0（`text.search_like` 的 docstring：「LIKE 没有相关性得分」）—— 所以**只在
-        trigram 那一支**才报 bm25，另两支一个字都不许提，否则屏幕上会出现一个 0.00 的假相关度。
+        非正文通道（文件名 / 路径 / 元数据）与正文 LIKE 的 `Hit.score` 恒为 0.0
+        （`text.search_like` 的 docstring：「LIKE 没有相关性得分」）—— 所以**只在
+        trigram 那一支**报 bm25，另几支一个字都不许提，否则行尾会出现一个 0.00 的假相关度。
         """
         if hit.field == FIELD_BROWSE:
-            return "浏览模式：没有输入查询词，本行来自按当前筛选列出的文档，不带命中位置"
+            return "未输入查询词，按当前筛选列出，不带命中位置"
         if hit.field != FIELD_BODY:
             where = hit.field_label + (f"·{hit.field_detail}" if hit.field_detail else "")
-            return (f"通道：{where}｜{where} 里含查询词（子串匹配）"
-                    f"｜不打 bm25，按字段权重排序（文件名 > 元数据 > 路径 > 正文）")
-        parts = [f"通道：正文｜{describe_channel(self.channel, self.criteria.text)}",
-                 f"第 {hit.page_no} 页" if hit.page_no else "整份文档"]
+            return f"{where} 含查询词（子串匹配，不打 bm25）"
+        n = len(self.criteria.text.strip())
         if self.channel == VIA_FTS:
-            # 「-0.00」与「没有得分」长得一样，格式的事归 `format_bm25` 一处管。
-            parts.append(f"bm25 {format_bm25(hit.score)}（越小越相关）")
-        if hit.source_label:
-            parts.append(hit.source_label)
-        if self.body_scan_incomplete:
-            parts.append(f"按 {LIKE_SCAN_ROWS:,} 页预算浅扫，未扫完")
-        return "｜".join(parts)
+            head = f"正文·trigram（{n} 字）·bm25 {format_bm25(hit.score)}"
+        else:
+            head = f"正文·慢速 LIKE（{n} 字，无索引，不打 bm25）"
+        # 「-0.00」与「没有得分」长得一样的事归 `format_bm25` 一处管（上面只管报不报）。
+        return head + ("｜浅扫未扫完（缺的是库里靠后的页）" if self.body_scan_incomplete else "")
 
 
 class SearchService:

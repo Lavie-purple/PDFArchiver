@@ -144,13 +144,16 @@ def test_状态并入_S7_之后注册表少一项且没有第二处读数() -> N
     3. 把状态页复制一份进 S7 而不是嵌控件 —— 那份副本已经在历史上漂过一次
        （"OCR 后端已交付"那句只存在于原件里）。
 
-    屏数仍是 **8**（D-039 的 S1–S8），注册表 10→9 只是把状态那一项搬进 S7，
-    不新增一屏，所以这里断言的是入口数，不是屏数。
+    屏数 D-039 定过 **8**（S1–S8），轮三十六线框 §D 丁 确认后新增 S9 → **9 屏**；
+    `search` 占位项并入 S1 但仍占一格（implemented=False），所以注册表是
+    9 屏 + 1 占位 = **10 项**：状态那项搬进 S7 减一，ask 加一。
+    这里断言的是入口数，不是屏数。
     """
     ids = [i.page_id for i in NAV_ITEMS]
     assert "status" not in ids, f"状态还挂在导航上，S7 里就同时有两处入口：{ids}"
-    assert len(ids) == 9 and len(set(ids)) == 9, f"注册表应当是 9 项且 id 唯一：{ids}"
+    assert len(ids) == 10 and len(set(ids)) == 10, f"注册表应当是 10 项且 id 唯一：{ids}"
     assert "monitor" in ids, "搬进 S7 之后 monitor 这一项是状态读数的唯一宿主"
+    assert "ask" in ids, "S9 库内问答在导航上（轮三十六线框 §D 丁）"
     assert NAV_ITEMS[0].page_id == "library", "首屏是文档库（S1），不是某个说明页"
 
 

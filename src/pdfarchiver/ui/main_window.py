@@ -18,6 +18,7 @@ from pdfarchiver import __version__
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.nav import NAV_ITEMS, NavItem
 from pdfarchiver.ui.pages.archive_page import ArchivePage
+from pdfarchiver.ui.pages.ask_page import AskPage
 from pdfarchiver.ui.pages.backup_page import BackupPage
 from pdfarchiver.ui.pages.categories_page import CategoriesPage
 from pdfarchiver.ui.pages.dedup_page import DedupPage
@@ -46,6 +47,7 @@ NAV_WIDTH = 200
 _NAV_ICONS: dict[str, str] = {
     "library": "\U0001f4c1",      # 📁 文档库
     "search": "\U0001f50d",       #  检索
+    "ask": "\U0001f4ac",          # 💬 库内问答
     "reader": "\U0001f4d6",       #  PDF 阅读
     "archive": "\U0001f4e6",      # 📦 归档预览
     "operations": "\U0001f4dd",   # 📝 操作日志
@@ -182,6 +184,11 @@ class MainWindow(QtWidgets.QMainWindow):
             # 命中面板的「跳到该页」与表格双击都发这个信号；接收方在这里，页面不必知道外壳的存在。
             page.open_in_reader.connect(self._open_in_reader)
             return page
+        if item.page_id == "ask":
+            page = AskPage(self.ctx)
+            # S9 证据卡双击 → S2：与 S1 同一份 `_open_in_reader` 载荷口径（doc_id, page_no）。
+            page.open_in_reader.connect(self._open_in_reader)
+            return page
         if item.page_id == "reader":
             return ReaderPage(self.ctx)
         if item.page_id == "archive":
@@ -224,6 +231,8 @@ class MainWindow(QtWidgets.QMainWindow):
         elif isinstance(page, CategoriesPage):
             page.reload()
         elif isinstance(page, LibraryPage):
+            page.reload()
+        elif isinstance(page, AskPage):
             page.reload()
         elif isinstance(page, DedupPage):
             page.reload()

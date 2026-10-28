@@ -56,6 +56,10 @@ class SemanticSearchService:
         """返回向量总数。"""
         return self._vectors.count()
 
+    def stats(self) -> tuple[int, int]:
+        """（向量条数, 覆盖文档份数）—— `VectorStore.stats()` 的直通口（轮三十七 丁）。"""
+        return self._vectors.stats()
+
     def close(self) -> None:
         """释放资源。"""
         self._vectors.close()

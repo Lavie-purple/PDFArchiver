@@ -337,6 +337,23 @@ class VectorStore:
         finally:
             conn.close()
 
+    def stats(self) -> tuple[int, int]:
+        """（向量条数, 覆盖文档份数），一次扫描出两个读数 —— S9 顶栏「范围」与
+        「向量 已建/未建」的唯一出处（轮三十七 丁）。
+
+        `COUNT(*)` 在 196.8 万行上实测 **25ms（温）/ 1.1s（冷）**（**ISSUES I111** ⑥ 的测量，
+        与 `search` 的秒级成本同量级）。这条只在 S9 页惰性构建与每次提问后调用，
+        不挂在巡检或建窗路径上 —— 那是 **ISSUES I109** 已经付过学费的禁区。
+        """
+        conn = self._connect()
+        try:
+            self._require_table(conn)
+            row = conn.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT doc_id) FROM vector_meta").fetchone()
+            return (row[0], row[1])
+        finally:
+            conn.close()
+
     def vector_indices_for_doc(self, doc_id: int) -> list[int]:
         """某文档在 vector_meta 里的所有 vector_idx。"""
         conn = self._connect()

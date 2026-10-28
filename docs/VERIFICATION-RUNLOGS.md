@@ -812,3 +812,59 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > **台账**：I11 维持 **MITIGATED**（①11/20 红，G15 不绿）、CLOSED 93｜MITIGATED 24｜OPEN 0｜WONTFIX 2（I14 / I119）不变。
 > **测试**：回归 **866 passed / 1 skipped（202.99s）**｜坏法注入：乙 8/8 红（md5 还原一致）｜丙 10/11 红（D2 如实记 0 red）｜
 > 甲 p25 10/10 红 + p23 26 条红｜I11 评测 ①红③绿（详见 D 节）。
+
+## 4.48 轮三十七 · 甲 命中解释改行内后缀 + 丁 库内问答新屏 S9（抽取式）+ 收尾（2026-10-28 12:0x → 23:0x）
+
+用户指令逐字：「§0+§A · 丙 · 命中解释 甲 +§B · 甲 · OCR 按需 跟进你的建议来+§C · 乙 · 启动即增量同步
+跟进你的建议来+§D · 丁 · 库内问答 甲 还有什么需要我确认」＋「换成甲」（§A 从丙升甲）＋「这四个都完成了吗」
+（收尾中追问，答：甲乙丙轮三十六落地、丁本轮以抽取式落地）。
+
+**A · 甲 命中解释 乙→甲（行内后缀）**
+- `SearchResult.suffix(hit)` 成为行内解释唯一来源（`search/service.py`）：解释直接缀在命中行尾
+  「`[第 N 页]… · 解释`」，S1 不再保留下方独立解释带；bm25 分数**只在 trigram 分支**给，
+  LIKE 分支没有相关性得分；语义命中显式写「非原文匹配」。
+- `test_hit_explain` 按 10 条重写（原 12 条里解释带专属的断言随形态退役）；**8 组坏法真注入全红**
+  （备份 → 改 → 跑 → 点名判红 → 还原 → md5 逐字节一致）；合并回归
+  `test_hit_explain + test_ui_tier + test_placeholder_palette + tests/guards` 绿。
+
+**B · 丁 库内问答新屏 S9（抽取式，不接生成模型——零幻觉零模型成本）**
+- 后端 `QaService.ask()`：`Answer(query, elapsed_ms, summary, note, evidences)`；
+  答案句「共找到 N 段相关正文，覆盖 M 份文档。」唯一 owner 是服务；证据卡头
+  「文件名｜第 N 页｜相似度 0.xx」唯一 owner 是 `Evidence.header()`；TOP_SEGMENTS=8、摘录 120 字、
+  `EXCERPT_NOTE`「这里是原文摘录，不是生成的话」；向量 0 时空态引导先去 S7 建语义索引。
+- 界面两栏（历史 240 / 答案 720，页宽 <960 收左栏 = D-040 的 S9 版）；证据卡双击 → S2，
+  载荷与 S1 `open_in_reader` 同口径 `(doc_id, page_no)`；范围读数与「向量 已建/未建」来自
+  `VectorStore.stats()` 同一次扫描（真库 196.9 万行 **25ms 温／1.1s 冷**，只在懒建页与问答后刷，I111⑥/I109 纪律）。
+- 架构守卫当场咬一条：`ask_page.py` 曾 import `semantic.qa_service.Evidence` —— ui 层禁入，
+  按守卫规则改鸭子类型（只读字段、丢注解），**没有为过守卫动守卫**。
+- **11 条断言全绿**（`tests/integration/test_ask_page.py`，3.23s）＋ **6 条坏法真注入全红**
+  （UI 拼答案句 / 卡头自拼 / 载荷丢页码 / 历史不置顶去重 / 左栏收起删掉 / 范围写死全库）；
+  **守卫当场逮到一条真缺陷**：`_remember_history` 只挡位置 0 的重复，
+  问「问题一→问题二→问题一」会出现两条问题一 —— 改 takeItem-摘除再插顶。
+- **一个 offscreen 陷阱（记进 dialog_doubles 头注的现场版）**：证据卡双击用例首跑挂死 9 分钟 ——
+  假路径触发 `reader_page` 的 `QMessageBox.critical().exec()`，offscreen 下不红、只永不结束；
+  修法 = `stub_message_boxes(monkeypatch)`（轮十五 甲 的既有道具），顺带多断两条
+  （切到 S2 可见 + critical 被捕获）。
+
+**C · 收尾四件事**
+- 全量回归 `pytest tests -q`：**878 passed / 1 skipped（257.80s）**，EXIT=0
+  （比轮三十六多 12 条 = test_hit_explain 12→10 重写 −2、test_ask_page +11、test_app_shell 随迁 +1 …净 +12）。
+- **整链 12 段一条命令**（20:48 → 22:57，分段合计 ≈7,058s，**36 判定 / 1 段红 / 未跑 0 段**）：
+  docs-inject 0.0s｜guards 2.9s｜regression 224.6s（878/1）｜coldstart **1.210s**（进程总 1.916s）｜
+  e2e 19.3s（冷启动 1.154s）｜injection 981.2s｜ui-inject 90.5s｜ocr 36.7s｜
+  **consistency 4,971.3s 真根 19 条红 2**｜soak 324.1s｜package 359.5s（整包 **400.1 MiB**）｜
+  g2 **P95 299.0ms**（CPU 43.6%）。
+  两条红都在 `C3` 双向对账：① `C3·H:\` 漏索引 4 份迅捷样例 = **ISSUES I119 WONTFIX 每场照记**
+  （用户 2026-10-28「暂时不改，维持现状」，不是新缺陷、不为它复跑）；② `C3·D:\` 盘 97 / 库 96，
+  漏索引 1 份 = 链跑期间微信 filestorage 新落的 PDF（数据漂移，不是代码缺陷）——入库要写真库，等用户勾选。
+  **本场口径 = 34/36 绿 + I119 照记 + C3·D 漂移 1 份待勾选，不许写成「整链 ALL GREEN」**；
+  阈值三处（G1 1.5s / G2 500ms / 忙线 60%）一个字没动。injection 本场 981.2s vs 轮三十六 697.4s
+  是整机档位（见 §4.46 同类），不换算。
+- 预检首场（写文档前）**ALL GREEN**（guards 59 passed 14.20s；docs-inject + guards 9 判定）。
+
+> **本册末行现数（2026-10-28 轮三十七收尾取，§4.48 写完后复量）**：`CHANGELOG 528（余 72）｜DECISIONS 752（余 148）｜本册 815 → 870（余 330）｜
+> ISSUES 157（本轮零新增）｜UI-WIREFRAMES 1,011（余 189）`；
+> **台账**：CLOSED 93｜MITIGATED 24｜OPEN 0｜WONTFIX 2（I14 / I119）不变；
+> `C3·D` 那 1 份漂移是数据事实不是台账行（同轮三十 b vlgari 先例），入库后由下一场整链复核。
+> **测试**：回归 **878 passed / 1 skipped（257.80s）**｜坏法注入：甲 8/8 红（md5 还原一致）｜S9 6/6 红｜
+> 整链 36 判定 34 绿 + C3 两条（I119 照记 + 漂移 1 份）。
