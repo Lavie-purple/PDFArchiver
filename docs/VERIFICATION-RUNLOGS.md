@@ -912,3 +912,54 @@ doc **11003**（微信 filestorage 2026-10 新落的那份），**201/201 页、
 
 > **本册末行现数（2026-10-29 轮三十八收尾取）**：`CHANGELOG 542（余 58）｜DECISIONS 752（余 148）｜
 > 本册 870 → 914（余 286）｜ISSUES 158（+1 = I120）｜UI-WIREFRAMES 1,011（余 189）`。
+
+## 4.50 轮三十九 · tier.py 浮层孤儿关闭按钮修复（用户勾「甲」，2026-10-29）
+
+- **现象**（用户桌面截图）：一个 135×59 的独立小窗漂在桌面，内容只有「✕ 关闭」——
+  tier 浮层的关闭按钮成了无父孤儿，被 Qt 提升成顶层窗口。
+- **根因**（`.probe_work/u39_tier_probe.log` 探针实测）：PySide6 6.8 对先 `add` 进**未安装**
+  子布局的控件不补 reparent，`parent()` 自构造起就是 `None`；窄档 `setVisible(True)`
+  一到，无父控件就地提升成顶层窗。
+- **修法**：label 与 close_button 构造时显式挂 `self`（tier.py）；`test_ui_tier` 新增
+  孤儿守卫（`close_button.window() is panel.window()` + 扫 `topLevelWidgets()` 里不许有
+  孤儿「✕ 关闭」QToolButton），坏法注入（拆掉挂父）当场红，**22/22 绿**。
+- 旧实例（PID 25492 + trampoline 25784）经用户授权杀掉，桌面清零；提交 `c0f7df9` 已推送。
+
+## 4.51 轮四十 · 导航收敛（删「检索」占位项 /「PDF 阅读」→「继续阅读」）+ 应用图标（用户逐字确认，2026-10-29）
+
+用户逐字：「跟进你的建议，同时这个项目窗体左上角是不是应该设计一下这个软件标志之类呢
+更像是产品，在桌面端隐藏时候也是空白 完善一下」。
+
+**A · 导航收敛**
+- `NAV_ITEMS` **10 → 9 项且全部已实现**：删 `search` 占位项（检索一直在 S1 顶部搜索框，
+  单独一格只会让人以为另有一屏）；`reader` 标题改「**继续阅读**」。
+- 「继续阅读」数据源唯一：`DocumentRepository.last_read()`（`last_read_at` 最新一份）；
+  行为挂在 `_on_nav_changed` 的 reader 分支（启动恢复路径同享），S1 双击跳转带
+  `_reader_nav_suppressed` 压住 resume；文件挪走降级状态栏提示，不弹模态框。
+- status_page「界面尚未实现」段空列表下连头一起不渲染（空段头 = 又一句过期散文）。
+
+**B · 应用图标**
+- `src/pdfarchiver/assets/app.ico`（256/128/64/48/32/16 多尺寸；源图 ImageGen 生成后裁掉水印）；
+  `app.py::_apply_app_identity`：`setWindowIcon` + `SetCurrentProcessExplicitAppUserModelID`
+  （首窗前设，失败仅警告不挡启动）；spec `datas` 收 `pdfarchiver/assets/`（**缺文件当场炸**），
+  EXE 段补 `icon=`（.exe 文件在资源管理器那一层的图标，与运行时窗口图标是两层）。
+
+**C · 守卫与读数**
+- 新增 `tests/integration/test_resume_reading.py` **6 条**；坏法注入两条：
+  ① resume 钩子摘除 → 3 条红；② S1 抑制位摘除 → 终态断言**不红**（载荷后开覆盖终态，
+  该断言分不出好坏已重写为钉「resume 调用本身」）→ 复注 **1 条红**，还原 6/6 绿。
+- `test_app_shell` 两处过期断言跟口径：注册表 10→9（+`"search" not in ids` 钉住）；
+  「未实现页」改测 PendingPage 兜底（注册表已无未实现项，合成 NavItem 直接构造）。
+- 受影响套件 **97/97 绿**（resume 6 + app_shell 10 + reader_assertions + status_readout +
+  ui_layout + ui_tier + placeholder_palette + ask_page）；G1 单场复测 **1.460s**（贴线，
+  整机档位口径不变，§4.46 同源）。
+- 全量回归 **884 过 / 1 红**（467.2s）：红的是 `test_进程级冷启动实测符合G1约定`，
+  state.log 读数 **cold 2.501s（import 段 1.831s）** —— 884 条测试压着磁盘跑出来的负载场。
+  安静复跑一次仍红 **2.915s（import 2.239s）**，当场 CPU **77%**（用户前台负载）；
+  而同代码本轮单跑实测 **1.492s 贴线过**（import 1.155s，pytest-7993 state.log 在档）。
+  三场 import 段 1.155 → 1.831 → 2.239s 纯随负载走，改动只加了一次 ctypes 调用与
+  一枚图标读入，不在 import 路径上 —— 按 §4.11/§4.13 先例负载场不作数、照记不换算，
+  G1 本轮的绿证据取同代码单跑 1.492s。
+
+> **本册末行现数（2026-10-29 轮四十收尾取）**：`CHANGELOG 573（余 27）｜DECISIONS 752（余 148）｜
+> 本册 965（余 235）｜ISSUES 158｜UI-WIREFRAMES 1,011（余 189）`。

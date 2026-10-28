@@ -159,6 +159,13 @@ class DocumentRepository:
                 "UPDATE documents SET last_read_page=?, last_read_at=? WHERE id=?",
                 (page, now_ts(), doc_id))
 
+    def last_read(self) -> Document | None:
+        """最近读过的那份（`last_read_at` 最新）。「继续阅读」导航项的唯一数据源。"""
+        row = self.engine.thread_connection().execute(
+            f"SELECT {_COLS} FROM documents "
+            "WHERE last_read_at IS NOT NULL ORDER BY last_read_at DESC LIMIT 1").fetchone()
+        return _to_doc(row) if row else None
+
     def list(self, limit: int = 500, offset: int = 0) -> list[Document]:
         rows = self.engine.thread_connection().execute(
             f"SELECT {_COLS} FROM documents ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?",

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -46,9 +47,8 @@ NAV_WIDTH = 200
 # 导航项对应的 Unicode 图标
 _NAV_ICONS: dict[str, str] = {
     "library": "\U0001f4c1",      # 📁 文档库
-    "search": "\U0001f50d",       #  检索
     "ask": "\U0001f4ac",          # 💬 库内问答
-    "reader": "\U0001f4d6",       #  PDF 阅读
+    "reader": "\U0001f4d6",       # 📖 继续阅读
     "archive": "\U0001f4e6",      # 📦 归档预览
     "operations": "\U0001f4dd",   # 📝 操作日志
     "duplicates": "\U0001f504",   # 🔄 重复检测
@@ -64,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctx = ctx
         self._cold_start = cold_start_seconds
         self._pages: dict[str, QtWidgets.QWidget] = {}
+        self._reader_nav_suppressed = False
         self.setWindowTitle(f"PDF 归档工具 v{__version__}")
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)  # D-039；同时是 I52 的甲案
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -119,8 +120,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_in_reader(self, payload: tuple[int, int | None]) -> None:
         """S1 的「跳到该页 → S2」与双击文档行都走这里（`page_no` 为 None = 从当前页开）。"""
         doc_id, page_no = payload
-        self._select_by_page_id("reader")
-        self._pages["reader"].open_document(doc_id, page_no=page_no)
+        self._reader_nav_suppressed = True
+        try:
+            self._select_by_page_id("reader")
+            self._pages["reader"].open_document(doc_id, page_no=page_no)
+        finally:
+            self._reader_nav_suppressed = False
+
+    def _resume_last_read(self) -> None:
+        """「继续阅读」导航项的唯一行为：接上最近读过的那份（轮四十用户勾选 ②乙）。
+
+        `open_document` 自己会落到 `last_read_page`（reader_page 那半边的既有逻辑），
+        这里只负责"挑哪份"。压着 `_reader_nav_suppressed` 时不跑 —— 那是 S1/S9 的
+        跳转正在打开指定文档，再把"最近读的那份"叠上去就是把打开的文件换掉。
+        没有任何阅读记录时诚实说出来，不伪装成一张空阅读器。
+        """
+        page = self._pages.get("reader")
+        if page is None or page._current_doc_id is not None:
+            return
+        doc = self.ctx.documents.last_read()
+        if doc is None:
+            page.status_label.setText(
+                "还没有阅读记录：去「文档库」双击一份 PDF，下次点「继续阅读」就从上次那页接着看。")
+            return
+        # `open_document` 打不开文件会弹模态框 —— 那是用户主动打开指定文档时的合理形状；
+        # 这里是导航自动打开，文件没了就安静退回提示，不拿对话框拦住导航。
+        if not Path(doc.path).exists():
+            page.status_label.setText(f"上次在读「{doc.name}」，但文件已不在原位置：{doc.path}")
+            return
+        page.open_document(int(doc.id))
 
     def _play_collection(self, entry) -> None:
         """S8 双击一条智能集合 → 切到 S1 并回放它存的那份条件（**ISSUES I78** 乙）。
@@ -222,6 +250,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack.setCurrentWidget(page)
         self.ctx.session.remember_nav_page(item.page_id)  # 立刻落库：重启后要能回到这一项
         self.statusBar().showMessage(self._status_text())
+        # 「继续阅读」（轮四十用户勾选 ②乙）：每次导航进阅读页且不是 S1 跳转带压时，
+        # 都尝试接上最近读的那份。启动恢复路径（last_nav_page 指到 reader）也走这里，
+        # 所以重启后直接落在「接着上次那页看」；重复调用由 `_current_doc_id` 守卫挡掉。
+        if item.page_id == "reader" and not self._reader_nav_suppressed:
+            self._resume_last_read()
 
     def _refresh_current(self) -> None:
         page = self.stack.currentWidget()

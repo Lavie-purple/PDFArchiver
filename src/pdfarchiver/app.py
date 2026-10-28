@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import logging
 import os
 import sys
@@ -13,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver import APP_NAME, __version__
 from pdfarchiver.config.paths import AppPaths
@@ -27,6 +28,24 @@ log = logging.getLogger("pdfarchiver.app")
 
 EXIT_OK = 0
 EXIT_BOOTSTRAP_FAILED = 2
+
+
+def _apply_app_identity(app: QtWidgets.QApplication) -> None:
+    """窗口/任务栏的应用身份（轮四十用户勾选 ③）：图标 + Windows 任务栏分组 ID。
+
+    AppUserModelID 必须在**第一个窗口显示之前**设置，否则 Windows 把进程归进
+    默认分组，任务栏悬停与固定显示的是 python/exe 的裸名；设置失败（非 Windows
+    或 API 不可用）不致命，只少分组。图标取包内 assets/app.ico（多尺寸，
+    冻结产物由 spec 的 datas 一起收进去），失败则留系统默认 —— 身份缺失不挡启动。
+    """
+    app.setWindowIcon(QtGui.QIcon(str(Path(__file__).parent / "assets" / "app.ico")))
+    if sys.platform != "win32":
+        return
+    try:
+        bool(ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            f"PdfArchiver.{APP_NAME}"))
+    except OSError:
+        log.warning("AppUserModelID 设置失败，任务栏将不按应用分组")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +69,7 @@ def run(argv: list[str] | None = None, process_started_at: float | None = None) 
     # 直接 new 一个会抛 "destroy the QApplication"，产品单次启动则永远走新建那一支。
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
+    _apply_app_identity(app)
 
     try:
         ctx = bootstrap(args.data_dir)

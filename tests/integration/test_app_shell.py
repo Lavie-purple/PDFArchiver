@@ -78,20 +78,21 @@ def test_点导航切页并把选择落库(window, ctx, qtbot) -> None:
     assert ctx.app_settings.get("ui.last_nav_page") == "reader", "选择要立刻落库，不是等关窗"
 
 
-def test_未实现页不放任何假控件(window, qapp) -> None:
-    unimplemented = [i for i in NAV_ITEMS if not i.implemented]
-    assert unimplemented, "用例前提：注册表里得有未实现项，否则这条测不到东西"
-    for item in unimplemented:
-        window._select_by_page_id(item.page_id)
-        _settle(qapp)
-        page = window.stack.currentWidget()
-        assert isinstance(page, PendingPage), f"{item.page_id} 未实现却画了真页面"
-        assert page.findChildren(QtWidgets.QTableWidget) == []
-        assert page.findChildren(QtWidgets.QProgressBar) == []
-        assert page.findChildren(QtWidgets.QPushButton) == []
-        assert item.page_id in page.findChild(QtWidgets.QLabel).text() or \
-            "未实现" in page.findChild(QtWidgets.QLabel).text(), \
-            "要写清卡在哪个决定上或标注未实现"
+def test_未实现页不放任何假控件(qapp) -> None:
+    """名字沿用历史台账里的那一份（改名会让活文档引用与台账旧名计数两头红），
+    前提在轮四十更新：注册表已无未实现项（「检索」占位项整条删除后全部 implemented），
+    PendingPage 只剩 `_make_page` 的兜底 —— 兜底也照旧不许放假控件，
+    所以用合成 NavItem 直接构造它来测，不再依赖注册表里真有占位项。"""
+    from pdfarchiver.ui.nav import NavItem
+
+    item = NavItem("example", "示例屏", "仅测试", False)
+    page = PendingPage(item)
+    assert page.findChildren(QtWidgets.QTableWidget) == []
+    assert page.findChildren(QtWidgets.QProgressBar) == []
+    assert page.findChildren(QtWidgets.QPushButton) == []
+    assert item.page_id in page.findChild(QtWidgets.QLabel).text() or \
+        "未实现" in page.findChild(QtWidgets.QLabel).text(), \
+        "要写清卡在哪个决定上或标注未实现"
 
 
 def test_关窗真的关掉连接并留下对账行(qapp, ctx) -> None:
@@ -145,13 +146,14 @@ def test_状态并入_S7_之后注册表少一项且没有第二处读数() -> N
        （"OCR 后端已交付"那句只存在于原件里）。
 
     屏数 D-039 定过 **8**（S1–S8），轮三十六线框 §D 丁 确认后新增 S9 → **9 屏**；
-    `search` 占位项并入 S1 但仍占一格（implemented=False），所以注册表是
-    9 屏 + 1 占位 = **10 项**：状态那项搬进 S7 减一，ask 加一。
+    状态那项搬进 S7 减一、ask 加一，回到 9 项占 9 屏。轮四十用户勾选 ①：
+    `search` 占位项整条删除（检索并入 S1，不留单独入口），注册表定为 **9 项且全部已实现**。
     这里断言的是入口数，不是屏数。
     """
     ids = [i.page_id for i in NAV_ITEMS]
     assert "status" not in ids, f"状态还挂在导航上，S7 里就同时有两处入口：{ids}"
-    assert len(ids) == 10 and len(set(ids)) == 10, f"注册表应当是 10 项且 id 唯一：{ids}"
+    assert "search" not in ids, "检索占位项已在轮四十整条删除，不许再占一格：{ids}"
+    assert len(ids) == 9 and len(set(ids)) == 9, f"注册表应当是 9 项且 id 唯一：{ids}"
     assert "monitor" in ids, "搬进 S7 之后 monitor 这一项是状态读数的唯一宿主"
     assert "ask" in ids, "S9 库内问答在导航上（轮三十六线框 §D 丁）"
     assert NAV_ITEMS[0].page_id == "library", "首屏是文档库（S1），不是某个说明页"

@@ -217,7 +217,11 @@ class StatusPage(QtWidgets.QWidget):
         # 为哪一段时间服务的"的前提。
         parts += ["", "== 全库同步到哪个时刻 =="] + self.ctx.status.sync_status().lines()
         parts += ["", "== 扫描与索引任务：进度 / 错误 / 重试 ==", *bg.lines(), *tasks.lines()]
-        parts += ["", "== 界面尚未实现 =="] + self._pending_block()
+        # 轮四十：检索占位项删除后 NAV_ITEMS 全部已实现，这一段整体空了 ——
+        # 空段头还挂着就是又一个"过期散文"，所以没有未实现项时连头一起不渲染。
+        pending = self._pending_block()
+        if pending:
+            parts += ["", "== 界面尚未实现 =="] + pending
         parts += ["", "== 还没接到界面上的动作 =="] + self._unwired_block()
         parts += ["", DISK_EFFECT_LINE]
         return "\n".join(parts)

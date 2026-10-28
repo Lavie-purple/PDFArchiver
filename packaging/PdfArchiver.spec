@@ -52,6 +52,14 @@ MIGRATION_FILES = sorted(
 )
 datas += [(os.path.join(_MIGRATIONS_SRC, _f), _MIGRATIONS_DEST) for _f in MIGRATION_FILES]
 
+# 应用图标（轮四十 ③）：app.py 用 `Path(__file__).parent / "assets" / "app.ico"` 找它，
+# 冻结后 `__file__` 在 `sys._MEIPASS/pdfarchiver/` 下，所以落点必须是 pdfarchiver/assets ——
+# 与迁移脚本同一族坑：纯数据文件不进 PYZ，spec 不收 = 冻结产物里窗口图标退回系统默认。
+_APP_ICON = os.path.join(SRC, "pdfarchiver", "assets", "app.ico")
+if not os.path.isfile(_APP_ICON):
+    raise RuntimeError(f"应用图标缺失：{_APP_ICON}（构建断言：宁可打不出包，也不打一个没图标的）")
+datas += [(_APP_ICON, os.path.join("pdfarchiver", "assets"))]
+
 # OCR 可选层：装了才收。没装就冻一个不含 OCR 的包，应用侧由 tests/integration/test_ocr_progress_and_budget.py
 # 那条子进程断言保证"起得来、并明确报不可用"。
 #
@@ -122,6 +130,9 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="PdfArchiver",
+    # .exe 文件本身的图标（资源管理器/桌面快捷方式那一层）：不设的话 exe 用 PyInstaller
+    # 默认图标，与应用窗口内的图标（app.py 运行时设）是两回事，两层都要有才算完整身份。
+    icon=os.path.join(SRC, "pdfarchiver", "assets", "app.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

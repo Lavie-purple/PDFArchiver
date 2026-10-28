@@ -6,6 +6,38 @@
 
 ---
 
+## 轮四十（2026-10-29）—— 导航收敛（删「检索」占位项 /「PDF 阅读」→「继续阅读」）+ 应用图标
+
+用户逐字确认（2026-10-29）：「跟进你的建议，同时这个项目窗体左上角是不是应该设计一下这个软件标志之类呢
+更像是产品，在桌面端隐藏时候也是空白 完善一下」。
+
+- **① 删「检索」占位项**：`NAV_ITEMS` 从 10 项回到 **9 项且全部已实现**（检索功能一直在 S1 顶部
+  搜索框，单独占一格只会让人以为另有一屏）；状态页「界面尚未实现」段在空列表下连头一起不渲染。
+- **② 「PDF 阅读」→「继续阅读」**：数据源唯一 —— `DocumentRepository.last_read()`
+  （`last_read_at` 最新一份）；行为挂在 `_on_nav_changed` 的 reader 分支上，启动恢复路径
+  （`last_nav_page` 指到 reader）同享。S1 双击跳转（`_open_in_reader`）带抑制位压住 resume，
+  不许先把最近读的那份真开一遍再换目标；文件被挪走时降级为状态栏提示，不弹模态框。
+- **③ 应用图标**：`src/pdfarchiver/assets/app.ico`（多尺寸 256/128/64/48/32/16，源图裁掉水印），
+  `app.py` 新增 `_apply_app_identity`（`setWindowIcon` + Windows `SetCurrentProcessExplicitAppUserModelID`
+  任务栏分组，必须在首窗前设）；spec 的 `datas` 收 `pdfarchiver/assets/`（缺文件当场炸 —— 同一族坑：
+  纯数据文件不进 PYZ，spec 不收 = 冻结产物退回系统默认图标），EXE 段补 `icon=`（.exe 文件本身
+  在资源管理器/快捷方式里的那层图标）。
+- **守卫**：新增 `tests/integration/test_resume_reading.py` 六条（无记录给指引 / 有记录接上那份并落页 /
+  挪走降级提示 / S1 带压不叠加【钉的是调用本身，终态断言分不出好坏】/ 注册表无占位项 / 图标非空多尺寸）；
+  两条坏法注入当场红；`test_app_shell` 两处过期断言跟口径（注册表 10→9；「未实现页」改测 PendingPage 兜底）。
+  受影响套件 97/97 绿；全量回归 884 过 / 1 红（G1 负载场照记不换算，绿证据取同代码
+  单跑 1.492s 贴线，见 RUNLOGS §4.51）。
+
+---
+
+## 轮三十九（2026-10-29）—— 甲 tier.py 浮层孤儿关闭按钮修复（`c0f7df9`）
+
+PySide6 6.8 对先 `add` 进未安装子布局的控件不补 reparent：tier 浮层窄档 `setVisible(True)` 把
+无父的「✕ 关闭」QToolButton 提升成 135×59 桌面顶层窗。修法：label + close_button 构造时显式挂 `self`；
+`test_ui_tier` 新增孤儿守卫（`window()` 判据 + `topLevelWidgets` 扫描），坏法注入当场红，22/22 绿。
+
+---
+
 ## 轮三十八（2026-10-29）—— 收尾双执行：C3·D 转绿复核 + I11 模拟真实用户评测（`src/` 与 `tests/` 零改动）
 
 用户「你就执行这两条」＋「你替我进行测试 模拟真实测试就好」。
