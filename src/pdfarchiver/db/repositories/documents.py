@@ -19,6 +19,7 @@ from typing import Iterable
 from pdfarchiver.db.engine import Engine
 from pdfarchiver.db.models import Document, now_ts
 from pdfarchiver.db.sqltext import like_contains, like_prefix
+from pdfarchiver.parsing.classify import OCR_PENDING
 
 _COLS = """
   id, path, path_key, name, ext, size_bytes, mtime_ns, ctime_ns, file_id, device_id, sha256,
@@ -322,6 +323,34 @@ class DocumentRepository:
             f"SELECT id FROM documents WHERE missing_since IS NULL AND fts_status IN ({_NEEDS_INDEX_MARKS})"
             " ORDER BY id LIMIT ?", (*NEEDS_INDEX_STATUSES, limit)).fetchall()
         return [int(r["id"]) for r in rows]
+
+    def ids_pending_ocr(self, filters: DocFilter, *, limit: int) -> list[int]:
+        """**某个筛选条件下**还没识别过的份 —— 「按当前筛选送识别」（轮三十六 甲）取名单的唯一出口。
+
+        口径是 `ocr_status='pending'`：`ocr_status_for` 只在"判定为需要 OCR 且还没跑"时给这个值
+        （原生文字版与整本读不出的都是 `na`），所以它天然就是"没有可搜正文的那一批"。
+        排序按名字（与浏览同一序），同一份筛选两次点出来的名单逐条相同。
+
+        **不碰 `text_pages`**：那张表 197.6 万行，**ISSUES I109** 已经证明在主线程上聚合它是
+        200 秒量级。份数与页数一律读 `documents`（`page_count` 是主记录页数，见 `OcrPlan.cost_line`
+        那句"按主记录页数算"）。
+        """
+        w = where_for_filter(filters)
+        rows = self.engine.thread_connection().execute(
+            f"SELECT d.id FROM documents d{w.sql_with('d.ocr_status = ?')}"
+            " ORDER BY d.name COLLATE NOCASE, d.id LIMIT ?",
+            (*w.params, OCR_PENDING, limit)).fetchall()
+        return [int(r["id"]) for r in rows]
+
+    def pending_ocr_totals(self, filters: DocFilter) -> tuple[int, int]:
+        """同一口径的**总数**：(份数, 主记录页数合计)。名单被 `limit` 截断时，
+        这里仍是完整的数 —— 界面那句"一共 N 份、本次最多排 M 份"的两个数就来自这一对。"""
+        w = where_for_filter(filters)
+        row = self.engine.thread_connection().execute(
+            "SELECT count(*) AS n, coalesce(sum(d.page_count), 0) AS pages"
+            f" FROM documents d{w.sql_with('d.ocr_status = ?')}",
+            (*w.params, OCR_PENDING)).fetchone()
+        return int(row["n"]), int(row["pages"])
 
     def scan_states_under(self, root_key: str) -> list[DocScanState]:
         """取某个监测根**子树内**的全部主记录投影，供扫描器对账。

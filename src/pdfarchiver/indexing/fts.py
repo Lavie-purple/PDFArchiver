@@ -43,3 +43,13 @@ def describe_channel(channel: str, query: str) -> str:
     if channel == VIA_FTS:
         return f"trigram 短语检索（{len(query.strip())} 字）"
     return f"慢速全文扫描 LIKE（{len(query.strip())} 字，<{MIN_FTS_CHARS} 字无法用索引）"
+
+
+def format_bm25(score: float) -> str:
+    """bm25 读数的唯一格式（`SearchResult.explain` 的正文分支用它）。
+
+    小库里这个数的绝对值会落到 1e-3 以下，两位小数直接量化成 `0.00` / `-0.00`——
+    那与「这条通道没有得分」长得一模一样，正是**ISSUES I11**「界面不许伪装」要防的那类读数。
+    量化到 0.00 的那一档改说「≈0」：有多少说多少，不印一个看着像坏了的小数。
+    """
+    return f"{score:.2f}" if abs(score) >= 0.005 else "≈0"

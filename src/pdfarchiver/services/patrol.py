@@ -17,6 +17,11 @@ P4 实测已经给过答案：300 个文件落盘一条不丢，但**被监听�
 
 时间口径只有一个，都在设置里：`scan_poll_seconds`（快路多久看一眼）与
 `scan_verify_minutes`（慢路最迟多久保证走一遍）。巡检器自己不猜默认值。
+
+**第一轮必定走慢路**（轮三十六 乙）：`scan_verify_minutes` 量的是**连续运行时间**，
+而应用一关一开，这个计数器就从 0 重来 —— 那个"最迟 30 分钟"在绝大多数会话里永远走不到点。
+所以 `poll()` 的第一次无条件排一场全量对账；它是增量的（没变的文件不排索引），
+代价是一次走树。
 """
 from __future__ import annotations
 
@@ -85,7 +90,13 @@ class Patrol:
         一个坏路径不许把定时器打死，那等于此后所有事件都没人管了。"""
         self._polls += 1
         report = PatrolReport()
-        due_by_clock = self._polls % self.verify_every_polls == 0
+        # **轮三十六 乙**：本进程的第一轮必定走一次慢路。
+        # `verify_every_polls` 量的是**连续运行时间**（`scan_verify_minutes=30` ⇒ 1800/5 = 360 次），
+        # 而应用不常驻：关掉再打开时这个计数器从 0 重来，那个"30 分钟"绝大多数会话里永远走不到点。
+        # 真库六根 `last_full_scan_at` 因此停在 2026-10-16（库里文档却已经涨到 10,998）——
+        # 关机期间磁盘上发生了什么，从来没有一路认过账。第一轮对一次账，增量成本只有一次走树 +
+        # 对没变的文件不排索引（`reconcile_identity` 的 `unchanged` 分支）。
+        due_by_clock = self._polls == 1 or self._polls % self.verify_every_polls == 0
 
         for event in self.buffer.drain():
             report.events += 1

@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 from pdfarchiver.ocr.budget import PAGE_MS_RANGE
-from pdfarchiver.services.ocr_service import (NAME_PREVIEW_LIMIT, SKIP_BUDGET, SKIP_CURRENT,
-                                             SKIP_LABELS, SKIP_NO_VERDICT, SKIP_NOT_NEEDED,
-                                             OcrPlan, SkippedDoc, SkippedReason)
+from pdfarchiver.services.ocr_service import (NAME_PREVIEW_LIMIT, PARTIAL_TAIL_TEXT, SKIP_BUDGET,
+                                             SKIP_BUDGET_SHORT, SKIP_CURRENT, SKIP_LABELS,
+                                             SKIP_NO_VERDICT, SKIP_NOT_NEEDED, OcrPlan, SkippedDoc,
+                                             SkippedReason)
 
 
 def _docs(*names: str) -> tuple[SkippedDoc, ...]:
@@ -84,19 +85,26 @@ def test_代价那句给的是主记录页数与实测区间两端() -> None:
                    pages_queueable=0, budget_remaining=6000).cost_line() == "这一批没有该跑的份，不烧页"
 
 
-def test_预算那三档说的是此刻够不够跑完这一批() -> None:
-    """**销账判定③**：预算是资源闸门，不许静默。三档各有各的措辞，一档都不许缺。
+def test_预算各档说的是此刻够不够跑完这一批() -> None:
+    """**销账判定③**：预算是资源闸门，不许静默。各档各有各的措辞，一档都不许缺。
 
-    `pages == remaining` 那一条钉的是差一错（`>` 写成 `>=` 就把"正好够"说成"不够"，
+    `pages == remaining` 那一条钉的是差一错（`>` 写成 `>=` 就把"正好够"说成"跑不到底"，
     而用户看到的是一句劝退的话 —— 屏幕上那句与真跑得到底会不会停是两件事）。
+    轮三十六 甲之后是**四档**：「用满」与「只排一部分」是两种用户动作，分开说；
+    「每一份都装得进去但合起来超余量」单独一档，把 partial 那句说在按下之前（**ISSUES I19**）。
     """
     def note(pages: int, remaining: int) -> str:
         return OcrPlan(named=1, queueable=(1,), skipped=(), pages_queueable=pages,
                        budget_remaining=remaining).budget_note()
 
     assert note(10, 0) == "今天的页预算已经用满：按下「排队」一条也不会进队列，明日自动恢复"
-    assert note(10, 1) == ("今日预算不够跑完这一批：跑满即停，剩下的明天自动回到待办"
-                          "（预算是资源闸门，强制也不绕）")
+    assert note(10, 4) == f"今天跑不到底（还剩 4 页，这一批共 10 页）：{PARTIAL_TAIL_TEXT}"
     assert note(10, 10) == "今日预算够跑完这一批", "正好够的时候不许说不够（差一错）"
     assert note(10, 11) == "今日预算够跑完这一批"
-    assert len({note(10, 0), note(10, 1), note(10, 10)}) == 3, "三档说成了同一句 = 有一档没算"
+    assert len({note(10, 0), note(10, 4), note(10, 10)}) == 3, "各档说成同一句 = 有一档没算"
+
+    short = OcrPlan(named=2, queueable=(1,),
+                    skipped=(SkippedReason(SKIP_BUDGET_SHORT, _docs("乙.pdf")),),
+                    pages_queueable=2, budget_remaining=4)
+    assert short.budget_note() == ("今日预算不够跑完这一批：只排预算内的份（今天还剩 4 页），"
+                                   "其余明日再排（预算是资源闸门，强制也不绕）")

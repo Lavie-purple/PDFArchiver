@@ -10,7 +10,7 @@
 而且坏因是三周前改 OCR 熔断器时往锚点中间插了一行。
 2026-10-18 的门禁就是这么红的（p10 的 #8、#26、#28 三条同时失配）。
 
-这条守卫只做一件事：**不跑 pytest**，把十份探针表里每条锚点拿来在目标文件里数一遍。
+这条守卫只做一件事：**不跑 pytest**，把十一份探针表里每条锚点拿来在目标文件里数一遍。
 口径与探针自己一致，不另立第二份：
 - `count(anchor) == 1`，按通用换行读入（p9/p10 的 `_apply` 就是这个式子）；
 - 目标文件不存在同样算失配。
@@ -47,6 +47,7 @@ import p21_saved_search_injection as p21  # noqa: E402
 import p22_category_export_injection as p22  # noqa: E402
 import p23_ocr_batch_injection as p23  # noqa: E402
 import p24_tag_merge_injection as p24  # noqa: E402
+import p25_ocr_on_demand_injection as p25  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -78,7 +79,7 @@ def _from_tuples(probe: str, mutations, path_at: int | None, anchor_at: int,
 
 
 def anchors() -> list[tuple[str, str, Path, str]]:
-    """十份探针的全部坏法锚点：(探针, 编号, 目标文件, 锚点)。"""
+    """十一份探针的全部坏法锚点：(探针, 编号, 目标文件, 锚点)。"""
     return [
         *_from_case_edits("p9", p9.CASES),
         *_from_case_edits("p10", p10.CASES),
@@ -90,6 +91,7 @@ def anchors() -> list[tuple[str, str, Path, str]]:
         *_from_case_edits("p22", p22.CASES),
         *_from_case_edits("p23", p23.CASES),
         *_from_case_edits("p24", p24.CASES),
+        *_from_case_edits("p25", p25.CASES),
     ]
 
 
@@ -120,16 +122,18 @@ def test_探针与其注入目标不许混用行尾() -> None:
            "p15_archive_ui_injection", "p16_doc_pointers_injection",
            "p17_handler_shape_injection", "p18_irreversible_source_injection",
            "p21_saved_search_injection", "p22_category_export_injection",
-           "p23_ocr_batch_injection", "p24_tag_merge_injection")),
+           "p23_ocr_batch_injection", "p24_tag_merge_injection",
+           "p25_ocr_on_demand_injection")),
     })
     mixed = [str(p.relative_to(REPO)) for p in paths if b"\r\r\n" in p.read_bytes()]
     assert not mixed, "这些文件里有 \\r\\r\\n（会被按通用换行数成两倍行数）：" + " ".join(mixed)
 
 
 def test_注入锚点表不许空转() -> None:
-    """十份探针都真在表里 —— 探针改名或表清空时，上面两条会静默变成永真。"""
+    """十一份探针都真在表里 —— 探针改名或表清空时，上面两条会静默变成永真。"""
     counts = {probe: sum(1 for row in anchors() if row[0] == probe)
-              for probe in ("p9", "p10", "p15", "p16", "p17", "p18", "p21", "p22", "p23", "p24")}
+              for probe in ("p9", "p10", "p15", "p16", "p17", "p18", "p21", "p22", "p23", "p24",
+                            "p25")}
     empty = [f"{k}={v}" for k, v in counts.items() if v == 0]
     assert not empty, f"这些探针一条锚点都没收集到：{' '.join(empty)}｜全表 {counts}"
 

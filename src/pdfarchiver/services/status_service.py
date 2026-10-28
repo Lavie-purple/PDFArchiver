@@ -14,6 +14,9 @@
   `count_ocr_pages(doc_id)` 给，两者只差范围，算法一份）。它要扫全表，是这里唯一一条
   量级跟着库走的读数，所以有一个开关能不要它（`with_ocr_pages`，**ISSUES I109** 丙），
   不要它时界面上写「未现数」而不是 `0 页`。
+- 「全库同步到哪个时刻」（`sync_status()`，轮三十六 乙）= 各**启用**根 `last_full_scan_at`
+  里最早的那一刻，外加 scan 任务排队/在跑条数与从未对过账的根数。取最早那一刻是保守口径：
+  只要还有一个根没对过账，就不存在"全库同步到某刻"这件事。
 
 这里不出现"就绪/正常"这类笼统结论，也不出现任何不是从查询里算出来的数。
 """
@@ -106,6 +109,48 @@ class TaskError:
     def line(self) -> str:
         who = self.doc_name if self.doc_name else "（不针对具体文档）"
         return f"· {self.kind}[{self.state}] 第 {self.attempts} 次尝试｜{who}｜{self.error}"
+
+
+@dataclass(frozen=True)
+class SyncStatus:
+    """「全库同步到哪个时刻」的唯一读数（轮三十六 乙）。
+
+    四个数字只碰两处便宜查询 —— `monitored_roots` 的几行与 `processing_jobs` 的一次
+    GROUP BY。**不碰 `text_pages`**：那条全表计数在真库上要 201–212 秒（**ISSUES I109** 丙），
+    而这一格挂在 5 秒巡检节拍上（状态栏那一格）。
+
+    `last_full_scan_at` 取的是**各启用根里最早的那一刻**，不是最新的那一刻：
+    "全库都对到过哪里"只有在每一根都对到过之后才成立，取最新那一刻会把
+    "还有 3 个根从没对过账"说成"同步到了今天"。从未对过账的根数单独给一格，
+    这样"从未"和"很早以前"在界面上始终是两句不同的话。
+    """
+
+    roots_enabled: int
+    roots_never_scanned: int
+    last_full_scan_at: int | None
+    scan_queued: int
+    scan_running: int
+
+    @property
+    def busy(self) -> bool:
+        return bool(self.scan_queued or self.scan_running)
+
+    def summary(self) -> str:
+        """状态栏那一格的一句话（`ui/main_window.py` 的常驻控件用它）。"""
+        if not self.roots_enabled:
+            return "同步：没有启用的监测根"
+        tail = "｜同步中" if self.busy else "｜空闲"
+        if self.roots_never_scanned:
+            return f"同步：{self.roots_never_scanned}/{self.roots_enabled} 个根从未全量对账{tail}"
+        return f"同步到 {format_ts(self.last_full_scan_at)}{tail}"
+
+    def lines(self) -> list[str]:
+        """S7 那一块的四行读数。排队与在跑分开写：只有一个 worker，排着不等于在走。"""
+        return [
+            f"  启用监测根 = {self.roots_enabled}（其中从未全量对账 {self.roots_never_scanned}）",
+            f"  全库同步到 = {format_ts(self.last_full_scan_at)}（口径：各启用根里最早的那一刻）",
+            f"  scan 任务：排队 {self.scan_queued}｜在跑 {self.scan_running}",
+        ]
 
 
 @dataclass(frozen=True)
@@ -210,6 +255,25 @@ class StatusService:
             jobs_by_state=self.jobs.counts_by_state(),
             app_setting_keys=self.app_settings.count(),
             db_path=str(self.engine.path),
+        )
+
+    def sync_status(self) -> SyncStatus:
+        """「全库同步到哪个时刻」+「此刻有没有一场在跑」（轮三十六 乙）。
+
+        口径只认 `monitored_roots.last_full_scan_at` 那一列 —— 它唯一的写入方是
+        `ScanService._record` → `RootRepository.mark_full_scan`（一棵子树走完才写），
+        所以这里没有第二本账，只做 min 与计数。
+        """
+        roots = self.roots.list_enabled()
+        stamps = [r.last_full_scan_at for r in roots]
+        never = sum(1 for s in stamps if s is None)
+        by_state = self.jobs.counts_by_kind_state()
+        return SyncStatus(
+            roots_enabled=len(roots),
+            roots_never_scanned=never,
+            last_full_scan_at=None if never or not stamps else min(stamps),
+            scan_queued=by_state.get(("scan", "queued"), 0),
+            scan_running=by_state.get(("scan", "running"), 0),
         )
 
     def read_tasks(self, *, max_attempts: int, with_ocr_pages: bool = True) -> TaskStatus:

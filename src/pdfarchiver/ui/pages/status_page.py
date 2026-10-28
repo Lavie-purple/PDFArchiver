@@ -212,6 +212,10 @@ class StatusPage(QtWidgets.QWidget):
         parts += ["", "== 设置（生效值 / 是否覆盖 / 来源）==", self.ctx.settings.describe()]
         parts += ["", "== 数据库 =="] + [f"  {ln}" for ln in st.lines()]
         parts += ["", f"== 默认分类写入结果 ==\n  {self.ctx.seed.describe()}"]
+        # 全库同步到哪个时刻（轮三十六 乙）：与状态栏那一格同一份读数、同一个方法，
+        # 所以两处不会出现两个口径。放在任务块之前 —— 它是判断"任务块里那些进度是
+        # 为哪一段时间服务的"的前提。
+        parts += ["", "== 全库同步到哪个时刻 =="] + self.ctx.status.sync_status().lines()
         parts += ["", "== 扫描与索引任务：进度 / 错误 / 重试 ==", *bg.lines(), *tasks.lines()]
         parts += ["", "== 界面尚未实现 =="] + self._pending_block()
         parts += ["", "== 还没接到界面上的动作 =="] + self._unwired_block()

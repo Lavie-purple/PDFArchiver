@@ -733,3 +733,82 @@ MemoTrace 目录从 D: 搬到 H:，**Windows 跨卷搬移会换 inode** ⇒ `_ad
 > `u35_p12_real.log`（中止场，只有数据根一行）/ `u35_regression.log` 留在顶层。
 > **会话日志体积（token 代理）**：**367,152,492 B｜112,278 行**（05:33 取）vs 轮三十四基线 **363,787,051 B / 111,516 行**
 > ⇒ **+3,365,441 B｜+762 行**；token 本身不可得（本环境 usage 恒 0，见内存 `reference-agent-worktime-token-metrics`）。
+
+## 4.47 轮三十六 · 乙 启动即增量同步 + 丙 命中解释 + 甲 OCR 按需 + I11 丙-甲 真库 20 条评测 + 收尾（2026-10-28 05:4x → 10:2x）
+
+用户指令逐字：「1+2+3+4」（四项产品建议全要）＋「都按你推荐」（八个编号决策全按推荐、两批执行：
+乙/丙/甲 + I11 本轮，丁 库内问答（S9 新屏，抽取式）与 8·屏位 下轮，且**先过线框确认**）。
+
+**A · 乙 启动即增量同步（I118 收口后状态读数的根因修复）**
+- 实测形状：真库六根 `monitored_roots.last_full_scan_at` 全停在 **2026-10-16**，而库里文档已 10,998。
+  根因不是巡检坏，是慢路按**连续运行时间**计时（`scan_verify_minutes=30` ⇒ 1800s/5s = 360 次轮询），
+  应用一关一开计数器从 0 重来 —— 那个"30 分钟"在绝大多数会话里永远走不到点。
+- 三处落点：`Patrol.poll()` 第一轮无条件排全量对账（`due_by_clock = self._polls == 1 or …`，
+  增量式：没变的文件不排索引）；`MainWindow.start_patrol()` 起定时器**当场**跑一轮 `patrol_tick()`；
+  `StatusService.sync_status()` 出 `SyncStatus`（启用根数 / 从未对账数 / `last_full_scan_at` = **各启用根里最早的那一刻** min / 排队与在跑分开）。
+- 读数挂两处、同一份 `lines()`：状态栏**常驻 widget**（不走 `showMessage`，不被巡检 5 秒消息冲掉）+ S7 状态页。
+- **10 条断言全绿**（`tests/integration/test_startup_sync.py`）＋ **8 条坏法真注入**
+  （`.probe_work/u36_inject_startup_sync.py`：备份 → 改 → 跑 → 按条目名判红 → 还原 → md5 核对）：
+  基线 10 passed；A 拆第一轮对账 ⇒ 5 failed（1/2/3 点名 + 7/9 连带）｜B 等第一个间隔 ⇒ 1｜C min 改 max ⇒ 1｜
+  D 从未对账分支拆掉 ⇒ 1｜E 停用根数进来 ⇒ 1｜F 同步读数改走临时区（真被冲掉的那条机制）⇒ 1｜
+  G 排队在跑并一句 ⇒ 1｜H S7 不铺 ⇒ 1；还原后 md5 逐字节一致，`INJECT: ALL CAUGHT`。
+  注入设计自我纠偏一处：原想把 `addPermanentWidget` 摘掉当 F 的坏法 —— 那不会红（测试断言的是文本不是可见性），
+  改成把 `refresh_sync_cell` 改走 `showMessage` 才是"被冲掉"的真机制。
+
+**B · 丙 命中解释 = 乙 选中即解释（#258）**
+- `SearchResult.explain(hit)` 是**唯一**解释文案来源（界面不各写一份）；bm25 分数**只在 trigram 分支**给
+  （LIKE 分支没有相关性得分，`format_bm25` 对 |score| < 0.005 印 `≈0` 防小数假精度）；语义命中显式写「非原文匹配」；
+  解释行常驻最小三行高（右栏不因切换命中而跳动）；浅扫截断与 OCR 未识别两条措辞进解释。
+- **12 条断言全绿**（`tests/integration/test_hit_explain.py`）＋ **A–G 共 11 组坏法**（记录在
+  `.probe_work/round36_injections.md`）：10 组如期红；**D2 如实记 0 red** —— 删 `_clear_hits` 的 `setText(EXPLAIN_IDLE)`
+  不会红，`QListWidget.clear()` 自己发 `currentItemChanged(None, prev)` 由 `_on_hit_current` 复位，
+  那行是意图声明不是机制，还原后测试不改（不会变红的断言当场不删，但坏法也不硬凑）。
+  合并回归 `test_hit_explain + test_ui_tier + test_search_service + test_theme_contrast = 69 passed`。
+
+**C · 甲 OCR 按需（两个入口）+ 预算不够 = 甲 只排预算内的**
+- 界面入口（OCR 批量页点名识别）与脚本入口（`scripts/` 路径）都接 `OcrService` 的按需计划；
+  预算不够时**贪心部分排队**：排得进的全排、排不进的整份列出来，`SKIP_BUDGET_SHORT`（预算还够一份都排不进）
+  与 `SKIP_BUDGET` 分开报，`budget_note()` 四档措辞（full/partial/short/empty）。
+- 常驻探针 **p25**（`tests/probes/p25_ocr_on_demand_injection.py`，**10 条坏法**）进 `gates/final.py` injection 段：
+  10/10 RED、基线 9 passed（`tests/integration/test_ocr_on_demand.py`）；锚点在场与行尾由
+  `tests/guards/test_probe_anchors.py` 钉住（现 11 个探针）。p23 重跑 **26 条坏法**全红。
+- 过程里守卫先报两处债：p23 的 U5 锚点漂移（上轮改措辞没同步锚点行尾）→ 修锚点；
+  `tests/unit/test_ocr_plan_reads.py` 一条断言还守旧契约 → 按四档新契约重写。
+
+**D · I11 丙-甲 真库自动造 20 条查询评测（#260，I11 的"查询来源"前置落地）**
+- 方法：seed 20261028 可复现；池 = native 正文 500–3000 字、文件在盘、哈希序
+  `(doc_id*2654435761 + page_no*40503) % 4294967291` LIMIT 2000，一份文档只取一页；每页造两条：
+  **自然句**（取整句、剥掉全部非 CJK 字符、12–60 字 —— 模拟"记得内容、忘了数字和英文"）与
+  **关键词**（最长两段 CJK 截 8 字，只记录不判分）。评测走**产品通路**：语义暴力扫（VectorStore，1,969,088 条）
+  + `TextRepository.search_fts/search_like`（`channel_for` 分派、LIKE 走 60,000 行预算），
+  只读连接 `mode=ro` + `_ReadOnlyEngine` 只暴露 `thread_connection()`。
+- 调参两次如实记：池 600 行只造出 16/20（语料被发票类短页主导），改 2000 行 + 下限 150→500 字后 20/20。
+- **四判定读数**（`.probe_work/u36_i11_eval.log` / `.json`）：
+  ① Recall@10（按文档）**11/20 → 红**（门槛 ≥18；按页严格口径 9/20，同红，不拿文档级读数遮）；
+  ② 互补性（FTS 召不回 & 语义召得回）**11/20 → 绿**（门槛 ≥4）；
+  ③ 不回归：RRF(k=60) top-1 **9/20 vs 纯 FTS top-1 1/20 → 绿**（top-10：RRF 12 / FTS 1；RRF 只离线比，产品无混合通道）；
+  ④ 可定位：违规 **0 条 → 绿**（每条命中带 doc_id + page_no + score ∈ [-1,1]）。
+- 未中 9 条拆账：8 条真语义未中 + 1 条数据缺口（doc 4935：native 正文在场、**0 条向量** ——
+  回填要写真库，等用户勾选，本轮不写）。**G15 仍不许宣布绿**（①没过）；
+  销账最后一环仍是「用户那 20 条真查询」或换口径再复测。已写 ISSUES I11（维持 MITIGATED）+ SEMANTIC-EVAL §四指针。
+
+**E · 收尾四件事**
+- 全量回归 `pytest tests -q`：**866 passed / 1 skipped（202.99s）**，EXIT=0（`.probe_work/r36_regression.log`）。
+  比轮三十五的 834 多 32 条 = 新增 `test_startup_sync(10) + test_hit_explain(12) + test_ocr_on_demand(9)
+  + test_ocr_batch_panel_ui 预算部分排队(1)`。
+- 清临时文件 3 个（引用先核零）：tests 误留的一条最小窗宽探针用例、
+  `.probe_work` 下的 OCR 注入脚本与最小窗宽量测脚本（文件名不裸写进本册 —— 守卫口径见轮三十五）。
+- 文档：CHANGELOG 轮三十六条目、ISSUES I11 改写、SEMANTIC-EVAL §四、UI-SCREENS §六（丁/S9 记待办）；
+  坏法总账 `.probe_work/round36_injections.md`（乙 8 + 丙 11 + 甲 10 条）。
+- **整链 12 段一条命令**（10:2x → 12:0x，36 判定 / **1 红** / 未跑 0 段）：回归 866/0/1（198.2s）｜
+  coldstart **0.953s**｜e2e 13.1s｜injection 697.4s（p25 10/10 红（有牙）等九条全绿）｜ui-inject 71.5s｜
+  ocr 30.4s｜**consistency 4,112.8s 真根 18/19**｜soak 320.7s｜package 267.0s（400.1 MiB）｜g2 **P95 299.0ms**（CPU 43.6%）。
+  唯一红 = **`C3·H:\` 漏索引 4 份迅捷样例 —— 正是 ISSUES I119 WONTFIX**（用户 2026-10-28「暂时不改，维持现状」
+  定下的每场照记红），不是新缺陷；**不许为它复跑、也不许写成「整链 ALL GREEN」**，本场口径 = **35/36 绿 + I119 照记**。
+  预检终场（最终树）**ALL GREEN**（首场红 1 = 又把 4 个临时文件名裸写进文档 41 > 37，改描述性写法复绿，上限未动）。
+
+> **本册末行现数（2026-10-28 轮三十六收尾取，§4.47 写完后复量）**：`CHANGELOG 483（余 117）｜DECISIONS 720（余 180）｜本册 736 → 807（余 393）｜
+> ISSUES 157（I11 行改写不增行）｜UI-WIREFRAMES 1,009（余 191）`；
+> **台账**：I11 维持 **MITIGATED**（①11/20 红，G15 不绿）、CLOSED 93｜MITIGATED 24｜OPEN 0｜WONTFIX 2（I14 / I119）不变。
+> **测试**：回归 **866 passed / 1 skipped（202.99s）**｜坏法注入：乙 8/8 红（md5 还原一致）｜丙 10/11 红（D2 如实记 0 red）｜
+> 甲 p25 10/10 红 + p23 26 条红｜I11 评测 ①红③绿（详见 D 节）。

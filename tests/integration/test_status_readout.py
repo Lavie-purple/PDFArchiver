@@ -211,28 +211,44 @@ def test_S3_的未接线说明只许与来源同生同灭(window, ctx, qapp, mon
 def test_S7上半区按内容给高不冻在两栏sizeHint的比例(window, ctx, qapp) -> None:
     """**ISSUES I75**：S7 上半区那条窄缝（48 行只看得见 12–14 行）不能是"比例分配"的结果。
 
-    判据按**最小窗高 720**（D-039 那档地板）反算，不是随手取的分数：
+    判据只钉**写进 `_balance_split_by_content()` docstring 的那条政策**，不钉窗高的任何分数：
+    上半区按内容要高、下半区朝自己的 `minimumSizeHint` 退、**退出来的每一像素都给上半区**。
+    所以地板档量"下半区到底了没有"、最大化档量"一屏看全了没有"。
+
+    地板档原先写的是 `blocks // 3` —— 那是**按内容算的分数**，而视口被下半区的物理地板卡死，
+    两者量的不是一件事：轮三十六只给上半区加了 5 行读数（47 → 52 blocks），门槛就从 15 抬到 17，
+    而实测视口仍是 15 行（`sizes=[280, 395]`，395 正是下半区自己的 `minimumSizeHint` 395），
+    于是分配完全正确却被判红。按内容涨的判据会跟着内容漂，按地板量的不会。
     改前 offscreen 实测（`.probe_work/i75_split_needs.py`）两栏 sizeHint 258 / 447 = 36.6%，
-    而窗口 720 / 800 / 1409 三档上半区**恒为 36%**（`sizes=[247,428] / [276,479] / [499,865]`），
-    可见行数 12 / 14 / 31（48 行的 25% / 29% / 64%）。按内容分配之后同一档实测 18 / 24 / 48 行
-    （37.5% / 50% / 100%），所以这里钉两档：**地板档 ≥ 内容行数的三分之一**、
-    **最大化档 1409 一屏看全**（那正是用户会做的动作，也是原报障里"最大化也不解决"那半句）。
+    720 / 800 / 1409 三档上半区**恒为 36%**（`sizes=[247,428] / [276,479] / [499,865]`），
+    可见行数 12 / 14 / 31；按内容分配之后三档实测 280 / 360 / 905px、可见 15 / 21 / 63 行。
     """
     block = _status_block(window, qapp)
     view = block.view
+    page = window._pages["monitor"]
     lh = view.fontMetrics().height()
     blocks = view.document().blockCount()
     assert lh > 0 and blocks > 0, "读数框没内容就量不出比例，这条断言会假绿"
 
-    for win_h, floor in ((720, blocks // 3), (1409, blocks)):
-        window.resize(1280, win_h)
-        _settle(qapp)
-        splitter = window._pages["monitor"].findChild(QtWidgets.QSplitter)
-        assert splitter is not None, "S7 取不到那个竖排 QSplitter"
-        visible = view.viewport().height() // lh
-        assert visible >= floor, (
-            f"窗口高 {win_h}：上半区视口只装得下 {visible}/{blocks} 行（要求 ≥ {floor}）"
-            f"，sizes={splitter.sizes()}")
+    # 地板档 720（D-039 那档最小窗高）：下半区必须已经退到自己的地板，退不动的才留给它。
+    window.resize(1280, 720)
+    _settle(qapp)
+    splitter = page._splitter
+    lower = splitter.sizes()[1]
+    min_lower = page._lower.minimumSizeHint().height()
+    assert min_lower < page._lower.sizeHint().height(), (
+        f"前提不成立：下半区「想要」的 {page._lower.sizeHint().height()}px 与它自己的地板 {min_lower}px "
+        "相等 —— 它没有可退的空间，下面那条判据就成了恒真，得换一档窗高或换判据")
+    assert abs(lower - min_lower) <= 2, (
+        f"窗口高 720：下半区拿了 {lower}px，而它自己的地板是 {min_lower}px —— "
+        f"还有 {lower - min_lower}px 能退给上半区，sizes={splitter.sizes()}")
+
+    # 最大化档 1409：一屏看全（原报障里"最大化也不解决"那半句）
+    window.resize(1280, 1409)
+    _settle(qapp)
+    visible = view.viewport().height() // lh
+    assert visible >= blocks, (
+        f"窗口高 1409：一屏只装得下 {visible}/{blocks} 行，sizes={splitter.sizes()}")
 
 
 def test_S7用户拖过分隔条之后缩放窗口不许抢回分配(window, ctx, qapp) -> None:

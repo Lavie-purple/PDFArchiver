@@ -24,7 +24,8 @@ from pathlib import Path
 
 from PySide6 import QtCore
 
-from pdfarchiver.services.ocr_service import SKIP_BUDGET, SKIP_LABELS, SKIP_NO_VERDICT, SKIP_NOT_NEEDED
+from pdfarchiver.services.ocr_service import (PARTIAL_TAIL_TEXT, SKIP_BUDGET, SKIP_BUDGET_SHORT,
+                                              SKIP_LABELS, SKIP_NO_VERDICT, SKIP_NOT_NEEDED)
 from pdfarchiver.ui.main_window import MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, NAV_WIDTH
 from pdfarchiver.ui.ocr_batch_panel import COLLAPSE_TEXT, EXPAND_TEXT
 from pdfarchiver.ui.pages.library_page import OCR_BTN_TEXT
@@ -353,8 +354,14 @@ def test_预算跑满时面板先说明天恢复而按下排队原样回预算�
 
 def test_预算不够跑完这一批时那句在面板上看得见(window, ctx, root, make_scanned_pdf,
                                               qapp, monkeypatch) -> None:
-    """闸门还没落下、但**今天跑不完**这一档：面板必须说"跑满即停，剩下的明天回到待办"，
-    而不是让人以为按了排队今天就全办完了。这一档仍然该排得进去（只有跑满才挡）。"""
+    """闸门还没落下、但**今天跑不完**这一档（轮三十六 甲改口径之后的两句话都要在屏上）。
+
+    这一档分两种，措辞不同、动作也不同，合成一句就等于抹掉一种：
+    ① 一份装不下余量 —— 它照样排进去，跑到余量用完停下记 `partial`（**ISSUES I19**），
+       面板必须说"跑不到底 + 剩余页明日回到待办"，否则用户以为按完今天就能全变 done；
+    ② 排在它后面的那些**整份**留到明天 —— 归进 `SKIP_BUDGET_SHORT` 并逐份列出来
+       （`SKIP_BUDGET` 是"一页都不剩"，那句是"别按了"，两者不是一个动作）。
+    """
     ids = [_scanned(ctx, root, make_scanned_pdf, name=f"扫描件{i}.pdf") for i in (1, 2)]
     monkeypatch.setattr(ctx.ocr.budget, "pages_per_day", 3)   # 这批要 4 页，今天只剩 3
     page = _library(window, qapp)
@@ -363,7 +370,9 @@ def test_预算不够跑完这一批时那句在面板上看得见(window, ctx, 
 
     page.ocr_btn.click()
     _settle(qapp)
-    assert "不够跑完这一批" in page.ocr_panel.budget_label.text(), page.ocr_panel.budget_label.text()
+    note = page.ocr_panel.budget_label.text()
+    assert "今天跑不到底" in note, note
+    assert PARTIAL_TAIL_TEXT in note, note
 
     page.ocr_panel.enqueue_btn.click()
     _settle(qapp)
@@ -371,6 +380,39 @@ def test_预算不够跑完这一批时那句在面板上看得见(window, ctx, 
     assert _queued(ctx) == before + 2, "预算还够排就该排进去，「跑不完」不是「不排」"
     assert "新增任务 2 条" in page.status_label.text(), page.status_label.text()
     assert page.status_label.objectName() != "danger"
+
+
+def test_预算只够一部分时排得下的照排其余逐份列出来(window, ctx, root, make_scanned_pdf,
+                                                      qapp, monkeypatch) -> None:
+    """**轮三十六 甲**：预算只剩 3 页、这一批 3 份各 2 页 —— 只排预算内的，排不下的
+    **逐份列出来**（分类名 + 点开指到具体哪几份），而不是像旧行为那样整批照排让 worker 空跑。
+
+    这条钉的是「只排预算内的」这半边：第一份 2 页、第二份装 1 页（跑到余量用完）、
+    第三份一页都不剩 ⇒ 进 `SKIP_BUDGET_SHORT`。
+    """
+    ids = [_scanned(ctx, root, make_scanned_pdf, name=f"扫描件{i}.pdf") for i in (1, 2, 3)]
+    monkeypatch.setattr(ctx.ocr.budget, "pages_per_day", 3)
+    page = _library(window, qapp)
+    _select(page, qapp, *ids)
+    before = _queued(ctx)
+
+    page.ocr_btn.click()
+    _settle(qapp)
+    rows = {r.item.reason: r for r in page.ocr_panel.reason_rows}
+    assert SKIP_BUDGET_SHORT in rows, f"排不下的份没单列一类：{list(rows)}"
+    row = rows[SKIP_BUDGET_SHORT]
+    assert row.title_label.text() == f"{SKIP_LABELS[SKIP_BUDGET_SHORT]}（1 份）", row.title_label.text()
+    row.toggle_btn.click()
+    _settle(qapp)
+    assert "扫描件3.pdf" in row.detail_label.text(), row.detail_label.text()
+
+    page.ocr_panel.enqueue_btn.click()
+    _settle(qapp)
+
+    assert _queued(ctx) == before + 2, (
+        f"预算内的两份该排进去（第 2 份跑到余量用完），实际新增 {_queued(ctx) - before} 条")
+    assert SKIP_LABELS[SKIP_BUDGET_SHORT] in page.status_label.text(), page.status_label.text()
+    assert "新增任务 2 条" in page.status_label.text(), page.status_label.text()
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,10 @@ from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 #: 所以写它的时候只有一处，读它的时候也只有一处 —— 两处各写一份就会有一天对不上。
 OCR_BTN_TEXT = "送去识别"
 
+#: 轮三十六 甲：「按当前筛选」那颗按钮的基础文案（与上面那颗认的东西不同 ——
+#: 它认 `filter_bar` 那份筛选，不认表格里的选中）。份数由 `PendingOcr` 递上来，不在界面里数。
+FILTER_OCR_BTN_TEXT = "按当前筛选送识别"
+
 
 class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
     """S1：宽档三栏常驻（分类树 | 文档表格 | 命中面板），窄档走 `ui/tier.py` 的降级。"""
@@ -138,6 +142,23 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self.filter_bar = FilterBar(self.ctx, on_query_changed=self._apply_query,
                                    set_status=self._set_status)
         center_lay.addWidget(self.filter_bar)
+
+        # —— 轮三十六 甲：「按当前筛选送识别」—— 解决"待识别 2,457 份，但入口只有'在表格里
+        # 勾几份'"。它排的是上面那份筛选下的**全部**待识别份（`ocr_status='pending'`），
+        # 名单与份数都来自 `ctx.ocr.pending_in` 一个出口；按下去先展开同一块批次面板算账
+        # （该跑/不跑/代价/预算），确认后才排队 —— 与「送去识别」同一条老路，不是第二个实现。
+        # 位置紧贴筛选条、**不跟**「送去识别」同一排：那一颗认"表格里勾了哪几份"，这一颗认
+        # "筛选命中的那一批"，两句并排在同一行会让人以为它们是同一件事的两种说法。
+        # 同理也不进 `ocr_row`：面板展开时「送去识别（选中 2 份）」会变宽，那一排实测已到
+        # 823 地板档的边上（`test_面板展开时页面与窗口都不许顶过地板宽度`）。
+        filter_ocr_row = QtWidgets.QHBoxLayout()
+        self.filter_ocr_btn = QtWidgets.QPushButton(FILTER_OCR_BTN_TEXT)
+        self.filter_ocr_btn.setObjectName("clearBtn")
+        self.filter_ocr_btn.setEnabled(False)
+        self.filter_ocr_btn.clicked.connect(self._on_filter_ocr_requested)
+        filter_ocr_row.addWidget(self.filter_ocr_btn)
+        filter_ocr_row.addStretch(1)
+        center_lay.addLayout(filter_ocr_row)
 
         # 文档表格
         self.doc_table = QtWidgets.QTableWidget()
@@ -212,6 +233,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         # 而单份不必看这份账 —— 按下去直接排队就是甲案那条老路。建来是隐藏的，不看时不占屏幕。
         self.ocr_panel = OcrBatchPanel(self.ctx, set_status=self._set_status)
         center_lay.addWidget(self.ocr_panel)
+        # 排完队之后重读一次待识别读数：新排的份此刻仍是 pending（要等 worker 跑完才变），
+        # 所以这个数不会立刻掉 —— 但它是**从库里读的**，不是界面自己减的（**ISSUES I60**）。
+        self.ocr_panel.enqueue_btn.clicked.connect(self._refresh_pending_ocr)
 
         # 状态栏
         self.status_label = QtWidgets.QLabel("共 0 份文档")
@@ -244,6 +268,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self._query: dict = {}
         self._current_docs: list = []
         self._selected_doc_id: int | None = None
+        # 「按当前筛选送识别」的读数（轮三十六 甲）：`PendingOcr` 或 None（还没读过）。
+        # 由 `_refresh_pending_ocr` 写，按钮与提示条都只认这一份，不各自再查一次库。
+        self._pending_ocr = None
         # —— 浏览分页（**ISSUES I51**）——
         # `_browse_active`：表里这一列是不是"浏览库"来的。是 → 滚动到底补一批；
         #   否 → 表里是查询命中（有上限），滚动到底什么都不该再加。
@@ -301,6 +328,10 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self._query = query
         self._start_browse()
         self._clear_hits()
+        # 换了筛选口径，提示条上那句"本次筛选里 N 份还没识别"与按钮上的份数都过期了：
+        # 先收起，再按新条件重读（读数只从 `ctx.ocr.pending_in` 出）。
+        self._update_ocr_hint(empty=False)
+        self._refresh_pending_ocr()
 
     def apply_saved(self, entry: CollectionEntry) -> None:
         """S8 双击一条集合 → 外壳把这条递到这里（**ISSUES I78** 乙 硬断言 (a)(d)）。
@@ -407,6 +438,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         # 原先那句 `f"关键词搜索命中 {len(docs)} 份…"` 正是线框点名的自算数）。
         # 中栏表里那些行仍是按 `hit.doc.id` 去重的结果，但那是**列表本身**，不是"显示的数"。
         self._set_status(result.status_line())
+        # 轮三十六 乙：一条都没命中时，如果这个筛选下真有没识别过的扫描件，就把原因摆到右栏。
+        # 有命中/有查询词但不为空时一律收起 —— 它不是常驻横幅，只在"搜不到"这个情境里说话。
+        self._update_ocr_hint(empty=not result.hits)
 
     def _set_status(self, text: str, *, danger: bool = False) -> None:
         """状态栏那一行的唯一出口：红字与常态由同一处切。
@@ -420,6 +454,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
 
     def _do_semantic_search(self, query: str) -> None:
         """语义搜索：基于向量相似度。"""
+        # 语义通道"没命中"的原因是向量库，不是"扫描件没识别过"（向量入场券 I116 甲已改成
+        # 有可搜正文才入场）—— 那条提示条讲的是关键词正文通道的事，这里一律收起。
+        self._update_ocr_hint(empty=False)
         try:
             results = self.ctx.semantic_search.search(query, top_k=50)
         except Exception as exc:
@@ -558,6 +595,36 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
                 self.doc_table.setItem(row, CATEGORY_COLUMN, category_cell(held.get(doc_id, [])))
         if self._selected_doc_id is not None:
             self._render_detail(self._selected_doc_id)
+
+    def _refresh_pending_ocr(self) -> None:
+        """按当前筛选重读"待识别"读数（轮三十六 甲）：按钮上的份数与提示条都用这一份。
+
+        数字与句子都不在这里算：份数/页数来自 `ctx.ocr.pending_in`（它再往下只有
+        `documents.pending_ocr_totals / ids_pending_ocr` 一条 SQL），界面只负责贴上去。
+        名单为空就把按钮置灰并收起提示条 —— 一颗点下去点不到任何一份的按钮不该亮着。
+        """
+        pending = self.ctx.ocr.pending_in(self._query)
+        self._pending_ocr = pending
+        self.filter_ocr_btn.setText(
+            f"{FILTER_OCR_BTN_TEXT}（{pending.documents:,} 份）" if pending.documents
+            else FILTER_OCR_BTN_TEXT)
+        self.filter_ocr_btn.setEnabled(bool(pending.ids))
+        self.filter_ocr_btn.setToolTip(
+            f"{pending.describe()}；按下去先展开这批的账（该跑/不跑/代价/今日预算），确认后才排队"
+            if pending.ids else "当前筛选里没有待识别的扫描件（已识别的与原生文字版都不在这一批）")
+        if not pending.ids:
+            self._update_ocr_hint(empty=False)
+
+    def _on_filter_ocr_requested(self) -> None:
+        """「按当前筛选送识别」/ 提示条那颗「送去识别这批」→ 同一块批次面板（轮三十六 甲）。
+
+        复用的是 I67 乙 那块面板：它拿到 id 之后自己去 `plan_ocr` 算账，界面不重算，
+        也不在按下按钮这一刻就写队列 —— 「先给账再排队」是那一块已验证的形状。
+        """
+        pending = self._pending_ocr
+        if pending is None or not pending.ids:
+            return
+        self.ocr_panel.open_for(list(pending.ids))
 
     def _on_ocr_requested(self) -> None:
         """「送去识别」：一份直接排队（**I67** 甲），两份以上先展开批次面板（**I67** 乙）。

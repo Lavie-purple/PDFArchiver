@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>轮三十六线框 · 检索解释 / OCR 按需 / 启动同步 / 库内问答 · 2026-10-28</title>
+<style>
+  :root {
+    --ink: #111;
+    --mid: #666;
+    --faint: #b0b0b0;
+    --hair: #dcdcdc;
+    --wash: #f4f4f4;
+    --bg: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1160px; margin: 40px auto 80px; padding: 0 28px;
+    line-height: 1.65; font-size: 14px;
+  }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 24px; }
+  header h1 { margin: 0 0 6px; font-size: 25px; letter-spacing: 1px; }
+  header .sub { color: var(--mid); font-size: 13px; }
+  nav.toc {
+    border: 1px solid var(--ink); padding: 10px 14px; margin: 18px 0 32px;
+    font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 24px;
+  }
+  nav.toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--mid); }
+  nav.toc a:hover { border-bottom-style: solid; }
+
+  section { margin-top: 48px; }
+  section > h2 { font-size: 20px; border-left: 4px solid var(--ink); padding-left: 10px; margin: 0 0 6px; }
+  section > .why { color: var(--mid); font-size: 13px; padding-left: 14px;
+                   border-left: 3px solid var(--faint); margin: 8px 0 20px; }
+  section > .why b { color: var(--ink); }
+
+  article.option { border: 1px solid var(--ink); margin: 22px 0 26px; }
+  article.option > .head {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 9px 14px; border-bottom: 1px solid var(--ink); background: var(--wash);
+  }
+  article.option > .head .tag {
+    border: 1px solid var(--ink); background: var(--ink); color: var(--bg);
+    font-size: 11px; padding: 1px 9px; letter-spacing: 2px; font-weight: 700;
+  }
+  article.option > .head .tag.alt { background: var(--bg); color: var(--ink); }
+  article.option > .head .name { font-weight: 700; }
+  article.option > .head .kbd { margin-left: auto; color: var(--mid); font-size: 12px; }
+  article.option > .body { padding: 16px; }
+  article.option > .foot {
+    border-top: 1px solid var(--hair); padding: 10px 14px; font-size: 13px; color: var(--mid);
+  }
+  article.option > .foot b { color: var(--ink); }
+
+  /* —— 线框本体：只用黑白灰，无图标 —— */
+  .wf { border: 1px solid var(--ink); background: var(--bg); font-size: 12px; }
+  .wf + .wf { margin-top: 18px; }
+  .wf .titlebar {
+    border-bottom: 1px solid var(--ink); padding: 5px 10px;
+    font-size: 11px; letter-spacing: 1px; color: var(--mid);
+  }
+  .wf .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    border-bottom: 1px solid var(--hair); padding: 7px 10px;
+  }
+  .wf .bar.tight { gap: 6px; }
+  .wf .body { display: flex; min-height: 120px; }
+  .wf .col { border-right: 1px solid var(--hair); padding: 8px 10px; flex: 1; }
+  .wf .col:last-child { border-right: 0; }
+  .wf .col.narrow { flex: 0 0 150px; }
+  .wf .col.mid { flex: 0 0 300px; }
+  .wf .col.right { flex: 0 0 300px; }
+  .wf .statusbar {
+    border-top: 1px solid var(--hair); padding: 5px 10px; color: var(--mid);
+    display: flex; gap: 16px; font-size: 11px;
+  }
+  .lab { color: var(--mid); font-size: 11px; letter-spacing: .5px; }
+  .box { border: 1px solid var(--hair); padding: 6px 8px; margin: 6px 0; }
+  .box.dash { border-style: dashed; }
+  .box.solid { border-color: var(--ink); }
+  .btn { display: inline-block; border: 1px solid var(--ink); padding: 2px 10px; font-size: 11px; }
+  .btn.ghost { border-color: var(--faint); color: var(--mid); }
+  .field { border: 1px solid var(--ink); padding: 4px 8px; flex: 1; min-width: 120px; color: var(--mid); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .rowline { padding: 3px 0; border-bottom: 1px dotted var(--hair); }
+  .rowline:last-child { border-bottom: 0; }
+  .rowline.sel { background: var(--wash); }
+  .suffix { color: var(--mid); font-size: 10px; }
+  .grouphead { color: var(--mid); font-size: 11px; padding: 5px 0 2px; letter-spacing: 1px; }
+  .spacer { flex: 1; }
+  .hint { font-size: 11px; color: var(--mid); margin-top: 6px; }
+  .pin { border: 1px dashed var(--mid); padding: 5px 8px; margin: 6px 0; font-size: 11px; }
+  .evidence { border-left: 3px solid var(--ink); padding: 4px 8px; margin: 8px 0; }
+  .evidence .src { color: var(--mid); font-size: 11px; }
+
+  table.dec { width: 100%; border-collapse: collapse; margin: 14px 0 8px; font-size: 13px; }
+  table.dec th, table.dec td { border: 1px solid var(--hair); padding: 8px 10px; text-align: left; vertical-align: top; }
+  table.dec th { background: var(--wash); border-color: var(--ink); }
+  table.dec td.n { width: 34px; text-align: center; font-weight: 700; }
+  table.dec td.pick { width: 190px; color: var(--mid); }
+  .reco { border: 2px solid var(--ink); padding: 12px 16px; margin: 22px 0; }
+  .reco h3 { margin: 0 0 8px; font-size: 15px; }
+  .reco p { margin: 4px 0; }
+  code { background: var(--wash); padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>轮三十六 · 四项功能线框</h1>
+  <div class="sub">
+    2026-10-28｜你已勾选「1+2+3+4」四项。按 AGENTS.md，<b>线框未经你逐屏确认前不写界面代码</b> ——
+    这一份就是逐屏线框 + 编号决策项。全图黑白灰、无图标、无真实数值（N / M / 时间一律占位）。
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#s0">§0 界面清单：8 屏 → 9 屏</a>
+  <a href="#sa">§A 丙 · 命中解释（S1）</a>
+  <a href="#sb">§B 甲 · OCR 按需（S1）</a>
+  <a href="#sc">§C 乙 · 启动即增量同步（状态栏 / S7）</a>
+  <a href="#sd">§D 丁 · 库内问答（新屏 S9）</a>
+  <a href="#se">§E 编号决策清单</a>
+</nav>
+
+<!-- ============================================================ -->
+<section id="s0">
+  <h2>§0 · 界面清单：8 屏 → 9 屏</h2>
+  <div class="why">
+    AGENTS.md 要求「新冒一个界面 = 回环节 2 重过」。四项里 <b>甲 / 乙 / 丙 都不新增屏</b>，
+    只在已确认的 <b>S1</b>（文档库 + 检索）与 <b>S7</b>（设置与状态）里加控件；
+    <b>丁 是新屏</b>，因此清单要从 8 屏改成 9 屏。
+  </div>
+
+  <table class="dec">
+    <tr><th>屏</th><th>内容</th><th>本轮变化</th></tr>
+    <tr><td class="n">S1</td><td>主窗口 · 库视图 + 搜索结果面板</td><td>丙：命中行解释；甲：OCR 按需入口</td></tr>
+    <tr><td class="n">S7</td><td>设置 · 监测与索引（上半区为运行状态）</td><td>乙：同步读数与「立即同步」</td></tr>
+    <tr><td class="n"><b>S9</b></td><td><b>库内问答</b>：就本库提问，答案带页码引用</td><td>本轮新增（丁）</td></tr>
+  </table>
+
+  <div class="pin">
+    <b>为什么 S9 不是并进 S1 右栏</b>：S1 右栏是三档结构（命中面板 / 文档详情 / AI 推荐分类），
+    再塞第四档会把 344px 宽的栏压成三段，而问答需要一块能放长答案的横向空间。
+    <b>但如果</b>你不想加导航项，§E 第 7 问给了「并进 S1」这个备选。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="sa">
+  <h2>§A · 丙 · 命中解释（改 S1 右栏，不新增控件）</h2>
+  <div class="why">
+    <b>问题</b>：现在一条命中只写「[第 12 页]｜OCR 识别（可能有错字） 文件名」。
+    用户看不出<b>为什么这条排第一</b>，也看不出<b>它是在文件名里命中的还是正文里命中的</b>。
+    <b>后端已经有全部原料</b>：<code>Hit.field</code>（四条通道）、<code>Hit.score</code>（正文 bm25，越小越相关）、
+    <code>Hit.body_source</code>（原生 / OCR）、<code>SearchResult.channel</code>（trigram / 慢速 LIKE）。
+    所以丙<b>不需要新查询、不需要新表</b>，只是把已有字段说成人话。
+  </div>
+
+  <article class="option">
+    <div class="head"><span class="tag">甲</span><span class="name">行内后缀 —— 每条命中自带解释</span>
+      <span class="kbd">新增控件 0 个</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S1 右栏 · 命中面板（当前查询）</div>
+        <div class="bar tight"><span class="lab">查询</span><div class="field">……</div><span class="btn ghost">语义</span></div>
+        <div class="body">
+          <div class="col">
+            <div class="grouphead">文件名</div>
+            <div class="rowline">合同扫描件.pdf <span class="suffix">· 文件名命中</span></div>
+            <div class="grouphead">正文</div>
+            <div class="rowline">[第 12 页] 甲方应当…… <span class="suffix">· 正文 bm25 4.21 · OCR</span></div>
+            <div class="rowline">[第 03 页] 乙方应当…… <span class="suffix">· 正文 bm25 5.77 · 原生</span></div>
+            <div class="grouphead">语义</div>
+            <div class="rowline">[整份文档] 相近段落 <span class="suffix">· 相似度 0.63</span></div>
+          </div>
+        </div>
+        <div class="statusbar"><span>命中 4 行</span><span>bm25 越小越相关</span></div>
+      </div>
+      <p class="hint">优点：一眼看完全部行，不用点。缺点：右栏宽 344px，后缀会把每条行挤长一行。</p>
+    </div>
+    <div class="foot"><b>代价</b>：最挤的那档（1024 窗宽、右栏 344px）要重测行高，
+      当前实测「组头 25px / 单行 38px / 三行路径 77px」，加后缀后单行大概率变两行。</div>
+  </article>
+
+  <article class="option">
+    <div class="head"><span class="tag alt">乙</span><span class="name">选中即解释 —— 列表保持干净，下方一条解释带</span>
+      <span class="kbd">新增控件 1 个（固定高度 2 行）</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S1 右栏 · 命中面板（当前查询）</div>
+        <div class="bar tight"><span class="lab">查询</span><div class="field">……</div><span class="btn ghost">语义</span></div>
+        <div class="body">
+          <div class="col">
+            <div class="grouphead">文件名</div>
+            <div class="rowline">合同扫描件.pdf</div>
+            <div class="grouphead">正文</div>
+            <div class="rowline sel">[第 12 页] 甲方应当……</div>
+            <div class="rowline">[第 03 页] 乙方应当……</div>
+            <div class="box solid">
+              <span class="lab">本条为什么被找到</span><br>
+              通道：正文（trigram）｜第 12 页｜bm25 4.21（越小越相关）｜来源：OCR 识别，可能有错字
+            </div>
+          </div>
+        </div>
+        <div class="statusbar"><span>命中 4 行</span></div>
+      </div>
+      <p class="hint">优点：列表干净，解释可以写整句（含「慢速 LIKE 只扫了前 6 万页」这类边界）。
+        缺点：要多点一下才能看到。</p>
+    </div>
+    <div class="foot"><b>代价</b>：解释带常驻会再吃掉右栏约 48px 高度；未选中时显示什么必须写死一句，
+      否则又会变成一块空白（<b>ISSUES I108</b> 同一种病）。</div>
+  </article>
+</section>
+
+<!-- ============================================================ -->
+<section id="sb">
+  <h2>§B · 甲 · OCR 按需（改 S1，复用现有批量面板）</h2>
+  <div class="why">
+    <b>现状</b>：真库 <code>ocr_status = pending</code> 有 <b>2,457 份</b>扫描件（约数十万页），
+    而入口只有「在表格里选中若干份 → 送去识别」。用户面对的是一个不知道从哪下手的队列。
+    <b>目标</b>：把「按需」两个字做成可操作的形状 —— <b>按文件夹成批</b>、<b>先给账再排队</b>。
+    <b>后端已就绪</b>：<code>OcrService.plan_ocr()</code> 与 <code>request_ocr()</code> 共用同一个 <code>_split()</code>，
+    现有面板 <code>ui/ocr_batch_panel.py</code> 直接复用，<b>不加数据模型</b>。
+  </div>
+
+  <article class="option">
+    <div class="head"><span class="tag">甲</span><span class="name">主动入口 —— 顶栏一颗「按文件夹送识别」</span>
+      <span class="kbd">按钮 1 颗 + 复用现有面板</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S1 主窗口 · 库视图（1280×800 档）</div>
+        <div class="bar">
+          <span class="lab">分类</span><div class="field">当前分类 / 当前筛选</div>
+          <span class="btn">按文件夹送识别</span>
+          <span class="btn ghost">加标签</span>
+        </div>
+        <div class="body">
+          <div class="col narrow"><span class="lab">分类树</span>
+            <div class="rowline">全部</div><div class="rowline sel">合同</div><div class="rowline">发票</div></div>
+          <div class="col mid"><span class="lab">文档表格（当前筛选 N 份）</span>
+            <div class="rowline">…</div><div class="rowline">…</div><div class="rowline">…</div></div>
+          <div class="col right"><span class="lab">命中面板</span><div class="rowline">…</div></div>
+        </div>
+        <div class="bar" style="border-top:1px solid var(--hair);border-bottom:0;">
+          <div class="box solid" style="flex:1;margin:0;">
+            <b>按文件夹送识别 · 合同（当前筛选）</b><br>
+            该跑 <b>N</b> 份 / <b>M</b> 页｜不跑 K 份（已识别 / 没有可识别页 / 缺文件）｜预估 T 分钟<br>
+            今日预算还剩 <b>P</b> 页 —— 不够跑完，超出部分怎么处理见下<br>
+            <span class="btn">只排预算内的</span> <span class="btn ghost">全排（超出排到明天）</span> <span class="btn ghost">取消</span>
+          </div>
+        </div>
+        <div class="statusbar"><span>共 N 份文档</span><span>表格里 M 行</span></div>
+      </div>
+      <p class="hint">面板就地展开在表格下方（沿用已验证的 I67 乙 形状），不是模态框。</p>
+    </div>
+    <div class="foot"><b>代价</b>：顶栏已有一颗「送去识别（选中 N 份）」。
+      两颗按钮同屏会不会让人分不清，是这一问要你定的。</div>
+  </article>
+
+  <article class="option">
+    <div class="head"><span class="tag alt">乙</span><span class="name">情境入口 —— 只在「搜不到 / 打开无正文」时出现</span>
+      <span class="kbd">提示条 1 条（条件可见）</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S1 主窗口 · 命中为 0 时</div>
+        <div class="bar"><span class="lab">查询</span><div class="field">……</div><span class="btn ghost">语义</span></div>
+        <div class="body">
+          <div class="col mid"><span class="lab">文档表格</span><div class="rowline">…</div><div class="rowline">…</div></div>
+          <div class="col right">
+            <div class="box dash">
+              本次筛选里 <b>N</b> 份扫描件没有可搜正文（共 <b>M</b> 页），
+              所以正文通道搜不到它们。<br>
+              <span class="btn">送去识别这批</span> <span class="btn ghost">先看是哪几份</span>
+            </div>
+            <div class="grouphead">命中面板</div>
+            <div class="rowline"><i>（0 行）</i></div>
+          </div>
+        </div>
+        <div class="statusbar"><span>共 N 份文档</span></div>
+      </div>
+      <p class="hint">没有查询、纯浏览时这条不出现；打开一份无正文文档时，文档详情区出现同一句。</p>
+    </div>
+    <div class="foot"><b>代价</b>：「N 份没有可搜正文」这个数要走 <code>text_pages</code> 聚合 ——
+      真库 197.6 万行，<b>ISSUES I109</b> 已经证明这条在主线程上是 200 秒量级。
+      必须挂在后台线程或走既有轻量口径，否则这一条会把 S1 冻住。</div>
+  </article>
+
+  <div class="pin">
+    <b>甲乙不是互斥的</b>：甲解决「我想批量处理一个文件夹」，乙解决「我搜不到、不知道为什么」。
+    §E 第 2 问允许「两个都要」。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="sc">
+  <h2>§C · 乙 · 启动即增量同步（状态栏 / S7）</h2>
+  <div class="why">
+    <b>根因（已查证）</b>：<code>Patrol.poll()</code> 每 <code>scan_verify_minutes=30</code> 分钟<b>运行时间</b>
+    才排一次全量对账（<code>verify_every_polls = 1800s / 5s = 360</code> 次轮询）。
+    应用不常驻 ⇒ 那个「30 分钟」永远走不到 ⇒ 六根 <code>last_full_scan_at</code> 停在 <b>2026-10-16</b>，
+    于是门禁 consistency 段每场都红在 <b>C3 数据漂移</b>（轮二十九 / 轮三十四 都是这个红）。
+    <b>修法不动数据模型</b>：<code>AppContext.start_background()</code> 之后立刻 <code>jobs.enqueue("scan")</code> 一条 ——
+    这条 job 类型、handler、去重分支（<code>doc_id=NULL</code> 同类只排一条）全都是现成的。
+  </div>
+
+  <article class="option">
+    <div class="head"><span class="tag">甲</span><span class="name">状态栏一格 —— 常驻，点它跳 S7</span>
+      <span class="kbd">1 个点击区</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">哪一屏都一样：主窗口底栏</div>
+        <div class="statusbar" style="border-top:0;">
+          <span>数据目录 …｜结构版本 8</span><span class="spacer"></span>
+          <span class="lab">同步：</span><span>上次 M 分钟前</span>
+          <span class="lab">待索引</span><span>N</span>
+        </div>
+      </div>
+      <div class="wf">
+        <div class="titlebar">刚启动的那几秒</div>
+        <div class="statusbar" style="border-top:0;">
+          <span>数据目录 …｜结构版本 8</span><span class="spacer"></span>
+          <span class="lab">同步：</span><span>正在扫描 M 个监测根…</span>
+        </div>
+      </div>
+      <p class="hint">一行能放下，但现有状态栏已经写了路径 + 结构版本，1024 档会挤。</p>
+    </div>
+    <div class="foot"><b>代价</b>：状态栏是全站共享的一行，巡检每次 <code>did_anything</code> 都会把它覆盖掉
+      （<code>main_window.patrol_tick</code> 那句 <code>巡检：…</code>）—— 要么改成两格并存，要么接受它被覆盖。</div>
+  </article>
+
+  <article class="option">
+    <div class="head"><span class="tag alt">乙</span><span class="name">S7 一块 —— 状态页加「同步」行，状态栏不动</span>
+      <span class="kbd">1 行读数 + 1 颗按钮</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S7 上半区 · 运行状态（现有页面，加一行）</div>
+        <div class="body">
+          <div class="col">
+            <div class="rowline">后台：worker 线程 N｜监听根 M｜事件缓冲待处理 K</div>
+            <div class="rowline">分类 N 个｜文档 M 份｜正文 P 页</div>
+            <div class="rowline"><b>同步：上次全量 …｜上次增量 …｜待索引 N</b> <span class="btn">立即同步</span></div>
+            <div class="rowline">任务：索引 完成 N / 失败 M｜OCR …｜向量 …</div>
+          </div>
+        </div>
+      </div>
+      <p class="hint">与既有读数同源同段，用户找状态时一定在这一屏。</p>
+    </div>
+    <div class="foot"><b>代价</b>：不看 S7 就不知道同步停了 —— 而「同步停了」正是这一项要解决的问题。
+      另外这一屏的 <code>reload_status()</code> 挂在 5 秒巡检定时器上，加的这行必须走轻口径。</div>
+  </article>
+
+  <div class="pin">
+    <b>无论选哪个</b>，还有两个别的问题要定：<b>启动就排</b> vs <b>距上次超过 N 分钟才排</b>；
+    以及同步跑起来之后要不要在界面上给一颗「暂停同步」。
+    后者的答案是「不要」——暂停等于把 C3 漂移重新放回来，且现有界面里没有任何一处需要它。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="sd">
+  <h2>§D · 丁 · 库内问答（新屏 S9）</h2>
+  <div class="why">
+    <b>能做什么</b>：向量已经全量建好（1,969,088 条 / 8,694 份），所以「拿我这一批书直接问问题」的
+    检索侧<b>今天就是通的</b>；缺的是把检索结果组织成用户能读的答案。
+    <b>先定一件事</b>：答案由谁生成 —— 这决定这一屏是「今天能做完」还是「要先装几个 GB 的模型」。
+  </div>
+
+  <div class="pin">
+    <b>三问第一问：答案怎么来</b><br>
+    <b>甲 · 抽取式（不接模型）</b>：答案 = 检索到的 N 段原文 + 文件名 + 页码，按相似度排序，不做任何生成。
+    零成本、零幻觉、离线、无新依赖。<br>
+    <b>乙 · 本地模型</b>（Ollama / llama.cpp）：有真回答，但要你装数 GB 模型、占显存、单次几十秒。<br>
+    <b>丙 · 云端 API</b>：质量最好最快，但需要 API key，且<b>正文要发出去</b> ——
+    与 AGENTS.md「先定哪些数据只存本机」直接冲突，我不推荐。<br>
+    <b>我的建议是甲</b>：先把「带页码引用的证据卡」做对，用户能自己读；
+    乙留一个可插的钩子（装了模型就多一段生成，没装就退化成甲）。
+  </div>
+
+  <article class="option">
+    <div class="head"><span class="tag">甲</span><span class="name">两栏 —— 左边问，右边证据</span>
+      <span class="kbd">答案区 1 块 + 证据卡片列表</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S9 · 库内问答</div>
+        <div class="bar">
+          <span class="lab">提问</span><div class="field">就用这一批文档，……？</div>
+          <span class="btn">提问</span>
+          <span class="hint" style="margin:0">范围：当前筛选（N 份）</span>
+        </div>
+        <div class="body">
+          <div class="col narrow">
+            <span class="lab">历史提问</span>
+            <div class="rowline sel">问 1 ……</div>
+            <div class="rowline">问 2 ……</div>
+            <div class="rowline">问 3 ……</div>
+          </div>
+          <div class="col">
+            <span class="lab">答案</span>
+            <div class="box" style="min-height:70px;">
+              共找到 <b>N</b> 段相关正文，覆盖 <b>M</b> 份文档。<br>
+              <span class="suffix">（甲案：这里是原文摘录，不是生成的话；乙案：这里是生成的回答 + 下面的引用）</span>
+            </div>
+            <span class="lab">证据（按相似度）</span>
+            <div class="evidence">
+              <div class="src">文件名.pdf｜第 12 页｜相似度 0.63</div>
+              摘录原文一段……
+            </div>
+            <div class="evidence">
+              <div class="src">文件名.pdf｜第 3 页｜相似度 0.58</div>
+              摘录原文一段……
+            </div>
+            <div class="hint">每条证据都能双击 → S2 打开该页（复用 S1 已有的 <code>open_in_reader</code> 通路）。</div>
+          </div>
+        </div>
+        <div class="statusbar"><span>检索耗时 …ms</span><span>向量 {已建 / 未建}</span></div>
+      </div>
+    </div>
+    <div class="foot"><b>优点</b>：证据与答案同屏，长文档可并排比。<b>缺点</b>：1024 档左栏要收起（沿用 D-040 降级）。</div>
+  </article>
+
+  <article class="option">
+    <div class="head"><span class="tag alt">乙</span><span class="name">单栏 —— 对话流，一问一块</span>
+      <span class="kbd">滚动列表 + 输入框</span></div>
+    <div class="body">
+      <div class="wf">
+        <div class="titlebar">S9 · 库内问答</div>
+        <div class="body">
+          <div class="col">
+            <div class="box dash" style="margin-left:30%;">问：……？</div>
+            <div class="box" style="margin-right:10%;">
+              答：……<br>
+              <span class="lab">▸ 证据 5 条（展开）</span>
+            </div>
+            <div class="box dash" style="margin-left:30%;">问：……？</div>
+            <div class="box" style="margin-right:10%;">答：……<br><span class="lab">▸ 证据 3 条（展开）</span></div>
+          </div>
+        </div>
+        <div class="bar" style="border-top:1px solid var(--hair);border-bottom:0;">
+          <div class="field">继续问……</div><span class="btn">发送</span>
+        </div>
+      </div>
+      <p class="hint">像聊天，连续追问自然；但本产品没有「上下文改写」，多轮追问会退化成互不相关的单问。</p>
+    </div>
+    <div class="foot"><b>代价</b>：证据默认折叠 ⇒ 首屏常常只有「答」没有「据」，
+      而这个产品的价值恰恰在「据」；且对话流会让人以为它能理解前文。</div>
+  </article>
+</section>
+
+<!-- ============================================================ -->
+<section id="se">
+  <h2>§E · 编号决策清单（回「1甲 2乙 3甲 …」或「都按你推荐」）</h2>
+
+  <table class="dec">
+    <tr><th class="n">#</th><th>要定的事</th><th>选项</th><th class="pick">我的推荐</th></tr>
+
+    <tr><td class="n">1</td><td>丙 · 命中解释怎么显示</td>
+      <td>甲 行内后缀（0 新控件）／乙 选中即解释（1 块解释带）／丙 两处都要</td>
+      <td class="pick">乙 —— 右栏 344px 挤不下整句解释，且「慢速 LIKE 只扫了前 6 万页」这种边界必须写全</td></tr>
+
+    <tr><td class="n">2</td><td>甲 · OCR 入口放哪</td>
+      <td>甲 顶栏文件夹级按钮／乙 情境提示条／丙 两个都要</td>
+      <td class="pick">丙 —— 甲解决「批量处理」，乙解决「搜不到不知道为什么」，是两件事</td></tr>
+
+    <tr><td class="n">3</td><td>甲 · 今日预算不够时怎么办</td>
+      <td>甲 只排预算内的、剩下的列出来／乙 全排（超出顺延到明天）／丙 让用户当场勾</td>
+      <td class="pick">甲 —— 预算的存在就是为了不让队列无限长；列出来即可，不替用户做二次选择</td></tr>
+
+    <tr><td class="n">4</td><td>乙 · 同步读数放哪</td>
+      <td>甲 状态栏一格／乙 S7 一块／丙 两处</td>
+      <td class="pick">丙 —— 状态栏负责「一眼看到停了」，S7 负责「看全 + 立即同步」</td></tr>
+
+    <tr><td class="n">5</td><td>乙 · 启动就排 scan 的条件</td>
+      <td>甲 每次启动都排／乙 距上次全量超过 N 分钟才排</td>
+      <td class="pick">甲 —— <code>scan</code> 任务天然去重，且「什么都没变」的一次对账很便宜；乙会引入第二个时间口径</td></tr>
+
+    <tr><td class="n">6</td><td>丁 · 答案怎么生成</td>
+      <td>甲 抽取式（不接模型）／乙 本地模型／丙 云端 API</td>
+      <td class="pick">甲 —— 零成本零幻觉，乙留可插钩子，丙与「哪些数据只存本机」冲突</td></tr>
+
+    <tr><td class="n">7</td><td>丁 · 屏位</td>
+      <td>甲 新屏 S9 + 导航项／乙 并进 S1 右栏第四档</td>
+      <td class="pick">甲 —— 右栏 344px 放不下带引用的答案</td></tr>
+
+    <tr><td class="n">8</td><td>丙 · I11「检索质量真数据」的 20 条查询从哪来</td>
+      <td>甲 从真库自动造 20 条（每份文档取一个正文实词 + 一个文件名实词）／乙 等你手给 20 条你真会搜的查询</td>
+      <td class="pick">甲 —— 可复现、可重跑，且能今天销账 I11；乙更贴真实使用但要等你</td></tr>
+  </table>
+
+  <div class="reco">
+    <h3>执行顺序（勾选之后）</h3>
+    <p><b>第 1 批（同一轮做完）</b>：乙 全部（后端一行 + 读数）、丙 全部（后端解释 + 命中行 + 真数据基准）、甲 全部（文件夹级规划 + 情境提示），
+      三项都只改 <b>S1 / S7</b>，不新增屏。</p>
+    <p><b>第 2 批（下一轮）</b>：丁 —— 新屏 <b>S9</b> 要先进 <code>nav.py</code> 与 <code>UI-SCREENS.md</code>，再按上面确认的布局实现。</p>
+    <p><b>不做</b>：云端 API、语料外发、自动改写问题、多轮上下文 —— 都不在本次勾选范围内。</p>
+  </div>
+
+  <div class="pin">
+    <b>不管你怎么勾，这四条不变</b>：① 不加新表、不改既有数据模型；② 每个新断言都要用坏法注入证伪一次；
+    ③ 不抬任何门禁阈值；④ 真库写入一律先备份、且只在产品路径上做。
+  </div>
+</section>
+
+</body>
+</html>

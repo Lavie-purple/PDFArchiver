@@ -5,7 +5,7 @@
     python gates/final.py                       # 默认段：guards + regression + coldstart + e2e + consistency
     python gates/final.py --list                # 打印每段是什么、实测耗时、该不该并进默认
     python gates/final.py --only package        # 只跑打包段（build.py + 冻结冒烟）
-    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24）
+    python gates/final.py --only injection      # 只跑常驻的坏法注入（p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24 + p25）
     python gates/final.py --only ui-inject      # 只跑 p15 那 36 条界面与磁盘链路坏法（2026-10-21 整链 61.2s）
     python gates/final.py --only soak --soak-minutes 4
     python gates/final.py --all --data-root "<要核查的数据根>"
@@ -48,6 +48,7 @@ P21 = "tests/probes/p21_saved_search_injection.py"
 P22 = "tests/probes/p22_category_export_injection.py"
 P23 = "tests/probes/p23_ocr_batch_injection.py"
 P24 = "tests/probes/p24_tag_merge_injection.py"
+P25 = "tests/probes/p25_ocr_on_demand_injection.py"
 BUILD = "packaging/build.py"
 SMOKE = "packaging/frozen_smoke.py"
 #: 真根 p12 的完整 19 条落在这里。链里每行现场只留最后 900 字（`row.note[:900]`），
@@ -324,11 +325,13 @@ def segment_injection() -> list[Row]:
                   "p 两张表漂移 + g 分档算术 + h1 结构性写）", [sys.executable, P21]),
             _gate("p22 分类清单导出 33 条坏法（a/b/c/d/e 五条线框硬断言 + u 口径来源 + n 落盘纪律 + "
                   "r 回执 + f 格式与空值 + g 门 + w 接线）", [sys.executable, P22]),
-            _gate("p23 批量点名面板 23 条坏法（U 读数形状 + B 分档接线 + P 预览执行同源 + C 代价 "
+            _gate("p23 批量点名面板 26 条坏法（U 读数形状 + B 分档接线 + P 预览执行同源 + C 代价 "
                   "+ R 理由行 + G 预算闸门 + N 过期名单 + X 取消 + F 失败上屏 + K 谎报新增 + W 折行）",
                   [sys.executable, P23]),
             _gate("p24 标签合并 17 条坏法（a 数据 / b 拒 / c 入口 / d 同源 + w 接线）",
-                  [sys.executable, P24])]
+                  [sys.executable, P24]),
+            _gate("p25 OCR 按需 10 条坏法（A 待识别定义 + B 读数认筛选 + C 截断要说 + D 按筛选不按勾选 "
+                  "+ E 空名单置灰 + F/G/H 提示条三态 + I 整批送）", [sys.executable, P25])]
         if all(r.ok for r in rows):
             INJECTION_INFLIGHT.unlink(missing_ok=True)
         return rows
@@ -447,7 +450,9 @@ SEGMENTS: dict[str, tuple[str, list[str]]] = {
     # 那场墙钟作废（不是产品红、不是断言没牙），可比读数只认 788.9s 这一场。阈值一条没放宽。
     # 2026-10-21 整链内（r16c）**793.9s** 同量级，p22 此时已是 33/33。三条空载读数（788.9 / 793.9）
     # 与负载场 966.3s、五份时代 415.3s 并列展示，不互相换算。
-    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24 反向注入（断言到底有没有约束力）",
+    # p25 是 2026-10-28 轮三十六 C 入段的第十一份（p9 69、p10 45、p16 8+3、p17 3、p18 3、
+    # p21 24、p22 33、p23 26、p24 17、p25 10 —— `test_probe_anchors.py` 那张表另含不进本段的 p15）。
+    "injection": ("p9 + p10 + p16 + p17 + p18 + p21 + p22 + p23 + p24 + p25 反向注入（断言到底有没有约束力）",
                   ["788.9s / 793.9s（空载，2026-10-20 / 21，九份全绿）｜966.3s（负载场，八份）"]),
     "ui-inject": ("p15 归档界面与磁盘链路 36 条坏法（不进默认段）",
                   ["71.8s（2026-10-18）｜61.2s（2026-10-21 整链内）"]),

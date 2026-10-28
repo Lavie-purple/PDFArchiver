@@ -90,6 +90,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menus()
         self._apply_theme()
         self.statusBar().showMessage(self._status_text())
+        # 状态栏右侧常驻一格「全库同步到哪个时刻」（轮三十六 乙，线框 §C 甲）。
+        # 挂在 permanent 区而不是走 `showMessage`：临时区是巡检每 5 秒要覆盖的地方
+        # （`patrol_tick` 那句「巡检：…」），写进去的同步读数只活几秒就被冲掉 ——
+        # 而它是"我改的文件进库了没有"的唯一常驻读数。
+        self.sync_label = QtWidgets.QLabel()
+        self.sync_label.setObjectName("muted")
+        self.statusBar().addPermanentWidget(self.sync_label)
+        self.refresh_sync_cell()
 
         # Ctrl+F = S1 搜索框的键盘入口（**ISSUES I53** ③甲，2026-10-17 定案，见 **D-052**）。
         # 挂在外壳而不是页面里：焦点停在导航列表时按 Ctrl+F 也该有用，而
@@ -227,6 +235,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _status_text(self) -> str:
         return f"{self.ctx.paths.describe()}｜结构版本 {self.ctx.schema_version}"
 
+    def refresh_sync_cell(self) -> None:
+        """重算状态栏右侧那一格。每次都是新查询、不缓存 —— 与巡检节拍同一个纪律。
+
+        读数口径全在 `StatusService.sync_status()`：取各启用根里**最早**的那一刻，
+        所以"还有根没对过账"不会被子虚乌有地说成"同步到了今天"。
+        """
+        self.sync_label.setText(self.ctx.status.sync_status().summary())
+
     # ---- 后台巡检 ----
 
     def start_patrol(self) -> None:
@@ -241,6 +257,11 @@ class MainWindow(QtWidgets.QMainWindow):
         timer.timeout.connect(self.patrol_tick)
         timer.start(int(self.ctx.patrol.poll_seconds * 1000))
         self._patrol_timer = timer
+        # 起定时器当场先跑一轮（轮三十六 乙）。`QTimer.start` 的第一次触发要等一个完整间隔
+        # （默认 5 秒），而"上次关掉到现在磁盘上变了什么"是最该立刻知道的那件事 ——
+        # `Patrol.poll()` 的第一轮必定排一场全量对账，晚 5 秒起步就白等 5 秒；
+        # 这一轮顺带把状态栏那一格与 S7 的读数铺成当前值。
+        self.patrol_tick()
 
     def patrol_tick(self) -> None:
         """一次轮询。异常在这里挡住：定时器一旦因为一轮失败而停摆，此后所有文件事件都没人管了。"""
@@ -250,6 +271,9 @@ class MainWindow(QtWidgets.QMainWindow):
             log.exception("巡检轮询失败，定时器继续跑，下一轮还会试")
             self.statusBar().showMessage(f"巡检出错：{type(exc).__name__}: {exc}")
             return
+        # 状态栏那一格跟着同一个节拍重算（轮三十六 乙）：排完队/跑完一轮之后，
+        # 「同步到哪个时刻」与「同步中/空闲」当场跟着变，不停在上一个时刻。
+        self.refresh_sync_cell()
         settings_page = self._pages.get("monitor")
         if isinstance(settings_page, SettingsPage) and settings_page.isVisible():
             # 这一条同时管住了状态读数：状态页现在是 S7 的上半区（D-040），

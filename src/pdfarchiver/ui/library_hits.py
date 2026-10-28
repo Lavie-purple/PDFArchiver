@@ -37,9 +37,28 @@ def set_text_role(label: QtWidgets.QLabel, role: str) -> None:
     label.style().polish(label)
 
 
-# 命中面板每一行挂的两样数据：跳转要用的 doc_id 与页码（`None` = 这一条没有页码）。
+# 命中面板每一行挂的三样数据：跳转要用的 doc_id、页码（`None` = 这一条没有页码）、
+# 以及"这一条为什么被找到"那一句（轮三十六 丙 · 乙）。
 _HIT_DOC_ROLE = QtCore.Qt.ItemDataRole.UserRole
 _HIT_PAGE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+_HIT_EXPLAIN_ROLE = QtCore.Qt.ItemDataRole.UserRole + 2
+
+#: 没有选中任何命中时解释带里的话（轮三十六 丙 · 乙）。**必须是一句写死的话而不是空白** ——
+#: 一块常驻的空条与"查了但没有解释"分不开（**ISSUES I108** 同一种病：控件在，内容没说清自己是谁）。
+EXPLAIN_IDLE = "选中上面任意一条命中，这里写明它为什么被找到"
+
+#: 情境提示条上那颗按钮（轮三十六 甲 · 乙）。与表下那颗「送去识别」是两回事：
+#: 那颗认"表格里选中了哪几份"，这颗认"当前筛选下的那一批待识别"，所以文案里必须带"这批/筛选"。
+OCR_HINT_BTN_TEXT = "送去识别这批"
+
+#: 解释带常驻几行高（`setMinimumHeight`，不是固定高 —— 文案超了它自己会长，绝不把字吃掉）。
+#: **三是量出来的，不是取的整数**：右栏最窄那档（窗口 1024，标签宽 326px、行距 14px）下，
+#: `SearchResult.explain()` 的四条通道**真会出现的**组合最长折三行 —— 正文 + `慢速全文扫描
+#: LIKE（2 字，<3 字无法用索引）` + `OCR 识别（可能有错字）` + `按 60,000 页预算浅扫，未扫完`。
+#: 唯一折到四行的是「trigram + 浅扫未扫完 + OCR」，而 `body_scan_incomplete` 只有
+#: `text.search_like` 那一支会报（`SearchService._body`），trigram 查询永远拿不到它 —— 真出现了
+#: 也只是这条带子长 14px，字不会被裁。量法与逐条读数见 `.probe_work/round36_explain_lines.py`。
+EXPLAIN_LINES = 3
 
 
 class LibraryHitsMixin:
@@ -53,6 +72,27 @@ class LibraryHitsMixin:
         # 没有一个"已确认的位置"可搬 —— 这条差量与理由记在 **D-052**。
         self.right_panel = FloatablePanel(self, "命中面板（当前查询）",
                                           column_width=RIGHT_COLUMN_WIDTH)
+
+        # 情境提示条（轮三十六 甲 · 乙）：只在「查询一条都没命中、而这个筛选下确实有没识别过的
+        # 扫描件」时出现 —— 它回答的是"我明明有这类文件，为什么搜不到"，而不是一块常驻横幅。
+        # 句子取后端出口 `PendingOcr.strip_line()`；颗数/页数由 `ctx.ocr.pending_in` 一条口径数出来。
+        self.ocr_hint_band = QtWidgets.QFrame()
+        self.ocr_hint_band.setObjectName("ocrHintBand")
+        hint_lay = QtWidgets.QVBoxLayout(self.ocr_hint_band)
+        hint_lay.setContentsMargins(8, 4, 8, 4)
+        self.ocr_hint_label = QtWidgets.QLabel("")
+        self.ocr_hint_label.setObjectName("muted")
+        self.ocr_hint_label.setWordWrap(True)
+        hint_lay.addWidget(self.ocr_hint_label)
+        self.ocr_hint_btn = QtWidgets.QPushButton(OCR_HINT_BTN_TEXT)
+        self.ocr_hint_btn.setObjectName("searchBtn")
+        self.ocr_hint_btn.setToolTip("先展开这一批的账（该跑几份/不跑几份/代价/今日预算），确认后才排队")
+        self.ocr_hint_btn.clicked.connect(self._on_filter_ocr_requested)
+        hint_lay.addWidget(self.ocr_hint_btn)
+        # 默认不占位：建来是隐藏的，`_update_ocr_hint` 决定它出不出现。
+        self.ocr_hint_band.setVisible(False)
+        self.right_panel.body.addWidget(self.ocr_hint_band)
+
         self.hit_list = QtWidgets.QListWidget()
         # 命中行是"整句片段"，必须折行；折行就意味着行高不齐 —— 这**不打犯** D-040 的
         # 行高统一：那条管的是中栏那张要虚拟化的文档表（行号↔坐标必须 O(1)），而这一栏
@@ -62,6 +102,21 @@ class LibraryHitsMixin:
         self.hit_list.setWordWrap(True)
         self.hit_list.currentItemChanged.connect(self._on_hit_current)
         self.right_panel.body.addWidget(self.hit_list, 3)
+
+        # 解释带（轮三十六 丙 · 乙）：选中一条命中，这里写明**它为什么被找到**。
+        # 常驻三行高（口径见 `EXPLAIN_LINES`）：它每换一条命中就换一次文案，若让它按内容
+        # 撑高，右栏会在选行时整体跳一下；而它比最长那句解释矮一行也不会把字吃掉
+        # （`setMinimumHeight` 只是下限，超了它自己会长）。
+        self.explain_band = QtWidgets.QFrame()
+        self.explain_band.setObjectName("explainBand")
+        band_lay = QtWidgets.QVBoxLayout(self.explain_band)
+        band_lay.setContentsMargins(8, 4, 8, 4)
+        self.explain_label = QtWidgets.QLabel(EXPLAIN_IDLE)
+        self.explain_label.setObjectName("muted")
+        self.explain_label.setWordWrap(True)
+        self.explain_label.setMinimumHeight(EXPLAIN_LINES * self.fontMetrics().lineSpacing())
+        band_lay.addWidget(self.explain_label)
+        self.right_panel.body.addWidget(self.explain_band)
 
         self.jump_btn = QtWidgets.QPushButton("跳到该页 → S2")
         self.jump_btn.setObjectName("searchBtn")
@@ -113,8 +168,22 @@ class LibraryHitsMixin:
 
     def _clear_hits(self) -> None:
         self.hit_list.clear()
+        self.explain_label.setText(EXPLAIN_IDLE)
         self.jump_btn.setEnabled(False)
         self.jump_btn.setText("跳到该页 → S2")
+
+    # ---- 情境提示条（轮三十六 甲 · 乙）---------------------------------------
+
+    def _update_ocr_hint(self, *, empty: bool) -> None:
+        """查询一条都没命中时，若这个筛选下真有还没识别的扫描件，就把「为什么搜不到」摆上屏。
+
+        `empty` 由页面（搜索编排那一侧）判定 —— 这一栏不知道刚才查了什么，也不该自己再数一遍。
+        名单为空时同样收起：一条按下去点不到任何一份的横幅比没有横幅更糟。
+        """
+        pending = getattr(self, "_pending_ocr", None)
+        show = bool(empty and pending is not None and pending.ids)
+        self.ocr_hint_label.setText(pending.strip_line() if show else "")
+        self.ocr_hint_band.setVisible(show)
 
     def _show_hits(self, result) -> None:
         """§S1 甲 那一栏：把**当前查询**的命中按通道分组列出来，每条带页码与片段。
@@ -126,6 +195,9 @@ class LibraryHitsMixin:
         未装模型时语义那一组因此整组不在场，符合线框「不是灰掉、不是空表」。
         组头不写数字：计数是状态栏那一行的口径（`counts_by_field`），这里再写一份
         就是同一个数的第二个出处。
+
+        解释带的那一句同样取后端出口 `SearchResult.explain(hit)`：这一栏只负责把字符串
+        挂到行上，不自己拼一句"为什么"（同一个理由）。
         """
         lines = result.rows()
         self._clear_hits()
@@ -135,7 +207,9 @@ class LibraryHitsMixin:
                 continue
             self._add_group(group[0][0].field_label, name in result.truncated_fields)
             for hit, line in group:
-                self._add_hit_row(line, int(hit.doc.id or 0), hit.page_no, hit.doc.path)
+                self._add_hit_row(line, int(hit.doc.id or 0), hit.page_no, hit.doc.path,
+                                  result.explain(hit))
+
 
     def _show_semantic_hits(self, results: list[tuple[int, int, float]]) -> None:
         """语义命中进同一栏、同一套跳转。
@@ -153,7 +227,9 @@ class LibraryHitsMixin:
                 continue
             where = f"第 {page_no} 页" if page_no else "整份文档"
             self._add_hit_row(f"[{where}]｜语义命中（相近，非原文）｜相似度 {score:.3f}｜{doc.name}",
-                              int(doc_id), page_no or None, doc.path)
+                              int(doc_id), page_no or None, doc.path,
+                              f"通道：语义｜{where}｜向量相似度 {score:.3f}（越大越相近，"
+                              "非原文匹配）")
 
     def _add_group(self, label: str, truncated: bool) -> None:
         header = QtWidgets.QListWidgetItem(label + ("（已截断）" if truncated else ""))
@@ -161,18 +237,25 @@ class LibraryHitsMixin:
         header.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
         self.hit_list.addItem(header)
 
-    def _add_hit_row(self, text: str, doc_id: int, page_no: int | None, path: str) -> None:
+    def _add_hit_row(self, text: str, doc_id: int, page_no: int | None, path: str,
+                     explain: str) -> None:
         item = QtWidgets.QListWidgetItem(text)
         item.setData(_HIT_DOC_ROLE, doc_id)
         item.setData(_HIT_PAGE_ROLE, page_no)
+        item.setData(_HIT_EXPLAIN_ROLE, explain)
         item.setToolTip(path)   # 片段里放不下整条路径，悬停回读（与中栏「路径」列同一口径）
         self.hit_list.addItem(item)
 
     def _on_hit_current(self, current, previous) -> None:
-        """选中一条命中 → 中栏跳到那份文档（详情跟着走）+ 决定跳转按钮的形状。"""
+        """选中一条命中 → 中栏跳到那份文档（详情跟着走）+ 决定跳转按钮的形状 + 换解释带。"""
         doc_id = current.data(_HIT_DOC_ROLE) if current is not None else None
         page_no = current.data(_HIT_PAGE_ROLE) if current is not None else None
+        # 解释带跟着选中走：没有选中（或选中的是分组标题）就退回那句写死的提示，
+        # 不许留上一条命中的解释 —— 那会让人以为它在讲现在这条。
+        self.explain_label.setText(
+            (current.data(_HIT_EXPLAIN_ROLE) or EXPLAIN_IDLE) if current is not None else EXPLAIN_IDLE)
         self.jump_btn.setEnabled(doc_id is not None)
+
         # 一条按钮两个措辞而不是两条按钮：动作只有一个（在阅读器里打开），差别只在**落到哪一页**。
         # 文件名/路径/元数据三通道没有页码（`Hit.page_no is None`），编一个"第 1 页"就是假装有。
         self.jump_btn.setText("跳到该页 → S2" if page_no else "打开文档 → S2")

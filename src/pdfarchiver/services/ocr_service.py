@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pdfarchiver.db.models import Document, TextPage
@@ -53,6 +54,7 @@ from pdfarchiver.ocr.engine import OcrEngine, OcrPage
 from pdfarchiver.parsing.classify import MIN_CHARS_PER_BEARING_PAGE, OCR_DONE, OCR_NA, \
     OCR_PARTIAL, OCR_PENDING, ocr_is_current, ocr_ready
 from pdfarchiver.parsing.pdf import PdfOpenError, PdfReader
+from pdfarchiver.search.service import doc_filter_from_query
 
 log = logging.getLogger("pdfarchiver.ocr.service")
 
@@ -125,6 +127,13 @@ SKIP_NO_VERDICT = "no_verdict"
 SKIP_NOT_NEEDED = "not_needed"
 SKIP_CURRENT = "already_current"
 SKIP_BUDGET = "budget_exhausted"
+# 轮三十六 甲：闸门还没落下、但今天排不下**这一整批** —— 能排的照排，排不下的整份留到明天。
+# 与 `SKIP_BUDGET`（一页都不剩）分成两类：一个是"今天别按了"，一个是"按了也只能办一部分"，
+# 两句话对应两种用户动作，合成一条就等于抹掉其中一种。
+SKIP_BUDGET_SHORT = "budget_short"
+
+#: 「这一批跑不到底」那句的公共尾巴（两处都要说同一件事：`partial` 不是失败，明日自动续）。
+PARTIAL_TAIL_TEXT = "最后一份会停在半路记 partial，剩余页明日自动回到待办"
 
 # 理由的中文名只在这里写一份：回执要给界面看，界面不许自己再翻译一遍（AGENTS.md 禁止核心概念多口径）。
 SKIP_LABELS = {
@@ -133,6 +142,7 @@ SKIP_LABELS = {
     SKIP_NOT_NEEDED: "判定为不需要 OCR",
     SKIP_CURRENT: "已是当前引擎版本",
     SKIP_BUDGET: "今天的页预算已用满（明日自动恢复）",
+    SKIP_BUDGET_SHORT: "今天的页预算不够排完这一批（排得下的照排，其余明日再排）",
 }
 
 
@@ -221,13 +231,71 @@ class OcrPlan:
                 f"{self.pages_queueable * hi / 60_000:.1f} 分钟")
 
     def budget_note(self) -> str:
-        """今日预算够不够跑完这一批。不够时必须上屏 —— 别让人对着一条永远不动的队列猜（**I67** ③）。"""
+        """今日预算够不够跑完这一批。不够时必须上屏 —— 别让人对着一条永远不动的队列猜（**I67** ③）。
+
+        轮三十六 甲之后"不够"不再等于"整批不排"：预算内的照排，排不下的归到
+        `SKIP_BUDGET_SHORT` 那一类里逐份列出来，所以这句说的是"只排一部分"，不是"别按"。
+        还有第二种"不够"：每一份都装得进去，但**合起来**超过余量 —— 那一份不会整份被挡，
+        它会跑、跑到余量用完停下并记 `partial`（**ISSUES I19**）。两句都得上屏，否则
+        "够跑完这一批"是假话，用户等着一整批变 done 而它永远差几页（**ISSUES I11**）。
+        """
         if self.budget_remaining <= 0:
             return "今天的页预算已经用满：按下「排队」一条也不会进队列，明日自动恢复"
-        if self.pages_queueable > self.budget_remaining:
-            return ("今日预算不够跑完这一批：跑满即停，剩下的明天自动回到待办"
-                    "（预算是资源闸门，强制也不绕）")
+        if self.budget_short:
+            out = (f"今日预算不够跑完这一批：只排预算内的份（今天还剩 {self.budget_remaining:,} 页），"
+                   "其余明日再排（预算是资源闸门，强制也不绕）")
+            return out + ("；" + PARTIAL_TAIL_TEXT if self.partial_tail else "")
+        if self.partial_tail:
+            return (f"今天跑不到底（还剩 {self.budget_remaining:,} 页，"
+                    f"这一批共 {self.pages_queueable:,} 页）：{PARTIAL_TAIL_TEXT}")
         return "今日预算够跑完这一批"
+
+    @property
+    def partial_tail(self) -> bool:
+        """这一批里有没有一份"装得进去、但跑不完"（它会停在半路记 `partial`）。"""
+        return self.pages_queueable > self.budget_remaining
+
+    @property
+    def budget_short(self) -> int:
+        """被预算挡在门外、明天再排的份数（`SKIP_BUDGET_SHORT` 那一类的条数）。"""
+        return sum(len(item.docs) for item in self.skipped if item.reason == SKIP_BUDGET_SHORT)
+
+
+#: 「按当前筛选送识别」一次最多点名多少份（轮三十六 甲）。
+#: 500 是**反算出来的**：面板展开要逐份算账（`plan_ocr` 每份两三次查询），2000 份就是
+#: 4000+ 次查询全压在界面线程上；500 份的账在本机 <0.2s。名单被截断时
+#: `PendingOcr.capped` 为真，按钮与提示条都会把"一共多少 / 这次最多送多少"一起说清。
+PENDING_ID_LIMIT = 500
+
+
+@dataclass(frozen=True)
+class PendingOcr:
+    """某个筛选条件下的"待识别"读数（轮三十六 甲：顶栏按钮与情境提示条读的同一份数）。
+
+    `documents` / `pages` 是**完整**的合计，`ids` 是这一次能送进面板的名单（受
+    `PENDING_ID_LIMIT` 截断）。三个数一起上屏：只报名单长度会把"本次最多排 500 份"
+    说成"库里只有 500 份"（**ISSUES I11**「界面不许伪装」）。
+    """
+
+    documents: int
+    pages: int
+    ids: tuple[int, ...]
+
+    @property
+    def capped(self) -> bool:
+        return len(self.ids) < self.documents
+
+    def describe(self) -> str:
+        """按钮上那一行（也做 tooltip）：份数、页数、以及本次名单截没截断。"""
+        out = f"当前筛选里待识别 {self.documents:,} 份 / {self.pages:,} 页"
+        return out + (f"（本次最多排 {len(self.ids):,} 份）" if self.capped else "")
+
+    def strip_line(self) -> str:
+        """情境提示条那一句：说清"为什么正文搜不到"，而不是只说"没有结果"。"""
+        out = (f"本次筛选里 {self.documents:,} 份扫描件还没识别（共 {self.pages:,} 页），"
+               "正文通道搜不到它们。")
+        return out + (f"本次最多送 {len(self.ids):,} 份，其余下次再送。" if self.capped else "")
+
 
 
 class OcrService:
@@ -247,6 +315,19 @@ class OcrService:
 
     # —— 显式触发（阶段 5 决策 Q3=甲）————————————————————————
 
+    def pending_in(self, query: Mapping[str, object] | None = None, *,
+                   limit: int = PENDING_ID_LIMIT) -> PendingOcr:
+        """某个筛选条件下"还没识别"的那一批（轮三十六 甲：「按当前筛选送识别」的唯一入口）。
+
+        `query` 就是 `FilterBar` 存的那份 dict；解释只有 `doc_filter_from_query` 一处，
+        SQL 只有 `documents.ids_pending_ocr / pending_ocr_totals` 一处 —— 界面既不解析条件、
+        也不数份数，只把这两个出口的读数摆上屏。**不碰 `text_pages`**（见仓储方法 docstring）。
+        """
+        filters = doc_filter_from_query(query)
+        documents, pages = self.documents.pending_ocr_totals(filters)
+        ids = self.documents.ids_pending_ocr(filters, limit=limit)
+        return PendingOcr(documents=documents, pages=pages, ids=tuple(ids))
+
     def request_ocr(self, doc_ids: list[int] | tuple[int, ...], *,
                     force: bool = False) -> OcrRequest:
         """把用户点名的文档排进 OCR 队列，并如实回执哪几份没排、为什么。
@@ -257,13 +338,13 @@ class OcrService:
         ids = sorted({int(i) for i in doc_ids})
         if not ids:
             return OcrRequest(named=0, queueable=0, enqueued=0)
-        budget_hit = self.budget.exhausted()
+        remaining = self.budget.remaining()
         docs = self.documents.by_ids(ids)
-        queueable, skipped = self._split(ids, docs, force, budget_hit=budget_hit)
+        queueable, skipped = self._split(ids, docs, force, budget_remaining=remaining)
         enqueued = self.jobs.enqueue_many("ocr", queueable)
         request = OcrRequest(named=len(ids), queueable=len(queueable), enqueued=enqueued,
                              skipped=skipped)
-        if budget_hit:
+        if remaining <= 0:
             log.warning("OCR 排队被每日页预算挡住：%s｜%s", self.budget.describe(), request.describe())
         else:
             log.info("OCR 排队：%s｜%s", request.describe(),
@@ -286,7 +367,7 @@ class OcrService:
             return OcrPlan(named=0, queueable=(), skipped=(), pages_queueable=0,
                            budget_remaining=remaining)
         docs = self.documents.by_ids(ids)
-        queueable, skipped = self._split(ids, docs, force, budget_hit=remaining <= 0)
+        queueable, skipped = self._split(ids, docs, force, budget_remaining=remaining)
         items = tuple(
             SkippedReason(
                 reason,
@@ -298,24 +379,42 @@ class OcrService:
                        budget_remaining=remaining)
 
     def _split(self, ids: list[int], docs: dict[int, Document], force: bool, *,
-               budget_hit: bool) -> tuple[list[int], dict[str, list[int]]]:
+               budget_remaining: int) -> tuple[list[int], dict[str, list[int]]]:
         """把点名的一串 id 分成「该跑」与「按理由归类的不跑」—— `request_ocr` 与 `plan_ocr` 共用这一条。
 
         两处各写一遍，"面板上说的"与"排队之后的回执"就是两个口径，那是 **ISSUES I60** 那一族。
+
+        **预算只当闸门，不当排队策略（轮三十六 甲）**：还有余量就按 id 序挨个装，装得下的排、
+        装不下的整份归到 `SKIP_BUDGET_SHORT`（明日再排）—— 既不像旧行为那样"整批照排然后
+        让 worker 空跑"，也不像 `SKIP_BUDGET` 那样"一页不剩才拦"。页数用主记录页数
+        （`page_count`），与 `OcrPlan.cost_line` 同一个上限口径。
+
+        最后一份装不下的边界上**不拦**：余量只要还剩页，页数比余量多的那一份照样排进去，
+        由 `_run` 跑到余量耗尽时停下并记 `partial`（**ISSUES I19**）。把"整份装得下"当入队
+        条件的话，余量 1 页而文件 300 页时那一页预算就永远用不出去 —— 一份大书会把每天
+        的尾数全部浪费掉，而它自己那 300 页里能识别的那 1 页也不会进库。
         """
-        if budget_hit:
+        if budget_remaining <= 0:
             # 预算是资源闸门，不是幂等短路，所以 `force` 也不绕它：能绕开限额的限额等于没有限额。
             # 要今天就跑完，改 `settings.json` 的 `ocr_daily_page_budget`（并重启），别改代码。
             return [], {SKIP_BUDGET: list(ids)}
         queueable: list[int] = []
         skipped: dict[str, list[int]] = {}
+        spent = 0
         for doc_id in ids:
             reason = self._why_skipped(docs.get(doc_id), force)
-            if reason is None:
-                queueable.append(doc_id)
-            else:
+            if reason is not None:
                 skipped.setdefault(reason, []).append(doc_id)
+                continue
+            pages = int(docs[doc_id].page_count or 0)
+            left = budget_remaining - spent
+            if left <= 0:
+                skipped.setdefault(SKIP_BUDGET_SHORT, []).append(doc_id)
+                continue
+            queueable.append(doc_id)
+            spent += min(pages, left)      # 装不满的那一份只占用剩下的余量，不按整本预支
         return queueable, skipped
+
 
     def _why_skipped(self, doc: Document | None, force: bool) -> str | None:
         """点名的一份能不能进队列；能进返回 None，不能进返回理由常量。"""

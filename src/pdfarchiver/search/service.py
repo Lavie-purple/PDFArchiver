@@ -30,7 +30,8 @@ from pdfarchiver.db.models import Document
 from pdfarchiver.db.repositories.documents import DocFilter, DocumentRepository, SORTS
 from pdfarchiver.db.repositories.metadata import MetadataRepository
 from pdfarchiver.db.repositories.text import TextRepository
-from pdfarchiver.indexing.fts import VIA_FTS, channel_for, describe_channel, match_expression
+from pdfarchiver.indexing.fts import (VIA_FTS, channel_for, describe_channel, format_bm25,
+                                      match_expression)
 from pdfarchiver.indexing.snippets import Snippet, snippet_for
 
 # 每条通道的行数上限：4 条通道 ×200 行的片段计算与物化，留足首屏 500ms 门禁（G2）。
@@ -195,6 +196,16 @@ class Criteria:
                        include_missing=not self.missing_only)
 
 
+def doc_filter_from_query(query: Mapping[str, object] | None) -> DocFilter:
+    """筛选条那份 dict → `DocFilter`。**dict 只有一种解释**，所以换算也只有这一处。
+
+    `AppContext.ocr.pending_in` 也要"按当前筛选"取名单：它若自己再解一遍这份 dict，
+    同一个键迟早有两种读法（**ISSUES I60** 那族）。界面不碰 `DocFilter`（不许 import db），
+    只把 `FilterBar` 存的那份 dict 递进来。
+    """
+    return Criteria.from_query(query or {}).doc_filter()
+
+
 @dataclass(frozen=True)
 class Hit:
     doc: Document
@@ -306,6 +317,31 @@ class SearchResult:
             out.append(f"[{where}]{source} {hit.doc.name}｜"
                        f"{hit.snippet.line() if hit.snippet else hit.doc.path}")
         return out
+
+    def explain(self, hit: Hit) -> str:
+        """一条命中"为什么被找到" —— S1 右栏那条解释带的唯一文案来源（轮三十六 丙 · 乙）。
+
+        只用本对象与 `Hit` **取回来时本来就带着的**字段：不重跑查询、不新算分数。
+        三处非正文通道（文件名 / 路径 / 元数据）的 `Hit.score` 恒为 0.0，而正文走 LIKE 时
+        也是 0.0（`text.search_like` 的 docstring：「LIKE 没有相关性得分」）—— 所以**只在
+        trigram 那一支**才报 bm25，另两支一个字都不许提，否则屏幕上会出现一个 0.00 的假相关度。
+        """
+        if hit.field == FIELD_BROWSE:
+            return "浏览模式：没有输入查询词，本行来自按当前筛选列出的文档，不带命中位置"
+        if hit.field != FIELD_BODY:
+            where = hit.field_label + (f"·{hit.field_detail}" if hit.field_detail else "")
+            return (f"通道：{where}｜{where} 里含查询词（子串匹配）"
+                    f"｜不打 bm25，按字段权重排序（文件名 > 元数据 > 路径 > 正文）")
+        parts = [f"通道：正文｜{describe_channel(self.channel, self.criteria.text)}",
+                 f"第 {hit.page_no} 页" if hit.page_no else "整份文档"]
+        if self.channel == VIA_FTS:
+            # 「-0.00」与「没有得分」长得一样，格式的事归 `format_bm25` 一处管。
+            parts.append(f"bm25 {format_bm25(hit.score)}（越小越相关）")
+        if hit.source_label:
+            parts.append(hit.source_label)
+        if self.body_scan_incomplete:
+            parts.append(f"按 {LIKE_SCAN_ROWS:,} 页预算浅扫，未扫完")
+        return "｜".join(parts)
 
 
 class SearchService:

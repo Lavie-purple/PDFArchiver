@@ -513,6 +513,23 @@ QToolButton#chipRemove {{
     border: none;
     padding: 0 2px;
 }}
+
+/* ===== S1 右栏的解释带（轮三十六 丙 · 乙）=====
+   底与边都取已有的 `card_bg` / `card_border`：带上的字是 `QLabel#muted`（= text_secondary），
+   而 (text_secondary × card_bg) 这一对已经在 `live_pairs` 里量过两主题都过 AA。
+   这里**只有 background-color 与 border、没有 color**，所以不新增任何字色搭配。 */
+QFrame#explainBand {{
+    background-color: {c.card_bg};
+    border: 1px solid {c.card_border};
+    border-radius: 6px;
+}}
+/* S1 右栏的情境提示条（轮三十六 甲 · 乙）：与解释带同一套底/边/角 —— 它俩在视觉上
+   是同一类"一块说明"，区别只由带上的字与按出去的动作说。同样不写 color。 */
+QFrame#ocrHintBand {{
+    background-color: {c.card_bg};
+    border: 1px solid {c.card_border};
+    border-radius: 6px;
+}}
 QToolButton#chipRemove:hover {{
     color: {c.text_primary};
 }}

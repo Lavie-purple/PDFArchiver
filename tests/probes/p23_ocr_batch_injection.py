@@ -1,10 +1,10 @@
 """p23 · 轮十四 E（**ISSUES I67** 乙 · 批量点名面板）的坏法注入证伪。
 
 AGENTS.md 的规矩：「每写完一条断言，先用能骗过它的坏法真注入一次；不会变红的断言直接删」。
-本文件覆盖 **21 条断言**（`tests/integration/test_ocr_batch_panel_ui.py` 16 条 +
-`tests/unit/test_ocr_plan_reads.py` 5 条），一条不落，坏法 **23** 条 —— 其中两条断言
-（「两类跳过理由各占一行而展开指得到具体份名」「账算不出来时不展开假面板而屏上给的是后端原文」）
-各自盯着屏幕上两件事，所以各配两个坏法。
+本文件覆盖 **22 条断言**（`tests/integration/test_ocr_batch_panel_ui.py` 17 条 +
+`tests/unit/test_ocr_plan_reads.py` 5 条），一条不落，坏法 **26** 条 —— 其中三条断言
+（「两类跳过理由各占一行而展开指得到具体份名」「账算不出来时不展开假面板而屏上给的是后端原文」
+各配两个，「预算不够跑完这一批时那句在面板上看得见」配 G2/G4/G6 三个）不止一个坏法。
 
 跑法：
     .venv/Scripts/python.exe tests/probes/p23_ocr_batch_injection.py              # 全跑
@@ -54,10 +54,10 @@ CASES: list[Case] = [
          UNIT + "test_代价那句给的是主记录页数与实测区间两端",
          [Edit(SVC, "                f\"（按主记录页数算，待推理的页可能更少）｜单页实测 {lo:,}–{hi:,}ms｜\"",
                "                f\"（按主记录页数算，待推理的页可能更少）｜单页实测约 {lo:,}ms｜\"")]),
-    Case("U5", "预算比较写成 `>=`（正好够被说成不够，差一错）",
-         UNIT + "test_预算那三档说的是此刻够不够跑完这一批",
-         [Edit(SVC, "        if self.pages_queueable > self.budget_remaining:",
-               "        if self.pages_queueable >= self.budget_remaining:")]),
+    Case("U5", "预算比较写成 `>=`（正好够被说成跑不到底，差一错）",
+         UNIT + "test_预算各档说的是此刻够不够跑完这一批",
+         [Edit(SVC, "        return self.pages_queueable > self.budget_remaining",
+               "        return self.pages_queueable >= self.budget_remaining")]),
 
     # —— B：接线（几份才弹面板、按钮上写的份数就是点名的份数）———————————
     Case("B1", "分档判据永不为真，选中两份也走单份那条直接排队",
@@ -109,7 +109,30 @@ CASES: list[Case] = [
     Case("G3", "闸门那一类只报第一份（被挡住的是哪几份，屏幕上看不全）",
          CRIT + "test_预算跑满时这一类理由也指得到是哪几份",
          [Edit(SVC, "            return [], {SKIP_BUDGET: list(ids)}",
-               "            return [], {SKIP_BUDGET: ids[:1]}")]),
+               "            return [], {SKIP_BUDGET: list(ids)[:1]}")]),
+    Case("G4", "回到「整份装不下就不排」（余量一页不剩才拦没了：那一页尾数永远用不出去，"
+               "**ISSUES I19** 的 partial 也到不了）",
+         CRIT + "test_预算不够跑完这一批时那句在面板上看得见",
+         [Edit(SVC, "            if left <= 0:\n"
+                    "                skipped.setdefault(SKIP_BUDGET_SHORT, []).append(doc_id)\n"
+                    "                continue\n"
+                    "            queueable.append(doc_id)\n"
+                    "            spent += min(pages, left)      # 装不满的那一份只占用剩下的余量，不按整本预支",
+               "            if spent + pages > budget_remaining:\n"
+                    "                skipped.setdefault(SKIP_BUDGET_SHORT, []).append(doc_id)\n"
+                    "                continue\n"
+                    "            queueable.append(doc_id)\n"
+                    "            spent += pages")]),
+    Case("G5", "把「明天再排」并进「已用满」（一个动作一种话，合成一条就抹掉一种）",
+         CRIT + "test_预算只够一部分时排得下的照排其余逐份列出来",
+         [Edit(SVC, "                skipped.setdefault(SKIP_BUDGET_SHORT, []).append(doc_id)",
+               "                skipped.setdefault(SKIP_BUDGET, []).append(doc_id)")]),
+    Case("G6", "面板不说「跑不到底」（只报够不够，不说最后一份会停在半路记 partial）",
+         CRIT + "test_预算不够跑完这一批时那句在面板上看得见",
+         [Edit(SVC, "        if self.partial_tail:\n"
+                    "            return (f\"今天跑不到底（还剩 {self.budget_remaining:,} 页，\"\n"
+                    "                    f\"这一批共 {self.pages_queueable:,} 页）：{PARTIAL_TAIL_TEXT}\")\n",
+               "")]),
 
     # —— N / X / F / K / W：面板的生命周期与两条纪律 ——————————————
     Case("N1", "换选中不收起面板（对着过期名单按「排队」）",
