@@ -65,6 +65,9 @@
 
 ## 怎么开始用
 
+> 第一次拿到程序只想快点用起来：三步走线的浓缩版在 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)，
+> 本节是同一条线的完整版。
+
 1. **拿到程序**：这个项目现在**还不提供下载好的安装包**。如果你是从源码运行，
    按 [`docs/INSTALL.md`](docs/INSTALL.md) 走一遍（有 Windows 命令行步骤，复制粘贴即可）。
 2. **第一次启动**：它只会在你机器上建一个空档案库，什么都不会改动。
@@ -97,6 +100,7 @@
 ## 这个仓库里还有什么
 
 **给使用者**
+- [`docs/QUICKSTART.md`](docs/QUICKSTART.md) —— 第一次拿到的十分钟：三步装好 + 一条验收
 - [`docs/USAGE.md`](docs/USAGE.md) —— 能怎么用，每一段都附实测过的输出
 - [`docs/INSTALL.md`](docs/INSTALL.md) —— 装在哪、怎么装、换一台机器怎么验
 - [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md) —— 备份与恢复

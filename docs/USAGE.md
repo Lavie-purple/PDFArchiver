@@ -2,8 +2,8 @@
 
 > 口径先说清楚：本指南只写**实测过**的用法。每一段「实测输出」都是这台机器上跑出来的原文，
 > 不是示意、不是伪代码。凡是只能通过命令行用的能力，这里就写命令行，不假装界面上有按钮。
-> 装在哪里、怎么装见 `docs/INSTALL.md`；OCR 单独有 `docs/OCR.md`；
-> 备份与恢复见 `docs/BACKUP-RESTORE.md`；出问题见 `docs/TROUBLESHOOTING.md`。
+> 第一次拿到程序从哪开始：[`QUICKSTART.md`](QUICKSTART.md)；装在哪里、怎么装见 `docs/INSTALL.md`；
+> OCR 单独有 `docs/OCR.md`；备份与恢复见 `docs/BACKUP-RESTORE.md`；出问题见 `docs/TROUBLESHOOTING.md`。
 
 ## 一、一句话现状
 
