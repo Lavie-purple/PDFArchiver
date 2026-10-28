@@ -70,11 +70,15 @@ class FloatablePanel(QtWidgets.QWidget):
         self.body = QtWidgets.QVBoxLayout(self)
         self.body.setContentsMargins(8, 8, 8, 8)
         head = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title)
+        # 显式挂父：这俩是先 add 进 `head`、`head` 才被装进 `body` 的，PySide6 6.8 对
+        # 这种顺序**不会**补 reparent（探针实测 close_button 从构造起 parent 就是 None）。
+        # 后果在窄档爆发：`setVisible(True)` 把无父控件提升成独立顶层窗口 —— 用户桌面上
+        # 真漏出过一个 135×59 的「✕ 关闭」小窗（2026-10-29）。
+        label = QtWidgets.QLabel(self)
         label.setObjectName("sectionTitle")
         head.addWidget(label)
         head.addStretch(1)
-        self.close_button = QtWidgets.QToolButton()
+        self.close_button = QtWidgets.QToolButton(self)
         self.close_button.setText("✕ 关闭")
         self.close_button.setToolTip(f"收起「{title}」浮层（窄档这一栏不常驻）")
         self.close_button.clicked.connect(self.close_overlay)

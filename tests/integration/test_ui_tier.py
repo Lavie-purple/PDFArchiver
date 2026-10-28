@@ -686,6 +686,32 @@ def test_越界页码拒绝并说明原因而不是就近取整(window, ctx, qap
     assert reader._current_page == 1, f"越界被就近取整了：现在在第 {reader._current_page + 1} 页"
 
 
+def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
+    """2026-10-29 真实事故：桌面漏出一个 135×59 的「✕ 关闭」顶层小窗。
+
+    根因是构造顺序 —— 控件先 `addWidget` 进未安装的 `head`，`head` 才被 `addLayout` 进
+    `body`，PySide6 6.8 不给这种顺序补 reparent（探针实测 parent 从构造起就是 None）；
+    窄档 `set_narrow(True)` 里 `close_button.setVisible(True)` 一调，无父控件就被提升成
+    独立顶层窗口，`panel.setVisible(False)` 永远盖不住它。判据用 `window()`（控件实际
+    所在的顶层窗口）而不是只看 `parent()`：孤儿一旦露头，`window()` 就不再等于主窗。
+    坏法注入实测（2026-10-29，本轮真跑）：把构造改回无父的 `QToolButton()` ⇒ 窄档开
+    浮层后 `window() is panel.window()` 当场红，且 `topLevelWidgets()` 里扫出孤儿按钮。
+    """
+    page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+    for panel in (page.tree_panel, page.right_panel):
+        assert panel.close_button.parent() is panel, \
+            "关闭按钮没有显式挂到面板上 —— 窄档 setVisible(True) 会把它漏成桌面顶层窗口"
+        panel.open_overlay()
+        _settle(qapp)
+        assert panel.close_button.window() is panel.window(), \
+            "「✕ 关闭」成了一个独立顶层窗口（孤儿按钮漏到桌面的形状）"
+        panel.close_overlay()
+        _settle(qapp)
+    orphans = [w for w in QtWidgets.QApplication.topLevelWidgets()
+               if isinstance(w, QtWidgets.QToolButton) and w.text() == "✕ 关闭"]
+    assert not orphans, f"桌面级顶层控件里扫到 {len(orphans)} 颗孤儿「✕ 关闭」按钮"
+
+
 def test_宽档常驻列关不掉而窄档浮层可关(window, qapp) -> None:
     """`close_overlay()` 在两档下语义不同，这条钉住那个不对称是**故意的**。
 
