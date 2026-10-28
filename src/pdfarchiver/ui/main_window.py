@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -48,7 +47,6 @@ NAV_WIDTH = 200
 _NAV_ICONS: dict[str, str] = {
     "library": "\U0001f4c1",      # 📁 文档库
     "ask": "\U0001f4ac",          # 💬 库内问答
-    "reader": "\U0001f4d6",       # 📖 继续阅读
     "archive": "\U0001f4e6",      # 📦 归档预览
     "operations": "\U0001f4dd",   # 📝 操作日志
     "duplicates": "\U0001f504",   # 🔄 重复检测
@@ -57,6 +55,12 @@ _NAV_ICONS: dict[str, str] = {
     "backup": "\U0001f4be",       # 💾 备份恢复
 }
 
+# 主题按钮与 F5 提示的唯一文案（轮四十一 ①甲 / ②乙 / F5）。
+THEME_BTN_TEXT = "\u25d0"  # ◐ 半月：不抢眼的主题切换，颜色由当前主题 QSS 决定
+F5_HINT_REFRESHED = "已刷新 · 当前屏数据已重查"
+F5_HINT_NOTHING = "当前屏没有可刷新的内容"
+HINT_SHOW_MS = 2500
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, ctx: AppContext, cold_start_seconds: float | None = None) -> None:
@@ -64,7 +68,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctx = ctx
         self._cold_start = cold_start_seconds
         self._pages: dict[str, QtWidgets.QWidget] = {}
-        self._reader_nav_suppressed = False
         self.setWindowTitle(f"PDF 归档工具 v{__version__}")
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)  # D-039；同时是 I52 的甲案
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
@@ -90,7 +93,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(split)
         self.nav.currentRowChanged.connect(self._on_nav_changed)
 
-        self._build_menus()
+        self._build_accelerators()
         self._apply_theme()
         self.statusBar().showMessage(self._status_text())
         # 状态栏右侧常驻一格「全库同步到哪个时刻」（轮三十六 乙，线框 §C 甲）。
@@ -100,14 +103,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_label = QtWidgets.QLabel()
         self.sync_label.setObjectName("muted")
         self.statusBar().addPermanentWidget(self.sync_label)
+        # 主题切换按钮（轮四十一 ①甲）：「视图」菜单删掉后，主题入口收进状态栏最右。
+        # 扁平无边框 + 半月字形，不抢眼；tooltip 由 `_apply_theme` 按"会切到哪边"刷新。
+        self.theme_btn = QtWidgets.QToolButton()
+        self.theme_btn.setObjectName("themeBtn")
+        self.theme_btn.setText(THEME_BTN_TEXT)
+        self.theme_btn.setAutoRaise(True)
+        self.theme_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        self.statusBar().addPermanentWidget(self.theme_btn)
         self.refresh_sync_cell()
-
-        # Ctrl+F = S1 搜索框的键盘入口（**ISSUES I53** ③甲，2026-10-17 定案，见 **D-052**）。
-        # 挂在外壳而不是页面里：焦点停在导航列表时按 Ctrl+F 也该有用，而
-        # `WidgetWithChildrenShortcut` 那种情况下根本不触发。判据只有一条「当前屏是 S1」——
-        # 不做跨屏跳转，那等于新增一条线框里没有、屏幕上也看不见的导航。
-        self.search_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
-        self.search_shortcut.activated.connect(self._focus_library_search)
 
         self._select_by_page_id(ctx.session.last_nav_page() or NAV_ITEMS[0].page_id)
 
@@ -117,38 +122,30 @@ class MainWindow(QtWidgets.QMainWindow):
         if isinstance(self.stack.currentWidget(), LibraryPage):
             self.stack.currentWidget().focus_search()
 
-    def _open_in_reader(self, payload: tuple[int, int | None]) -> None:
-        """S1 的「跳到该页 → S2」与双击文档行都走这里（`page_no` 为 None = 从当前页开）。"""
-        doc_id, page_no = payload
-        self._reader_nav_suppressed = True
-        try:
-            self._select_by_page_id("reader")
-            self._pages["reader"].open_document(doc_id, page_no=page_no)
-        finally:
-            self._reader_nav_suppressed = False
-
-    def _resume_last_read(self) -> None:
-        """「继续阅读」导航项的唯一行为：接上最近读过的那份（轮四十用户勾选 ②乙）。
-
-        `open_document` 自己会落到 `last_read_page`（reader_page 那半边的既有逻辑），
-        这里只负责"挑哪份"。压着 `_reader_nav_suppressed` 时不跑 —— 那是 S1/S9 的
-        跳转正在打开指定文档，再把"最近读的那份"叠上去就是把打开的文件换掉。
-        没有任何阅读记录时诚实说出来，不伪装成一张空阅读器。
-        """
+    def _ensure_reader_page(self) -> ReaderPage:
+        """S2 按需创建（轮四十一 甲）：阅读器不再是导航项，第一次跳转时才建。"""
         page = self._pages.get("reader")
-        if page is None or page._current_doc_id is not None:
-            return
-        doc = self.ctx.documents.last_read()
-        if doc is None:
-            page.status_label.setText(
-                "还没有阅读记录：去「文档库」双击一份 PDF，下次点「继续阅读」就从上次那页接着看。")
-            return
-        # `open_document` 打不开文件会弹模态框 —— 那是用户主动打开指定文档时的合理形状；
-        # 这里是导航自动打开，文件没了就安静退回提示，不拿对话框拦住导航。
-        if not Path(doc.path).exists():
-            page.status_label.setText(f"上次在读「{doc.name}」，但文件已不在原位置：{doc.path}")
-            return
-        page.open_document(int(doc.id))
+        if page is None:
+            page = ReaderPage(self.ctx)
+            # 与 `_on_nav_changed` 的惰性创建同一纪律（ISSUES I50）：建页晚于启动那次
+            # `_apply_theme`，占位色必须设在控件自身才上屏。
+            self.theme.apply_palette(page)
+            self._pages["reader"] = page
+            self.stack.addWidget(page)
+        return page
+
+    def _open_in_reader(self, payload: tuple[int, int | None]) -> None:
+        """S1/S9 的「跳到该页 → S2」、双击文档行与「上次读到」提示行都走这里
+        （`page_no` 为 None = 落到 `last_read_page`，恢复逻辑在 `reader_page` 那半边）。
+
+        S2 自轮四十一起不是导航项：这里直接建页切栈，不经过 `_on_nav_changed`，
+        所以也没有"导航自动接上最近读的那份"可被触发 —— 抑制位连同它的坏法一起没了。
+        """
+        doc_id, page_no = payload
+        page = self._ensure_reader_page()
+        self.nav.setCurrentRow(-1)  # 阅读页没有导航行；高亮清空比"停在旧屏的行"诚实
+        self.stack.setCurrentWidget(page)
+        page.open_document(doc_id, page_no=page_no)
 
     def _play_collection(self, entry) -> None:
         """S8 双击一条智能集合 → 切到 S1 并回放它存的那份条件（**ISSUES I78** 乙）。
@@ -162,23 +159,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---- 构建 ----
 
-    def _build_menus(self) -> None:
-        file_menu = self.menuBar().addMenu("文件")
-        quit_action = QtGui.QAction("退出", self)
-        quit_action.setShortcut(QtGui.QKeySequence.StandardKey.Quit)
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+    def _build_accelerators(self) -> None:
+        """键盘入口（轮四十一 ②乙）：菜单栏整条删掉后只剩两条窗口级快捷键。
 
-        view_menu = self.menuBar().addMenu("视图")
-        refresh = QtGui.QAction("刷新状态", self)
-        refresh.setShortcut(QtGui.QKeySequence.StandardKey.Refresh)
-        refresh.triggered.connect(self._refresh_current)
-        view_menu.addAction(refresh)
-
-        view_menu.addSeparator()
-        self._theme_action = QtGui.QAction("切换到暗色模式", self)
-        self._theme_action.triggered.connect(self._toggle_theme)
-        view_menu.addAction(self._theme_action)
+        Ctrl+F 唤 S1 搜索（**ISSUES I53** ③甲 / **D-052**，焦点停在导航上也要有用）；
+        F5 刷新当前屏 —— 菜单删了快捷键保留，按下去用一条瞬时提示回话（~2.5s 自动消，
+        和巡检临时区同一命运）：键盘入口不能"按了没反应"，但也不许写进常驻区。
+        退出只走窗口 ✕（`closeEvent`）。
+        """
+        self.search_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.activated.connect(self._focus_library_search)
+        self.refresh_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Refresh, self)
+        self.refresh_shortcut.activated.connect(self._refresh_with_hint)
 
     def _apply_theme(self) -> None:
         """将当前主题的 QSS 应用到整个应用。"""
@@ -186,9 +178,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setStyleSheet(qss)
         # 占位色不走 QSS，必须单独设进调色板（`ThemeManager.apply_palette`，ISSUES I50 乙）
         self.theme.apply_palette(self)
-        # 更新菜单文字
-        label = "切换到浅色模式" if self.theme.theme == ThemeManager.DARK else "切换到暗色模式"
-        self._theme_action.setText(label)
+        # 按钮的 tooltip 说的是"按下去会到哪边"，与菜单时代的文案同一口径
+        if getattr(self, "theme_btn", None) is not None:
+            self.theme_btn.setToolTip(
+                "切换到浅色模式" if self.theme.theme == ThemeManager.DARK else "切换到暗色模式")
         # 持久化
         try:
             self.ctx.app_settings.set("ui.theme", self.theme.theme)
@@ -217,8 +210,6 @@ class MainWindow(QtWidgets.QMainWindow):
             # S9 证据卡双击 → S2：与 S1 同一份 `_open_in_reader` 载荷口径（doc_id, page_no）。
             page.open_in_reader.connect(self._open_in_reader)
             return page
-        if item.page_id == "reader":
-            return ReaderPage(self.ctx)
         if item.page_id == "archive":
             return ArchivePage(self.ctx)
         if item.page_id == "operations":
@@ -250,29 +241,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack.setCurrentWidget(page)
         self.ctx.session.remember_nav_page(item.page_id)  # 立刻落库：重启后要能回到这一项
         self.statusBar().showMessage(self._status_text())
-        # 「继续阅读」（轮四十用户勾选 ②乙）：每次导航进阅读页且不是 S1 跳转带压时，
-        # 都尝试接上最近读的那份。启动恢复路径（last_nav_page 指到 reader）也走这里，
-        # 所以重启后直接落在「接着上次那页看」；重复调用由 `_current_doc_id` 守卫挡掉。
-        if item.page_id == "reader" and not self._reader_nav_suppressed:
-            self._resume_last_read()
 
-    def _refresh_current(self) -> None:
+    def _refresh_current(self) -> bool:
+        """让当前屏重查一遍自己的数据。返回有没有真的刷了（F5 提示按它分岔）。"""
         page = self.stack.currentWidget()
         if isinstance(page, SettingsPage):
             page.reload_status()
             page.reload_settings()
-        elif isinstance(page, CategoriesPage):
+            return True
+        if isinstance(page, (CategoriesPage, LibraryPage, AskPage, DedupPage, BackupPage)):
             page.reload()
-        elif isinstance(page, LibraryPage):
-            page.reload()
-        elif isinstance(page, AskPage):
-            page.reload()
-        elif isinstance(page, DedupPage):
-            page.reload()
-        elif isinstance(page, BackupPage):
-            page.reload()
+            return True
+        return False
+
+    def _refresh_with_hint(self) -> None:
+        if self._refresh_current():
+            self.statusBar().showMessage(F5_HINT_REFRESHED, HINT_SHOW_MS)
         else:
-            self.statusBar().showMessage("当前页没有可刷新的内容")
+            self.statusBar().showMessage(F5_HINT_NOTHING, HINT_SHOW_MS)
 
     def _status_text(self) -> str:
         return f"{self.ctx.paths.describe()}｜结构版本 {self.ctx.schema_version}"

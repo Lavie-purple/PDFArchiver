@@ -51,6 +51,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
@@ -137,6 +139,18 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self.clear_btn.clicked.connect(self._clear_search)
         search_lay.addWidget(self.clear_btn)
         center_lay.addLayout(search_lay)
+
+        # 轮四十一 甲「上次读到」提示行：S2 不再是导航项，「继续阅读」降级成 S1 搜索栏
+        # 下的一行 —— 有记录才出现，点击经 `open_in_reader` 打开最近那份、落上次那页
+        # （page_no=None，与命中面板同一载荷）；文件不在了可见但禁用并写明原因。
+        self.last_read_hint = QtWidgets.QToolButton()
+        self.last_read_hint.setObjectName("lastReadHint")
+        self.last_read_hint.setAutoRaise(True)
+        self.last_read_hint.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.last_read_hint.hide()
+        self.last_read_hint.clicked.connect(self._open_last_read)
+        center_lay.addWidget(self.last_read_hint)
+        self.update_last_read_hint()
 
         # 筛选条（**ISSUES I78** 乙）：chips 就是这一页的筛选状态，取数只认它递下来的那份 dict。
         self.filter_bar = FilterBar(self.ctx, on_query_changed=self._apply_query,
@@ -657,3 +671,28 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self._reload_categories()
         self.filter_bar.refresh()
         self._apply_query(self._query)
+        self.update_last_read_hint()
+
+    def update_last_read_hint(self) -> None:
+        """按 `ctx.documents.last_read()` 刷新提示行（轮四十一 甲）。三态互斥：
+        没记录 → 整行隐藏；有记录且文件在 → 可点；文件不在 → 可见但禁用、写明原因。"""
+        doc = self.ctx.documents.last_read()
+        if doc is None:
+            self.last_read_hint.hide()
+            return
+        exists = Path(doc.path).exists()
+        if doc.last_read_page and exists:
+            self.last_read_hint.setText(
+                f"上次读到 《{doc.name}》 · 第 {doc.last_read_page} 页 —— 点此继续")
+        elif exists:
+            self.last_read_hint.setText(f"上次读过 《{doc.name}》 —— 点此继续")
+        else:
+            self.last_read_hint.setText(f"上次在读《{doc.name}》，但文件已不在原位置")
+        self.last_read_hint.setToolTip(self.last_read_hint.text())
+        self.last_read_hint.setEnabled(exists)
+        self.last_read_hint.setVisible(True)
+
+    def _open_last_read(self) -> None:
+        doc = self.ctx.documents.last_read()
+        if doc is not None and self.last_read_hint.isEnabled():
+            self.open_in_reader.emit((int(doc.id), None))

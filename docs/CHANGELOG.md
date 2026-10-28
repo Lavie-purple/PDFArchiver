@@ -6,6 +6,45 @@
 
 ---
 
+## 轮四十一（2026-10-29）—— 菜单收敛（删文件/视图菜单）+ 状态栏主题按钮 + F5 提示 + 「继续阅读」降级为 S1 轻提示
+
+用户逐字确认（2026-10-29）：「文件和视图两个菜单没有太大作用，把视图的两个功能做在外面，刷新F5
+你给个提示就行，切换颜色模式 你就做一个切换按钮就好，不要抢眼」+ ①甲（状态栏半月按钮）②乙
+（「文件」菜单连 Ctrl+Q 整条删，退出只走窗口 ✕）+ 「继续阅读」改轻提示（回「甲」）。
+
+- **① 状态栏主题按钮**：`theme_btn`（`QToolButton`「◐」，扁平 `autoRaise` + 指针光标）挂状态栏
+  常驻区最右（`sync_label` 之后）；tooltip 说"按下去会到哪边"（暗色时「切换到浅色模式」），
+  `_apply_theme` 每次刷新；偏好照旧落 `ui.theme`。
+- **② 删「文件/视图」菜单**：`_build_menus` 整个删除，`menuBar().actions() == []` 成守卫；
+  Ctrl+Q（StandardKey.Quit）随之消失，退出只走窗口 ✕；F5 快捷键保留（`_build_accelerators`，
+  与 Ctrl+F 同一窗口级归属），按下去回一条瞬时提示（2.5s 自动消）：可刷新屏「已刷新 · 当前屏
+  数据已重查」，不可刷新屏（S2）如实回「当前屏没有可刷新的内容」；`_refresh_current` 改返回
+  bool，提示按它分岔。
+- **③ 「继续阅读」降级为 S1 轻提示**：`NAV_ITEMS` 9 → **8 项**，S2 不再是导航屏 —— 阅读页由
+  外壳按需创建（`_ensure_reader_page`）直接切栈，导航高亮清空（没有行比停在旧屏的行诚实）；
+  抑制位 `_reader_nav_suppressed` 与 `_resume_last_read` 连同它们的坏法一起删除（没有"导航自动
+  接上"这条路径就没有可被触发的问题）。S1 搜索栏下新增「上次读到 《…》 · 第 N 页 —— 点此继续」
+  提示行（`QToolButton` 扁平，默认隐藏）：有记录才出现，点击经 `open_in_reader` 信号
+  （`(doc_id, None)`，与命中面板同一载荷口径）打开最近那份、落在上次那页；文件挪走了**可见但
+  禁用**并写明原因。数据源仍是 `DocumentRepository.last_read()` 一个出口；`reload()` 与建页时
+  各刷一次。
+- **守卫**：`test_resume_reading.py` 重写为提示行版五条（无记录整行隐藏 / 可见可点且点击落上次
+  那页 / 挪走可见但禁用 / 注册表 8 项且无 reader / 图标）；`test_app_shell` 新增三条（菜单栏删净
+  且无残留 action / 主题按钮切换+持久化+tooltip / F5 两屏分岔提示），两处过期断言跟口径
+  （注册表 9→8；导航落库用例从 reader 换到 archive）。三条坏法注入当场红（按钮不接线 /
+  提示行不填内容 / F5 不发话）。预检 59 guards ALL GREEN（途中 library_page.py 703 行顶破
+  700 自线，注释与代码各收一行回 698）。
+- **回归与读数**：全量回归 **884 过 / 4 红**（562.0s）：G1 负载场 + `test_reader_assertions`
+  3 条 —— 后者是**测试助手过期**不是产品缺陷：`_navigate_to_reader` 还在 `_select_by_page_id
+  ("reader")`，S2 已不占导航格；助手改成外壳同一条路（`_ensure_reader_page` + 直接切栈）后
+  受影响套件 **54 过 / 1 红**，红的是 G1。G1 本窗四次单跑 **3.689 / 3.829 / 5.014 / 6.019s**
+  全红，当场 CPU **92–100%**（用户前台应用全开）；按 §4.41 先例负载场不作数、照记不换算，
+  改动不在 import 路径上（菜单→两条快捷键、一枚 QToolButton、一行提示行），安静窗定点复跑
+  归安静窗。**守卫比坏法先立功一次**：test_reader_assertions 的过期导航写法是全量回归当场
+  逮出来的，不是靠人眼。
+- **切册**：本册 603 行 > 600，按 **D-059** 第 4 条第四次切册 —— `轮二十六`、`轮二十五`
+  共 92 行整批逐字迁 `CHANGELOG-ARCHIVE-2.md`（标题行守恒 36 = 14 + 22），活册回到 508 行。
+
 ## 轮四十（2026-10-29）—— 导航收敛（删「检索」占位项 /「PDF 阅读」→「继续阅读」）+ 应用图标
 
 用户逐字确认（2026-10-29）：「跟进你的建议，同时这个项目窗体左上角是不是应该设计一下这个软件标志之类呢
@@ -468,101 +507,6 @@ PySide6 6.8 对先 `add` 进未安装子布局的控件不补 reparent：tier �
   收尾当场逮到两处：**I112 台账行在「处置」里又写了一遍加粗的 MITIGATED**（`ledger_check` 点名「状态字段有 2 个」，
   去粗后 6 passed）、**`docs/ISSUES.md` 与两处 docstring 的可用内存记成 4,329 MiB 而证据 JSON 是 4,377.9**
   （按证据改成 4,378）。一次性脚本按规矩**截成 0 字节**，证据 `.txt/.log/.json` 留在 `.probe_work/`（不入库）。
-
-## 轮二十六（2026-10-25）—— **I109 丙+丁** / **I110 丙** + 安静档复测 / **I111 甲+丁** / **I63 ⑤** 真库语义索引真写（549 页）；新开 **I112**
-
-用户这一轮的指令逐字：「⑤ 真库 vector_status 全 na（I63）｜⑦⑧ 等上面两条勾选｜⑨ injection 真空载读数｜
-⑩ 27–57 分钟跨度的机制未定位。 跟进你的建议来」⇒ 按我自己上一轮写下的建议执行：⑤ 真做、⑨ 只在真空载下取、
-其余三条按已落地的 丙/丁 收口。**没有新界面**（S7 只动了成本文案与状态页两条重查路线），线框回环节不触发。
-
-- **I109 丙 + 丁（OPEN → MITIGATED）** —— `status_service.read_tasks` 加 `with_ocr_pages` 开关，关掉时
-  `ocr_pages=None`、由 `TaskStatus._pages_text()` 一处写成「未现数（这条要全库扫描，按「重新读取数据库状态」才数）」，
-  **不写 `0 页`**；`StatusPage` 拆成 `reload()`（完整，只有按钮走）与 `reload_progress()`（建窗路径 + 5 秒巡检走），
-  `SettingsPage.reload_status()` 与 `StatusPage.__init__` 都换成轻版本，按钮 tooltip 明写要等几分钟。
-  真库只读实测（`.probe_work/u26_i109_light_path.txt`）：11,995,631,616B 真库上建窗 + 一次巡检节拍
-  **55 条语句 / 0.309s**，最慢两条 `documents` 状态 GROUP BY 15.8／14.0ms，**逐行扫 `text_pages` 全表的语句：无**
-  —— 对照被摘掉的那一条 201.1／212.3／210.7s。丁 = 两条配对守卫进 `tests/integration/test_status_readout.py`
-  （`set_trace_callback` 捞真执行的 SQL 逐条 `EXPLAIN QUERY PLAN`，出现不带 `USING` 的 `SCAN text_pages` 即红；
-  反面那条证明按钮路径上**恰好**抓得到一条并显示 `0 页`），坏法编到 **p9 #70**。
-- **I110 丙 + 安静档复测（OPEN → MITIGATED）** —— 确认框正文改读 `app_settings["db_check.last"].elapsed_s`
-  （`health_panel.full_confirm_text` + `last_full_elapsed`），没有可比记录时明说没有、不拿快速档冒充；
-  `FULL_COST` 改成「安静档四项（C1 18 分 16 秒 / C5 22 分 23 秒 / C11 19 分 16 秒 / C4 3 分 40 秒）+ 合计约 64 分钟
-  + 两场历史 + 跨度没定位」，四处同源一并改（`db_check.py` docstring／`FULL_COST`／`health_panel.py` docstring／
-  `UI-WIREFRAMES.md`），markdown 星号从纯文本 QLabel 里去掉（+几何复核、文案高 +14px、体检表仍 180）。
-  复测（真库只读、不调 `_remember`）：十二项同场 **2,665.8s（44 分 26 秒）**（起跑 CPU 23.1%｜可用 4,437MiB，
-  C1 1,096.0 / C5 1,343.0 / C4 220.4），C11 由 `.probe_work/u26_c11_only.py` 单跑补 **1,156.4s（19 分 16 秒）**
-  ⇒ 两段合计 **3,822.2s ≈ 64 分钟**（**不是同一时刻，不许写成「同场 13 项」**）；零写核对 `db_check.last`
-  仍是轮二十五的 `elapsed_s:3390.1`、库字节数未变。**2.1 倍的机制仍未定位**（残留 乙 不销账）。
-- **I111 甲 + 丁（OPEN → MITIGATED）** —— `bootstrap` 先建一只 `VectorStore` 再分别注入 `SemanticSearchService`
-  与 `VectorService`，`search_service` 构造加可选参数（不注入仍自建，`gates/stage6.py` 两处独立调用照旧）；
-  守卫两条进 `tests/integration/test_vector_write_path.py`（同进程只许一只实例 / 建完当场搜得到不必重启，
-  都用桩 embedding 绕开模型）⇒ 连同原 7 条 **9 passed**。临时库四段实测 + 三条坏法逐字见台账。
-  `vector_store.py:9` 的「内存映射」改回「整份读进内存」（实测 `np.save` 撞 `OSError: [Errno 22]`），
-  `ARCHITECTURE.md` 同口径更正。
-- **I63 ⑤ 真库语义索引真写（第一条真向量落进 11GB 真库）** —— `.probe_work/u26_semantic_pilot.py`，顺序固定：
-  装模型（`.probe_work/models/bge-small-zh-v1.5` → 产品根，0.36s / 23,903,394B）→ **备份在先**
-  （`backup-20261025-045656-v8`，70.1s / 11,995,631,616B）→ 小样本真写（`seed=20261025`，池 3,273 份点名 20 份）：
-  **549 页全部 done｜写入 549 条｜19.28s = 28.48 页/秒**，`vector_status {'na': 10991}` → `{'done': 20, 'na': 10971}`，
-  **同一只 `SemanticSearchService` 当场 3/3 命中来源**（0.6323 / 0.7396 / 0.7041），另起新进程仍读回
-  `count() 549` / `vectors.npy` 281,216B。主记录 10,991 与正文 1,975,611 前后未变；`VERDICT: ALL GREEN`。
-  探针自报 `vectors.npy 0B` 是**探针取错路径**（`paths.root` vs `data/`），以 §4.37 与重启复核为准。
-- **新事实入账 **ISSUES I112**（OPEN，等勾选，未实现）** —— 写路径 28.48 页/秒 对只读批式 72.86 页/秒 = **2.56 倍**
-  （去掉首份冷启动仍 2.30 倍）；根因 `vector_service.py:209` 逐页 `embed_single`（batch=1）+
-  `vector_store.py:167-175` 每份整表 `np.save`（`:170` 再 `vstack` 复制一遍）。按最大量级反算：终值 ≈ 964.8 MiB
-  （G8 红线 1,200MiB 的 80%）、累计写 ≈ 5.06 TiB、`vstack` 瞬时 ≈ 1.9 GiB、全量折算 **19.27 小时**。
-  方案甲乙丙丁已列，**推荐 甲 → 乙**。
-- **⑨ 真空载 injection：本轮没测到（如实记「没有读数」）** —— 13:00 两次采样整机 **CPU 43.8%**，
-  占用者是 `DoubaoWork` 123.6% + `WorkBuddy` 68.8% + 另两只 `DoubaoWork`，都不是本项目进程、按规矩不替用户关；
-  CPU<10% 的窗口本轮没出现，**上一轮 CPU 32.4% 的低负载场不许拿来当空载**。
-- **收尾** —— p9 **70/70**、p10 **45/45** 各自 `ALL GREEN`（p9 新坏法是「把全库正文扫描放回 5 秒巡检」）；
-  全量回归 `pytest tests/integration tests/unit tests/guards` **794 passed / 1 skipped（181.38s，定稿场）**、
-  `scripts/precheck.py` 两步 **9 判定 ALL GREEN**（54 守卫 + `docs-inject/guards`）。收尾当场逮到并修掉三处：
-  **I109 台账行的行尾竖线在上一轮补丁里丢了**（`tests/guards/test_ledger_shape.py` 当场点名 `I109（5 格、行尾未闭合）`）、
-  **一处探针脚本写成裸文件名**（`tests/guards/test_doc_pointers.py` 精确点名 `CHANGELOG.md:30`，补 `.probe_work/` 前缀后 37/37）、
-  **G1 冷启动在 55–78% 负载下 1.805–2.137s 假红**（分段 `import_to_run_s 1.932 / assemble 0.269 / window 0.117`，而本轮 diff 里一行 import 都没有 ⇒ 负载档位，负载回落后连跑两次通过）。
-  台账 110 → **112 行**（I111 与 I112 都是本轮新开），I109／I110／I111 三条转 MITIGATED。一次性脚本按规矩**截成 0 字节**，
-  证据 `.txt/.log/.json` 留在 `.probe_work/`（不入库）。
-
-## 轮二十五（2026-10-25）—— 把 §4.35 欠的四条证据补完（**产品代码一行未改**），新开 **I109 / I110**
-
-用户这一轮的指令逐字：「全库档 13 项没在界面里真跑过；四条门禁红的绿来自定点复跑、与那场 26 判定不是同一时刻；
-injection 整段未空载复跑；体检面板只有 offscreen 几何证据。 按你建议执行」。
-四条都是**证据欠账**，不是功能欠账 ⇒ 本轮没有任何一行 `src/` 改动，也没有新的界面（不触发线框回环节）。
-
-- **⑥ 真机（非 offscreen）几何与像素** —— `.probe_work/u25_screens_health.py` 去掉 `QT_QPA_PLATFORM`
-  （报告里 `platform=windows`、中文真渲染），在隔离种子库上把 S7 两档**用 `QTest.mouseClick` 点产品自己的按钮**
-  各跑一遍：**31 条判定 ALL GREEN**，快速 10 行 / 全库 13 行都 0 红，翻页不跳高 `([417,415],[417,415])`，
-  五张截图 md5 各异，且「翻回设置页」那张与首张设置页 **md5 逐字节相同** —— 1甲 的「翻回原样」第一次有像素证据。
-  判据有牙两条现证：`data_root` 指错 ⇒ `VOID_wrong_dataroot_report.json` RED；拆掉 `[库体检…]` 按钮 ⇒
-  `VOID_inj_no_toggle/` RED（5 条不成立）。种子库跑在 `work_dir`，`work_dir_removed=true` ⇒ 真库这轮没被这一场碰过。
-- **②③ 四条 G1 同源红并进同一条命令的一场上全绿** —— `gates/final.py --only regression --only coldstart
-  --only e2e --only injection`：02:59:27 → 03:15:32（965s ≈ 16 分 05 秒），起跑 CPU 32.4%｜可用 3,809MiB，
-  **13 条判定 0 红｜`VERDICT: ALL GREEN`**（regression 802 passed / 1 skipped、coldstart 1.046s、e2e 11 条、
-  injection 760.1s）。injection 整段 9 条探针第一次在低负载下同段全绿，抓坏法合计 **225 条**。
-  **诚实边界**：CPU 32.4% 是**低负载场**，不是真空载场（CPU<10% 的整段读数仍然没有）；`FULL_COST` 等文案一处没改，
-  **G1 的 1.5s 一处没动**。`injection_inflight` 由门禁自己在整段全绿后删掉，收尾 `git status` 只剩台账两行。
-- **① 真库全库档 13 项走界面路径真跑（两场）** —— `.probe_work/u25_real_full.py`：真窗口 S7 → 点按钮翻页 →
-  点「全库体检」→ 确认框（正文即 `FULL_COST`）→ 后台线程跑完 → 铺表 → `_remember()` 回写。
-  run1 **26 分 58 秒｜13 行 0 红**，但四张截图 md5 全同 ⇒ `before_and_after_differ` 等两条不成立，
-  **整场判 RED**、改名 `real_full_report_run1_no_visual.json` 只留计时证据（根因：上一场漏了点翻页按钮，
-  按钮在没露面的那一页上照样点得动、体检照样跑完，只是画不出东西）。run2 **56 分 30 秒｜17 条判定 ALL GREEN**，
-  四张图 md5 各异，滚到底 `last_row_rect=[105,133]｜on_screen=true` ⇒ 末行 C11 真画在屏上。
-  两场的 `{docs 10,991｜pages 1,975,611}` 前后一致 ⇒ 业务表零写入。
-  **这一轮写了真库两处产品自己的键**：`db_check.last`（run1 首写 1,618.2s，run2 覆盖 3,390.1s）与
-  `ui.last_nav_page="monitor"`（run2 收尾那一刻）；两条都能在界面里改回，**是否复位等用户说**。
-- **新事实两条入账（**ISSUES I109 / I110**，等勾选，未实现）** —— I109：S7 一在屏就把无索引的
-  `SELECT count(*) FROM text_pages WHERE source_kind='ocr'` 放在**主线程**上跑，真库单条 201.1／212.3／210.7s，
-  触发点是建窗路径与那条 5 秒巡检定时器（与 `main_window.py:261-264` 判重页已成文的处理相矛盾），
-  建议 **丙 + 丁**。I110：`FULL_COST` 写死「约 57 分钟与约 67 分钟」，而同库同按钮相邻两场实测 26 分 58 秒与
-  56 分 30 秒（C4 33×、C5 25×，其余九项 0.0–3.9s，且负载方向是反的），页缓存与并发同表扫描两条机制
-  都做了实验并被排除 ⇒ **机制未定位**，建议 **丙**（确认框改读 `db_check.last.elapsed_s` 报「上次实测」）。
-- **读数口径纠正（历史不改写）** —— §4.35 G 段把 p12 的 C3 记成「每盘 1,537,579ms × 6 盘」，实际那六行的 ms 是
-  同一个循环的累计值（逐项总和 5,581s 与该场 5,599.4s 吻合）；四个慢项读数有效，只有「× 6 盘」是误读，纠正写在 §4.36。
-- **收尾** —— `scripts/precheck.py` 本轮两次两步全绿（54 守卫 10.81s + 门禁 `docs-inject/guards` 9 判定 ALL GREEN）；
-  台账 110 行、逐条走到 **I102** 补了一条 2026-10-25 同场读数（状态 CLOSED 不变）；一次性脚本按规矩**截成 0 字节**，
-  证据类 `.txt/.json/.png` 留在 `.probe_work/`（不入库）。
-
-
 
 ## 分册：更早的轮次在两册
 

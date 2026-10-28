@@ -38,11 +38,14 @@ def _insert_doc(ctx, *, path: str, page_count: int = 3) -> int:
 
 
 def _navigate_to_reader(window, qapp) -> ReaderPage:
-    """切到阅读器那一屏，返回页面对象。"""
+    """拿到阅读页并切到它。轮四十一（2026-10-29）起 S2 不占导航格，
+    阅读页由外壳按需创建直接切栈 —— 这里走的就是外壳同一条路。"""
     from tests.conftest import settle as _settle
-    window._select_by_page_id("reader")
+    page = window._ensure_reader_page()
+    window.nav.setCurrentRow(-1)
+    window.stack.setCurrentWidget(page)
     _settle(qapp)
-    return window._pages["reader"]
+    return page
 
 
 def test_缩放档上下限与倍率(ctx, window, qapp, tmp_path: Path) -> None:

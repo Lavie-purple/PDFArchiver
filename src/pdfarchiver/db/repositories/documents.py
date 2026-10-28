@@ -160,7 +160,7 @@ class DocumentRepository:
                 (page, now_ts(), doc_id))
 
     def last_read(self) -> Document | None:
-        """最近读过的那份（`last_read_at` 最新）。「继续阅读」导航项的唯一数据源。"""
+        """最近读过的那份（`last_read_at` 最新）。S1「上次读到」提示行的唯一数据源（轮四十一 甲）。"""
         row = self.engine.thread_connection().execute(
             f"SELECT {_COLS} FROM documents "
             "WHERE last_read_at IS NOT NULL ORDER BY last_read_at DESC LIMIT 1").fetchone()
