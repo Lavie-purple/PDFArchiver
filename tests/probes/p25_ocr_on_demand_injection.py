@@ -35,6 +35,9 @@ REPO = "src/pdfarchiver/db/repositories/documents.py"
 SVC = "src/pdfarchiver/services/ocr_service.py"
 PAGE = "src/pdfarchiver/ui/pages/library_page.py"
 HITS = "src/pdfarchiver/ui/library_hits.py"
+# 轮四十二拆分（I96 甲第二次）：D1/D2/E/I 四条坏法的落点随代码搬进筛选区 mixin，
+# 目标路径跟着搬 —— 锚点文本一字未动，守卫仍钉同一段代码。
+FILTER = "src/pdfarchiver/ui/library_filter.py"
 
 CASES: list[Case] = [
     # —— A：待识别的定义（没识别过的扫描件，不是「没有结论的行」）———————————
@@ -61,17 +64,17 @@ CASES: list[Case] = [
     # —— D/E：按钮（按的是筛选不是勾选、先给账再排队、空名单置灰）——————————
     Case("D1", "按钮要求先勾表格（文案说的是「按筛选」，行为却看勾选）",
          ONDEMAND + "test_按钮按的是筛选而不是表格里勾了哪几份",
-         [Edit(PAGE, "        self.filter_ocr_btn.setEnabled(bool(pending.ids))",
+         [Edit(FILTER, "        self.filter_ocr_btn.setEnabled(bool(pending.ids))",
                "        self.filter_ocr_btn.setEnabled("
                "bool(pending.ids) and bool(self._selected_doc_ids()))")]),
     Case("D2", "不给账直接排队（跳过批次面板，「先给账再排队」的形状被绕开）",
          ONDEMAND + "test_按钮按的是筛选而不是表格里勾了哪几份",
-         [Edit(PAGE, "        self.ocr_panel.open_for(list(pending.ids))",
+         [Edit(FILTER, "        self.ocr_panel.open_for(list(pending.ids))",
                "        self.ctx.ocr.request_ocr(list(pending.ids))\n"
                "        self.ocr_panel.open_for(list(pending.ids))")]),
     Case("E", "没有待识别也亮着（一颗点下去点不到任何一份的按钮）",
          ONDEMAND + "test_筛选里没有待识别时按钮置灰",
-         [Edit(PAGE, "        self.filter_ocr_btn.setEnabled(bool(pending.ids))",
+         [Edit(FILTER, "        self.filter_ocr_btn.setEnabled(bool(pending.ids))",
                "        self.filter_ocr_btn.setEnabled(True)")]),
 
     # —— F/G/H：提示条三态（不命中该出现 / 有命中该收起 / 收起不留空名单）———————
@@ -89,7 +92,7 @@ CASES: list[Case] = [
                "        show = bool(empty and pending is not None)")]),
     Case("I", "提示条只送第一份（说「这一批」排的却是一份）",
          ONDEMAND + "test_提示条那颗按钮排的是这一批",
-         [Edit(PAGE, "        self.ocr_panel.open_for(list(pending.ids))",
+         [Edit(FILTER, "        self.ocr_panel.open_for(list(pending.ids))",
                "        self.ocr_panel.open_for(list(pending.ids)[:1])")]),
 ]
 

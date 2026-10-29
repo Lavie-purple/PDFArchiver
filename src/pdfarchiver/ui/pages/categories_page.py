@@ -102,6 +102,13 @@ class CategoriesPage(QtWidgets.QWidget):
         tag_title = QtWidgets.QLabel("标签")
         tag_title.setObjectName("sectionTitle")
         center_lay.addWidget(tag_title)
+        # ⑩ 空态引导（轮四十二）：两栏在真库上开局就是空的，一行话讲清东西从哪来 ——
+        # 标签与集合的写路径都在 S1（打标签 / 存为智能集合），这里只读，不指假出路。
+        self.tag_hint = QtWidgets.QLabel(
+            "还没有标签：在「文档库」选中文件后可批量打标签，或点下面「新建」。")
+        self.tag_hint.setObjectName("muted")
+        self.tag_hint.setWordWrap(True)
+        center_lay.addWidget(self.tag_hint)
         self.tag_list = QtWidgets.QListWidget()
         center_lay.addWidget(self.tag_list, 1)
         tag_btns = QtWidgets.QHBoxLayout()
@@ -133,6 +140,12 @@ class CategoriesPage(QtWidgets.QWidget):
         coll_title = QtWidgets.QLabel("智能集合")
         coll_title.setObjectName("sectionTitle")
         right_lay.addWidget(coll_title)
+        self.coll_hint = QtWidgets.QLabel(
+            "还没有智能集合：在「文档库」设好筛选条件后点「存为智能集合」，就会出现在这里"
+            "（双击一条集合回到那份条件）。")
+        self.coll_hint.setObjectName("muted")
+        self.coll_hint.setWordWrap(True)
+        right_lay.addWidget(self.coll_hint)
         self.collection_list = QtWidgets.QListWidget()
         self.collection_list.itemDoubleClicked.connect(self._on_collection_activated)
         right_lay.addWidget(self.collection_list, 1)
@@ -201,6 +214,7 @@ class CategoriesPage(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(tag.name)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, tag.id)
             self.tag_list.addItem(item)
+        self.tag_hint.setVisible(self.tag_list.count() == 0)
 
     def _reload_collections(self) -> None:
         """整列重查：每一行带着**它自己那条** `CollectionEntry`（不是行号）。
@@ -214,6 +228,7 @@ class CategoriesPage(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(entry.label())
             item.setData(QtCore.Qt.ItemDataRole.UserRole, entry)
             self.collection_list.addItem(item)
+        self.coll_hint.setVisible(self.collection_list.count() == 0)
 
     # ---- 右键菜单（**ISSUES I78** 甲：改父类 / 合并 的唯一入口）----
 

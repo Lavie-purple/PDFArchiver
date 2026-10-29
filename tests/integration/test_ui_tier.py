@@ -3,7 +3,8 @@
 **ISSUES I60** 的状态栏几何（口径那一行长什么样、折行之后顶不顶宽）、
 **D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏）与
 **ISSUES I53** ②甲/③甲 的命中面板与键盘入口（分组与页码片段、浏览态清空、Ctrl+F、
-跳到 S2 的那条链、越界页码拒绝、宽档常驻列关不掉）。
+跳到 S2 的那条链、越界页码拒绝）。轮四十二 ⑭ 之后右栏不再常驻：两档都是浮层、
+默认关、搜索出结果才开 —— `test_宽档左栏常驻而右栏默认关` 钉的是新契约。
 
 为什么单独成一个文件（`test_app_shell.py` 那一摊 2026-10-17 已按 **ISSUES I58** 丙 拆成四份，
 见 **REPO-JOURNAL R-010**）：这一组量的是**同一个控件在两个宽度档下的形状**，判据全部来自
@@ -87,34 +88,41 @@ def _seed_docs(ctx: AppContext, count: int = 3) -> None:
             sha256=f"{n:064x}", text_status="done", fts_status="done"))
 
 
-def test_宽档左栏与右栏按定宽常驻(window, qapp) -> None:
-    """`236 + 480 + 360 = 1076` 在设计档 1280 下三栏都常驻，定宽就是这两个数。
+def test_宽档左栏常驻而右栏默认关(window, qapp) -> None:
+    """左栏 236px 常驻；右栏自轮四十二 ⑭ 起不常驻（docked=False）——两档都是浮层、默认关。
 
     上一轮这里量到的是 [236, 481, 360]，看着对 —— 其实那三个数来自 `__init__` 里手写的
     `setSizes`，切档代码在 Qt 虚函数里抛异常被吞了、从没跑过。所以 `narrow is False`
     （而不是 None）这一条要先钉住：**切档真的跑过**，后面的宽度读数才算数。
+    右栏的 `narrow is None` 反而是新契约：它不吃档位（`set_narrow` 恒 False），
+    定宽靠构造时 `setFixedWidth(overlay_width)`。
     """
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     assert page.width() == PAGE_WIDTH_AT_DEFAULT, f"页面可用宽不是 {PAGE_WIDTH_AT_DEFAULT}：{page.width()}"
-    assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下三栏"
-    for panel in (page.tree_panel, page.right_panel):
-        assert panel.narrow is False, "切档没跑（还是 None）—— 异常被 Qt 的虚函数调用吞掉了"
-        assert panel.parent() is page.splitter, "宽档这两栏得还在 splitter 里占槽"
-    assert page.tree_panel.width() == LEFT_COLUMN_WIDTH, f"左栏不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{page.tree_panel.width()}"
-    assert page.right_panel.width() == RIGHT_COLUMN_WIDTH, f"右栏不是 D-040 的 {RIGHT_COLUMN_WIDTH}px：{page.right_panel.width()}"
-    assert page.tree_panel.strip is not None and not page.tree_panel.strip.isVisible(), \
+    assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下左树 + 中栏"
+    tp = page.tree_panel
+    assert tp.narrow is False, "切档没跑（还是 None）—— 异常被 Qt 的虚函数调用吞掉了"
+    assert tp.parent() is page.splitter, "宽档左栏得还在 splitter 里占槽"
+    assert tp.width() == LEFT_COLUMN_WIDTH, f"左栏不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{tp.width()}"
+    assert tp.strip is not None and not tp.strip.isVisible(), \
         "宽档那条 48px 的条必须隐藏，否则左栏前面多出一条空栏"
+    rp = page.right_panel
+    assert rp.docked is False and rp.narrow is None, "右栏不该吃档位判定（轮四十二 ⑭）"
+    assert rp.parent() is page and not rp.isVisible(), "右栏默认关、挂页面上当浮层"
+    assert (rp.minimumWidth(), rp.maximumWidth()) == (tier.OVERLAY_WIDTH, tier.OVERLAY_WIDTH), \
+        f"右栏定宽不是 {tier.OVERLAY_WIDTH}px"
 
 
-def test_窄档只牺牲右栏且左栏收成_48px_的条(window, qapp) -> None:
+def test_窄档左栏收成_48px_的条而右栏同样不占槽(window, qapp) -> None:
     """**D-040** 的取舍：地板档放不下三栏，牺牲的是命中/详情栏，**不是分类树**。
 
     分类树在窄档换成一条 48px 的条，中栏吃掉剩余宽度（实测 823 档：[48, 774]）。
+    右栏非常驻，窄档它还是那块默认关的浮层 —— 窄档真正要降级的只有左栏。
     """
     page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
     assert page.width() == PAGE_WIDTH_AT_FLOOR
     assert page.width() < THREE_COLUMN_MIN_WIDTH, "用例前提：这一档放不下三栏"
-    assert page.tree_panel.narrow is True and page.right_panel.narrow is True
+    assert page.tree_panel.narrow is True and page.right_panel.narrow is None
     assert page.tree_panel.parent() is page and page.right_panel.parent() is page, \
         "窄档两块面板都该从 splitter 里摘出来挂到页面上（不参与布局 ⇒ 顶不宽窗口）"
     assert page.splitter.count() == 2, f"窄档 splitter 该只剩「条 + 中栏」两槽：{page.splitter.sizes()}"
@@ -530,66 +538,57 @@ def test_浏览态不许留着上一次查询的命中(window, ctx, qapp, make_p
     assert not page.jump_btn.isEnabled(), "面板空了跳转按钮还亮着 = 按下去什么都不知道"
 
 
-def test_Ctrl_F_真的把光标交给搜索框并在地板档唤出命中面板(window, qapp) -> None:
-    """③甲 定的键位。三条判据各只有一条链子能过：
+def test_Ctrl_F_把光标交给搜索框而右栏等搜索结果(window, qapp) -> None:
+    """③甲 定的键位（轮四十二 ⑭ 改约：Ctrl+F 只交焦点，右栏等搜索出结果再开）。
 
     1. **焦点在导航列表上按 Ctrl+F** —— 焦点最终落在搜索框。这一条同时验两件事：短路挂在
-       **窗口**（`WindowShortcut`，所以焦点不在 S1 的控件里也有效，这正是 `main_window`
-       注释里选窗口级而不选 `WidgetWithChildrenShortcut` 的理由）与槽真的会 `setFocus()`。
-    2. **搜索框已经有焦点时**再按一次，浮层仍然出现 —— 这一步 `FocusIn` 不会重发，
-       只有 `focus_search()` 里那句**显式** `open_overlay()` 做得到（不靠副作用）。
-    3. 键面就是 **Ctrl+F**（改成 Ctrl+G 也算"有快捷键"，但那是线框之外的第二个口径）。
+       **窗口**（`WindowShortcut`，所以焦点不在 S1 的控件里也有效）与槽真的会 `setFocus()`。
+    2. 键面就是 **Ctrl+F**（改成 Ctrl+G 也算"有快捷键"，但那是线框之外的第二个口径）。
+    3. 右栏**不**因为 Ctrl+F 打开 —— 那一刻它还是空的，空白浮层盖在表格上是又一种堆积。
 
     坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：
-    ① 键位改成 Ctrl+G ⇒ 红在判据 3（那条写在测试最前面，先撞）；
-    ② 删掉 `focus_search()` 里的显式 `open_overlay()` ⇒ **只红在判据 2**，判据 1 仍绿
-       （第一次按键可以靠 `FocusIn` 副作用蒙过去 —— 这正是判据 2 存在的理由）；
+    ① 键位改成 Ctrl+G ⇒ 红在判据 2；
     ③ 把 `QShortcut` 的 parent 从窗口改成 `self.stack` 并降成 `WidgetWithChildrenShortcut`
        ⇒ 红在判据 1（焦点在导航列表上按键没反应）。
     """
-    page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-    assert str(window.search_shortcut.key().toString()) == "Ctrl+F"
-    assert not page.right_panel.isVisible(), "用例前提：地板档浮层默认是关的"
-
-    window.nav.setFocus()
-    _activate(window, qapp)
-    assert QtWidgets.QApplication.focusWidget() is not page.search_input, "用例前提：焦点先在别处"
-    QtTest.QTest.keyClick(window, QtCore.Qt.Key.Key_F, QtCore.Qt.KeyboardModifier.ControlModifier)
-    _settle(qapp)
-    assert QtWidgets.QApplication.focusWidget() is page.search_input, "Ctrl+F 没把焦点交给搜索框"
-    assert page.right_panel.isVisible(), "Ctrl+F 没唤出命中面板"
-    geo = page.right_panel.geometry()
-    assert geo.width() == tier.OVERLAY_WIDTH and geo.x() + geo.width() == page.width(), \
-        f"面板没贴在页面右沿：{geo.getRect()}"
-
-    # 已经有焦点时再按一次 —— 只有显式 open_overlay() 能过这一步
-    page.right_panel.close_overlay()
-    _settle(qapp)
-    assert not page.right_panel.isVisible()
-    assert QtWidgets.QApplication.focusWidget() is page.search_input, "用例前提：焦点仍停在搜索框"
-    QtTest.QTest.keyClick(page.search_input, QtCore.Qt.Key.Key_F,
-                         QtCore.Qt.KeyboardModifier.ControlModifier)
-    _settle(qapp)
-    assert page.right_panel.isVisible(), "搜索框已聚焦时 Ctrl+F 只靠 FocusIn 副作用，等于没有键盘入口"
+    for width in (MIN_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH):
+        page = _page_at(window, qapp, "library", width, MIN_WINDOW_HEIGHT)
+        assert str(window.search_shortcut.key().toString()) == "Ctrl+F"
+        assert not page.right_panel.isVisible(), "用例前提：右栏默认是关的"
+        window.nav.setFocus()
+        _activate(window, qapp)
+        assert QtWidgets.QApplication.focusWidget() is not page.search_input, "用例前提：焦点先在别处"
+        QtTest.QTest.keyClick(window, QtCore.Qt.Key.Key_F, QtCore.Qt.KeyboardModifier.ControlModifier)
+        _settle(qapp)
+        assert QtWidgets.QApplication.focusWidget() is page.search_input, "Ctrl+F 没把焦点交给搜索框"
+        assert not page.right_panel.isVisible(), "Ctrl+F 只交焦点；右栏等搜索出结果再开（轮四十二 ⑭）"
 
 
-def test_Ctrl_F_在宽档只交焦点不收走常驻列(window, qapp) -> None:
-    """宽档那一栏本来就在场：键盘入口在这里的职责是**交焦点**，不是"再开一次浮层"。
-
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：把 `focus_search()` 里的
-    `open_overlay()` 换成 `setVisible(False)` ⇒ 红在最后一那条（读数变成 0px）。
-    原先在这里写的坏法是「先 `close_overlay()` 再开」，**它已经骗不过来了** —— `close_overlay()`
-    在宽档会早退（见下面那条守卫），所以那次注入会全绿；记下来是因为"改好一处会让别处已经写好的
-    判据失效"这件事本身只有注入才看得见。
+def test_右栏两档都是浮层_宽档常驻树列关不掉(window, qapp) -> None:
+    """轮四十二 ⑭ 之后的不对称：右栏（docked=False）两档都是可关的浮层；
+    左树（docked=True）在宽档是常驻列，`close_overlay()` 必须早退 ——
+    常驻列被误收起后 `set_narrow()` 只在真的换档时才 `setVisible(True)`，
+    宽档一旦收起就**再也回不来**（2026-10-17 探针实测到了这个形状）。
     """
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert page.right_panel.isVisible() and page.right_panel.width() == RIGHT_COLUMN_WIDTH
-    _activate(window, qapp)
-    QtTest.QTest.keyClick(window, QtCore.Qt.Key.Key_F, QtCore.Qt.KeyboardModifier.ControlModifier)
+    rp = page.right_panel
+    assert not rp.isVisible()
+    rp.open_overlay()
     _settle(qapp)
-    assert QtWidgets.QApplication.focusWidget() is page.search_input
-    assert page.right_panel.isVisible() and page.right_panel.width() == RIGHT_COLUMN_WIDTH, \
-        f"宽档按一次 Ctrl+F 之后常驻列没了：{page.right_panel.width()}px"
+    assert rp.isVisible(), "宽档右栏也该能开（两档都是浮层）"
+    geo = rp.geometry()
+    assert geo.width() == tier.OVERLAY_WIDTH and geo.x() + geo.width() == page.width(), \
+        f"右栏没贴在页面右沿：{geo.getRect()}"
+    rp.close_button.click()
+    _settle(qapp)
+    assert not rp.isVisible(), "右栏的「✕」没把浮层关掉"
+
+    tp = page.tree_panel
+    assert not tp.close_button.isVisible(), "宽档常驻列不该有「✕」"
+    tp.close_overlay()
+    _settle(qapp)
+    assert tp.isVisible() and tp.parent() is page.splitter and tp.width() == LEFT_COLUMN_WIDTH, \
+        "宽档的常驻树列被 close_overlay() 收走了 —— 这一档没有'关掉整栏'这回事"
 
 
 def test_跳转按钮与双击真的走到_S2_并落在那一页(window, ctx, qapp, make_pdf) -> None:
@@ -708,30 +707,7 @@ def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
         panel.close_overlay()
         _settle(qapp)
     orphans = [w for w in QtWidgets.QApplication.topLevelWidgets()
-               if isinstance(w, QtWidgets.QToolButton) and w.text() == "✕ 关闭"]
-    assert not orphans, f"桌面级顶层控件里扫到 {len(orphans)} 颗孤儿「✕ 关闭」按钮"
+               if isinstance(w, QtWidgets.QToolButton) and w.text() == "✕"]
+    assert not orphans, f"桌面级顶层控件里扫到 {len(orphans)} 颗孤儿「✕」按钮"
 
-
-def test_宽档常驻列关不掉而窄档浮层可关(window, qapp) -> None:
-    """`close_overlay()` 在两档下语义不同，这条钉住那个不对称是**故意的**。
-
-    D-040 那句「可关」写的是浮层；常驻列被误收起后 `set_narrow()` 只在真的换档时才
-    `setVisible(True)`，所以宽档一旦收起就**再也回不来**（本轮探针实测到了这个形状）。
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：把 `close_overlay()` 里那句
-    `if not self.narrow: return` 删掉 ⇒ 红在前半条（宽档常驻列读数变成 0px）。
-    """
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert not page.right_panel.close_button.isVisible(), "宽档不该给常驻列一颗「✕ 关闭」"
-    page.right_panel.close_overlay()
-    _settle(qapp)
-    assert page.right_panel.isVisible() and page.right_panel.width() == RIGHT_COLUMN_WIDTH, \
-        "宽档的常驻列被 close_overlay() 收走了 —— 这一档没有'关掉整栏'这回事"
-
-    page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-    page.right_panel.open_overlay()
-    _settle(qapp)
-    assert page.right_panel.close_button.isVisible(), "窄档浮层没有出口"
-    page.right_panel.close_button.click()
-    _settle(qapp)
-    assert not page.right_panel.isVisible()
 

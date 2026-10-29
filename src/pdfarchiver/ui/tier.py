@@ -9,7 +9,7 @@
 - `docs/DECISIONS.md` **D-039** 尺寸段（同一句在 `docs/UI-SCREENS.md` 第 113 行）：
   「**1024 档必须收起 S8 的树侧栏**，这一条写成界面断言」。
 
-所以命中这一类的现有屏是 **S1**（左分类树 + 右详情）与 **S8**（左分类树），
+所以命中这一类的现有屏是 **S1**（左分类树）与 **S8**（左分类树），
 它们共用下面这一个 `FloatablePanel`，而不是各屏再抄一遍 `resizeEvent`。
 AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪些地方是同类」是这里的直接理由：
 两份手抄的切档代码一旦阈值漂了，差别只在某个用户把窗口拖窄的那一刻才看得见。
@@ -20,11 +20,13 @@ AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪
   把 `minimumSizeHint` 顶宽，窗口拖不到 D-039 地板以下；
 - 浮层**默认关**、**可关**（D-040 代价段：「开/关状态可断言，不记忆成每次都开」）；
 - 一块 host 上**同时只开一个浮层** —— 线框只给了一个浮层的位置（列表右侧 420px），
-  两个叠在一起会让下面那个变成"关不掉的透明层"。
+  两个叠在一起会让下面那个变成"关不掉的透明层"；
+- `docked=False` 的面板**两档都是浮层**：不进 splitter、默认关，命中时机到了才开
+  （轮四十二 ⑭：S1 右栏不再常驻占一栏）。它不吃档位判定，`set_narrow` 恒 False。
 """
 from __future__ import annotations
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 # 线框 §S1 的算术原式。比较的是**页面自己的宽度**（外壳已经扣掉导航），不是窗口宽度 ——
 # 窗口口径在 `main_window.MIN_WINDOW_WIDTH`，这里再减一次 200 就变成第二个口径。
@@ -36,25 +38,37 @@ THREE_COLUMN_MIN_WIDTH = LEFT_COLUMN_WIDTH + CENTER_MIN_WIDTH + RIGHT_COLUMN_WID
 TREE_STRIP_WIDTH = 48      # D-040 的"图标条 48px"
 OVERLAY_WIDTH = 420        # D-040 的"覆盖在列表右侧 420px，可关"
 
+# 浮层顶部要给右上角那颗「✕」让位，正文上边距比常驻列多留一截。
+_OVERLAY_TOP_MARGIN = 32
+_DOCKED_TOP_MARGIN = 8
+
 
 class FloatablePanel(QtWidgets.QWidget):
     """一块面板：宽档待在 splitter 里占一槽，窄档变成页面上的浮层。
 
     `strip_label` 非空时另带一条 48px 的替身条，它**一直挂在 splitter 里**、宽档隐藏
     （QSplitter 给隐藏项 0 宽），所以切换只改父对象和可见性，不在两个控件之间搬东西。
-    条上那颗按钮是浮层的入口，面板顶栏那颗「✕ 关闭」是出口。
+    条上那颗按钮是浮层的入口，面板右上角那颗「✕」是出口；关掉时发 `closed`，
+    调用方用它区分"用户亲手关了"与"从来没开过"。
 
     面板内容只有一份：复制一份控件就等于把同一份读数写进两个地方 ——
     **D-040** 第三条后果在 S7 上刚犯过一次（状态读数被抄了两遍），这里不重犯。
+
+    轮四十二 乙：标题行整行删掉（原来那行 `QLabel` 从构造起就没 `setText`，
+    只在 tooltip 里有字，却一直占着一格高 —— 用户红框 #1 的空带）。
     """
+
+    closed = QtCore.Signal()
 
     def __init__(self, host: QtWidgets.QWidget, title: str, *,
                  column_width: int, strip_label: str = "",
-                 overlay_width: int = OVERLAY_WIDTH) -> None:
+                 overlay_width: int = OVERLAY_WIDTH,
+                 docked: bool = True) -> None:
         super().__init__()
         self.host = host
         self.column_width = column_width
         self.overlay_width = overlay_width
+        self.docked = docked
         # `setFixedWidth` 同时改 min 和 max，回宽档要恢复的就是这两个默认值。这里记下构造时
         # 的默认上限，而不是硬写 `QWIDGETSIZE_MAX` —— PySide6 6.8 的 `QtWidgets` 里**没有**
         # 这个常量（实测 AttributeError），而它一旦被写进一个 Qt 虚函数调用链里，异常会被
@@ -68,26 +82,19 @@ class FloatablePanel(QtWidgets.QWidget):
         self._index = -1
 
         self.body = QtWidgets.QVBoxLayout(self)
-        self.body.setContentsMargins(8, 8, 8, 8)
-        head = QtWidgets.QHBoxLayout()
-        # 显式挂父：这俩是先 add 进 `head`、`head` 才被装进 `body` 的，PySide6 6.8 对
-        # 这种顺序**不会**补 reparent（探针实测 close_button 从构造起 parent 就是 None）。
-        # 后果在窄档爆发：`setVisible(True)` 把无父控件提升成独立顶层窗口 —— 用户桌面上
-        # 真漏出过一个 135×59 的「✕ 关闭」小窗（2026-10-29）。
-        label = QtWidgets.QLabel(self)
-        label.setObjectName("sectionTitle")
-        head.addWidget(label)
-        head.addStretch(1)
+        self.body.setContentsMargins(8, _DOCKED_TOP_MARGIN, 8, 8)
+
+        # 「✕」不进 body：它是面板自己的角标，位置在 resizeEvent 里钉在右上角。
+        # 显式挂父（构造时给 self）—— 轮三十九的孤儿顶层窗就是漏挂父爆出来的。
         self.close_button = QtWidgets.QToolButton(self)
-        self.close_button.setText("✕ 关闭")
-        self.close_button.setToolTip(f"收起「{title}」浮层（窄档这一栏不常驻）")
+        self.close_button.setText("✕")
+        self.close_button.setToolTip(f"收起「{title}」浮层（这一栏不常驻）")
         self.close_button.clicked.connect(self.close_overlay)
-        # 宽档它是常驻栏，没有"关掉整栏"这回事 —— 「可关」是 D-040 给浮层写的形状。
+        # 常驻列没有"关掉整栏"这回事 —— 「可关」是 D-040 给浮层写的形状。
         self.close_button.setVisible(False)
-        self.body.addLayout(head)
 
         self.strip: QtWidgets.QWidget | None = None
-        if strip_label:
+        if docked and strip_label:
             self.strip = QtWidgets.QWidget()
             strip_lay = QtWidgets.QVBoxLayout(self.strip)
             strip_lay.setContentsMargins(2, 8, 2, 8)
@@ -100,9 +107,33 @@ class FloatablePanel(QtWidgets.QWidget):
             self.strip.setFixedWidth(TREE_STRIP_WIDTH)
             self.strip.setVisible(False)
 
+        if not docked:
+            # 两档都是浮层：定宽、开浮层样式、默认关（`attach` 时挂到 host 上）。
+            self.setFixedWidth(self.overlay_width)
+            self._apply_overlay_style(True)
+
+    # ---- 形状 ----
+
+    def _apply_overlay_style(self, on: bool) -> None:
+        self.body.setContentsMargins(
+            8, _OVERLAY_TOP_MARGIN if on else _DOCKED_TOP_MARGIN, 8, 8)
+        self.close_button.setVisible(on)
+
+    def _is_overlay(self) -> bool:
+        """此刻是不是以浮层形状活着（非常驻列恒是；常驻列只在窄档是）。"""
+        return not self.docked or bool(self.narrow)
+
     def attach(self, splitter: QtWidgets.QSplitter) -> None:
-        """宽档形状：条（若有）排在面板前面，两者都进 splitter。"""
+        """常驻列的宽档形状：条（若有）排在面板前面，两者都进 splitter。
+
+        `docked=False` 的面板不进 splitter —— `setParent(host)` 挂到页面上当纯浮层，
+        默认关；它不影响 splitter 的槽数与 `minimumSizeHint`。
+        """
         self._splitter = splitter
+        if not self.docked:
+            self.setParent(self.host)
+            self.setVisible(False)
+            return
         if self.strip is not None:
             splitter.addWidget(self.strip)
         splitter.addWidget(self)
@@ -110,6 +141,8 @@ class FloatablePanel(QtWidgets.QWidget):
 
     def set_narrow(self, narrow: bool) -> bool:
         """切档。返回是否真的变了档（没变就不该重推 splitter 尺寸）。"""
+        if not self.docked:
+            return False
         if narrow == self.narrow:
             return False
         self.narrow = narrow
@@ -120,14 +153,14 @@ class FloatablePanel(QtWidgets.QWidget):
             self.setFixedWidth(self.overlay_width)
             if self.strip is not None:
                 self.strip.setVisible(True)
-            self.close_button.setVisible(True)
+            self._apply_overlay_style(True)
             self.setVisible(False)     # 默认关：不记忆成"每次都开"
         else:
             self.setMinimumWidth(0)
             self.setMaximumWidth(self._default_max_width)
             if self.strip is not None:
                 self.strip.setVisible(False)
-            self.close_button.setVisible(False)
+            self._apply_overlay_style(False)
             # 第一次切到宽档时它本来就在 splitter 里（`attach` 放进去的），别重复插。
             if self.parent() is not self._splitter:
                 self._splitter.insertWidget(self._index, self)
@@ -136,33 +169,46 @@ class FloatablePanel(QtWidgets.QWidget):
 
     def place(self) -> None:
         """贴在页面右沿；不参与布局，所以位置只能自己算。"""
-        if not self.narrow or not self.isVisible():
+        if not self.isVisible():
+            return
+        if self.docked and not self.narrow:
             return
         height = self._splitter.height() if self._splitter else self.host.height()
         self.setGeometry(max(0, self.host.width() - self.overlay_width),
                          0, self.overlay_width, height)
         self.raise_()
 
+    def resizeEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        # 「✕」钉在右上角：面板宽随浮层/常驻两档变，手动定位只能跟着 resize 走。
+        self.close_button.adjustSize()
+        self.close_button.move(self.width() - self.close_button.width() - 8, 6)
+
+    # ---- 开关 ----
+
     def open_overlay(self) -> None:
-        if not self.narrow:
+        if self.docked and not self.narrow:
             return
-        # findChildren 只找得到已经挂到 host 上的浮层（宽档时它们是 splitter 的子），
+        # findChildren 只找得到已经挂到 host 上的浮层（常驻宽档时它们是 splitter 的子），
         # 收口成一个调用点，省掉"每屏记得互相登记"这条容易漏的约定。
+        # 只摘**此刻是浮层**的同伴：常驻列被误 setVisible(False) 会收起且回不来。
         for other in self.host.findChildren(FloatablePanel):
-            if other is not self:
+            if other is not self and other._is_overlay():
                 other.setVisible(False)
         self.setVisible(True)
         self.place()
 
     def close_overlay(self) -> None:
-        """宽档这一栏是常驻列，"可关"是 D-040 给**浮层**写的形状，不适用于常驻列。
-        和 `open_overlay()` 对称地早退，而不是无条件 `setVisible(False)`：后者误调用一次
-        就把常驻列收起且**再也回不来** —— `set_narrow()` 只在真的换档时才 `setVisible(True)`
-        （本轮探针实测到了这个形状：宽档 `close_overlay()` 之后面板读数变成 0 宽）。
+        """常驻列不可关（与 `open_overlay()` 对称地早退）：误调用一次就把常驻列收起且
+        **再也回不来** —— `set_narrow()` 只在真的换档时才 `setVisible(True)`。
+
+        真正关掉浮层时发 `closed`：调用方（S1 右栏）据此记住"用户亲手关了"，
+        后续选中文档不再自动把它唤出来。
         """
-        if not self.narrow:
+        if self.docked and not self.narrow:
             return
         self.setVisible(False)
+        self.closed.emit()
 
 
 def sync_tier(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],
@@ -171,6 +217,8 @@ def sync_tier(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],
 
     `host_width == 0` 直接返回：构造时 `width()` 还是 0，拿它判档会凭一个假宽度把
     常驻栏凭空摘走（实测过：窗口没 resize 前页面就布局了一轮 0 宽）。
+    `docked=False` 的面板不吃档位（`set_narrow` 恒 False），但 `place()` 照走 ——
+    它开着的时候窗口变宽变窄都得跟着贴右沿。
     """
     if host_width <= 0:
         return

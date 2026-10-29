@@ -118,6 +118,12 @@ class AskPage(QtWidgets.QWidget):
         title = QtWidgets.QLabel("答案")
         title.setObjectName("sectionTitle")
         answer_lay.addWidget(title)
+        # ⑨ 空态引导（轮四十二）：没提问之前答案区一片空白，这句话告诉人这一屏怎么用、
+        # 以及「向量 未建」时为什么提问不会有结果。第一次提问后整条隐藏。
+        self.empty_hint = QtWidgets.QLabel()
+        self.empty_hint.setObjectName("muted")
+        self.empty_hint.setWordWrap(True)
+        answer_lay.addWidget(self.empty_hint)
         self.answer_label = QtWidgets.QLabel()
         self.answer_label.setWordWrap(True)
         answer_lay.addWidget(self.answer_label)
@@ -160,6 +166,21 @@ class AskPage(QtWidgets.QWidget):
         vectors, docs = self.ctx.qa.stats()
         self.scope_hint.setText(f"范围：全库（{docs:,} 份）")
         self.vector_label.setText("向量 已建" if vectors else "向量 未建")
+        self._update_empty_hint(vectors)
+
+    def _update_empty_hint(self, vectors: int) -> None:
+        """⑨ 空态引导的两档文案：向量在场讲用法，缺席讲为什么提问不会有结果。
+
+        向量由索引链路自动建立（job 队列的 `vector` 处理器），不设第二个入口 ——
+        所以「未建」指路只能指「等索引完成」，指别处就是假出路。
+        """
+        base = ("在上方输入关于这批文档的问题，点「提问」：答案从库里的正文原文中摘录，"
+                "并附证据卡，双击证据卡直接打开那一页。")
+        if vectors:
+            self.empty_hint.setText(base)
+        else:
+            self.empty_hint.setText(base + "当前「向量 未建」：索引完成后会自动建立，"
+                                     "建好之前提问检索不到内容。")
 
     def reload(self) -> None:
         """「视图 → 刷新状态」入口：重读范围与向量读数。"""
@@ -171,6 +192,7 @@ class AskPage(QtWidgets.QWidget):
         query = self.ask_input.text().strip()
         if not query:
             return
+        self.empty_hint.setVisible(False)
         try:
             answer = self.ctx.qa.ask(query)
         except Exception as exc:  # noqa: BLE001 - 边界：模型/向量库抛什么都得让用户看见原文

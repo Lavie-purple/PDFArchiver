@@ -336,13 +336,14 @@ QListWidget#navList::item:selected {{
     font-weight: 600;
 }}
 
-/* ===== 表格 ===== */
+/* ===== 表格 =====
+   轮四十二 ⑰：外圈描边去掉（表格自己的表头底线 + 网格线已经够分隔，
+   再围一圈就是"每个格子都装在盒子里"的分割感）。 */
 QTableWidget {{
     background-color: {c.card_bg};
     alternate-background-color: {c.table_row_alt};
     gridline-color: {c.table_grid};
-    border: 1px solid {c.table_border};
-    border-radius: 6px;
+    border: none;
     outline: none;
     selection-background-color: {c.accent_light};
     selection-color: {c.text_primary};
@@ -378,12 +379,12 @@ QTableCornerButton::section {{
     border-right: 1px solid {c.table_grid};
 }}
 
-/* ===== 树形控件 ===== */
+/* ===== 树形控件 =====
+   轮四十二 ⑰：同表格 —— 树常驻在 FloatablePanel 里，外面再描一圈就是双重框。 */
 QTreeWidget {{
     background-color: {c.tree_bg};
     color: {c.text_primary};
-    border: 1px solid {c.card_border};
-    border-radius: 6px;
+    border: none;
     outline: none;
 }}
 QTreeWidget::item {{
@@ -400,12 +401,12 @@ QTreeWidget::item:selected {{
     border-radius: 4px;
 }}
 
-/* ===== 列表控件 ===== */
+/* ===== 列表控件 =====
+   轮四十二 ⑰：同表格。命中面板/详情这类整栏列表不再自带描边。 */
 QListWidget {{
     background-color: {c.card_bg};
     color: {c.text_primary};
-    border: 1px solid {c.card_border};
-    border-radius: 6px;
+    border: none;
     outline: none;
 }}
 QListWidget::item {{
@@ -682,12 +683,13 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0;
 }}
 
-/* ===== 文本编辑区 ===== */
+/* ===== 文本编辑区 =====
+   轮四十二 ⑰：详情这类只读大块文本去描边（输入型 QTextEdit 一样走这条 ——
+   输入框的可编辑线索由 QLineEdit 的描边承担，多行输入产品里还没有）。 */
 QPlainTextEdit, QTextEdit {{
     background-color: {c.card_bg};
     color: {c.text_primary};
-    border: 1px solid {c.card_border};
-    border-radius: 6px;
+    border: none;
     padding: 8px;
     selection-background-color: {c.accent_light};
 }}

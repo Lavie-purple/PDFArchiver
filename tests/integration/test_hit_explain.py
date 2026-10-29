@@ -41,9 +41,10 @@ NAMED = "归档范围与保留期限的请示.pdf"
 BODY_PAGE_2 = "归档范围与保留期限的请示正文第三段"
 OCR_BODY = "本授权书由归档处盖章生效，保留期限另议"
 
-#: 「后缀里印了一个 bm25 **读数**」的判据。只查 `"bm25" in text` 会误红：非正文与 LIKE
-#: 两支的后缀本来就写着「不打 bm25」—— 那是解释为什么没有分数，不是分数本身。
-_BM25_READING = re.compile(r"bm25 [-\d≈]")
+#: 「后缀里印了一个相关度**读数**」的判据（轮四十二 ④ 之后行尾写「相关度 N」而不是「bm25 N」）。
+#: 只查 `"相关度" in text` 会误红：非正文与 LIKE 两支的后缀写着别的措辞，但保险起见
+#: 仍然锚定到"相关度后跟数字/≈0"的形状 —— 那才是读数，措辞不算。
+_BM25_READING = re.compile(r"相关度 [-\d≈]")
 _PAGE_IN_TEXT = re.compile(r"第 \d+ 页")
 
 
@@ -113,13 +114,13 @@ def test_正文命中后缀写明通道与真_bm25_页码留给行首(corpus) ->
     assert native and native[0].page_no == 2, f"用例前提：原生正文命中在第 2 页：{result.hits}"
 
     text = result.suffix(native[0])
-    assert text.startswith("正文·trigram（4 字）·bm25 "), f"通道口径没写对：{text}"
+    assert text.startswith("正文·全文索引（4 字）·相关度 "), f"通道口径没写对：{text}"
     assert not _PAGE_IN_TEXT.search(text), f"页码行首已带，后缀不许重复：{text}"
-    assert "-0.00" not in text and "bm25 0.00" not in text, \
-        f"bm25 被量化成 0.00 —— 那与「没有得分」长得一样：{text}"
+    assert "-0.00" not in text and "相关度 0.00" not in text, \
+        f"相关度被量化成 0.00 —— 那与「没有得分」长得一样：{text}"
 
-    token = re.search(r"bm25 (\S+)", text)
-    assert token, f"这句话里该有一个 bm25 读数（或 ≈0）：{text}"
+    token = re.search(r"相关度 (\S+)", text)
+    assert token, f"这句话里该有一个相关度读数（或 ≈0）：{text}"
     if token.group(1) == "≈0":
         assert abs(native[0].score) < 0.005, \
             f"报了「≈0」但取回来的分数是 {native[0].score} —— 那是把真分数说小了"
@@ -137,7 +138,7 @@ def test_两字查询走慢速_LIKE_时后缀不许报_bm25(corpus) -> None:
     for hit in result.hits:
         assert hit.score == 0.0, "用例前提：LIKE 通道的分数恒 0"
         text = result.suffix(hit)
-        assert text.startswith("正文·慢速 LIKE（2 字，无索引"), f"通道口径没写对：{text}"
+        assert text.startswith("正文·慢速逐页扫描（2 字，未用索引"), f"通道口径没写对：{text}"
         _assert_no_bm25_reading(text, "正文慢速 LIKE")
         assert not _PAGE_IN_TEXT.search(text), f"页码行首已带，后缀不许重复：{text}"
 
@@ -146,7 +147,7 @@ def test_文件名命中后缀不报页码也不报分数(corpus) -> None:
     result = corpus["search"].search(Criteria(text="复函稿", in_fields=(FIELD_FILENAME,)))
     assert [(h.field, h.doc.name) for h in result.hits] == [(FIELD_FILENAME, "请示（复函稿）.pdf")]
     text = result.suffix(result.hits[0])
-    assert text.startswith("文件名 含查询词（子串匹配"), f"没写明是哪类字段、怎么匹配的：{text}"
+    assert text.startswith("文件名 含查询词（字面匹配"), f"没写明是哪类字段、怎么匹配的：{text}"
     assert not _PAGE_IN_TEXT.search(text), f"文件名命中没有页码，编一个是假信息：{text}"
     _assert_no_bm25_reading(text, "文件名通道")
 
@@ -244,9 +245,9 @@ def test_每条命中行尾挂的是后端后缀_界面不自己拼(window, corp
     assert compared == len(result.hits), \
         f"面板 {compared} 行命中 vs 后端 {len(result.hits)} 条 —— 有行没对上"
 
-    # 后缀真的在场：正文那行必须以 trigram 读数收尾（真读数或「≈0」，不许只有 `rows()` 前半句）。
+    # 后缀真的在场：正文那行必须以相关度读数收尾（真读数或「≈0」，不许只有 `rows()` 前半句）。
     text = page.hit_list.item(_body_row(page)).text()
-    assert re.search(r"·bm25 (≈0|-[\d.]+)$", text), f"正文行尾没有 bm25 读数：{text}"
+    assert re.search(r"·相关度 (≈0|-[\d.]+)$", text), f"正文行尾没有相关度读数：{text}"
 
 
 def test_解释带连控件带样式一起拆干净(window, corpus, qapp) -> None:

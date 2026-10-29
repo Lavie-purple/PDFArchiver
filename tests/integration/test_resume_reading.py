@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import fitz
+import pymupdf
 from PySide6 import QtGui
 
 from pdfarchiver.ui.nav import NAV_ITEMS
@@ -26,7 +26,7 @@ HINT_CONTINUE = "点此继续"
 
 
 def _make_pdf(path: Path, *, pages: int = 5) -> str:
-    doc = fitz.open()
+    doc = pymupdf.open()
     for i in range(pages):
         page = doc.new_page()
         page.insert_text((36, 40), f"第 {i + 1} 页", fontsize=11, fontname="china-s")

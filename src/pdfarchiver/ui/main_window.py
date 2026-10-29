@@ -10,7 +10,9 @@
 """
 from __future__ import annotations
 
+import ctypes
 import logging
+import sys
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -30,6 +32,10 @@ from pdfarchiver.ui.pages.settings_page import SettingsPage
 from pdfarchiver.ui.theme import ThemeManager
 
 log = logging.getLogger("pdfarchiver.ui")
+
+# DWMWA_USE_IMMERSIVE_DARK_MODE（Win10 1809+ / Win11 官方值 20；更老 build 只认 19，
+# 本项目量过的最老机器是 build 19045，20 直接可用）。
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 
 # D-039 [约定]：最小窗口 1024×720。默认开在 1280×800 —— 线框就是按这一档画的，
 # 且 S1 的三栏（236 + 480 + 360 = 1076）加上 200px 导航刚好在这档放得下。
@@ -178,6 +184,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setStyleSheet(qss)
         # 占位色不走 QSS，必须单独设进调色板（`ThemeManager.apply_palette`，ISSUES I50 乙）
         self.theme.apply_palette(self)
+        self._apply_dwm_titlebar()
         # 按钮的 tooltip 说的是"按下去会到哪边"，与菜单时代的文案同一口径
         if getattr(self, "theme_btn", None) is not None:
             self.theme_btn.setToolTip(
@@ -188,9 +195,32 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             log.exception("保存主题偏好失败")
 
+    def _apply_dwm_titlebar(self) -> None:
+        """原生标题栏跟着主题走（轮四十二 甲）：暗色主题把 Win10+ 的
+        `DWMWA_USE_IMMERSIVE_DARK_MODE` 打开 —— QSS 管不到窗口外框，用户红框 #2 的
+        「暗色应用顶一条亮白标题栏」就是这条缝。轻主题写 0（回亮色），切主题时要跟着切。
+        失败不拦启动：老系统不认这个属性就维持系统默认（非 Windows 直接跳过）。
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.winId())
+            value = ctypes.c_int(1 if self.theme.theme == ThemeManager.DARK else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(value), ctypes.sizeof(value))
+        except Exception:  # noqa: BLE001 - 装饰性读数，任何失败都不该拦住换主题
+            log.debug("DWM 暗色标题栏设置失败（维持系统默认）", exc_info=True)
+
     def _toggle_theme(self) -> None:
         self.theme.toggle()
         self._apply_theme()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt 命名
+        super().showEvent(event)
+        # 构造期那次 `_apply_theme` 拿到的 winId 会触发原生窗口提前创建，且属性可能在
+        # show 时被系统重置 —— 上屏这一刻再写一次才稳。
+        self._apply_dwm_titlebar()
 
     def _make_page(self, item: NavItem) -> QtWidgets.QWidget:
         if item.page_id == "monitor":

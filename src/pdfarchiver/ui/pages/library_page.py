@@ -45,6 +45,8 @@
 右栏那一栏（命中面板 + 文档详情 + AI 推荐分类）的控件与回调在 `ui/library_hits.py`，由本类混入
 （**ISSUES I96** 甲，2026-10-20）—— 控件仍然挂在页面对象上（`page.right_panel` / `page.hit_list`），
 挪走的只有归属。搜索编排留在本文件：一次查询同时写中栏表、状态栏与右栏三处，拆开就是两边各拿一半。
+筛选区（筛选条 + 「按当前筛选送识别」+ 收放开关）同理在 `ui/library_filter.py`
+（2026-10-30 第二次按主题拆）。
 
 数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`、
 `AppContext.collection`（存/覆盖集合与数命中都走它，这一页不碰 `collections` 仓储）。
@@ -58,7 +60,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.collection_service import CollectionEntry
 from pdfarchiver.ui.catalog_links import CatalogLinkBar
-from pdfarchiver.ui.collection_bar import FilterBar
+from pdfarchiver.ui.library_filter import FILTER_OCR_BTN_TEXT, LibraryFilterMixin
 from pdfarchiver.ui.library_hits import LibraryHitsMixin, set_text_role
 from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
                                          write_document_rows)
@@ -71,12 +73,8 @@ from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 #: 所以写它的时候只有一处，读它的时候也只有一处 —— 两处各写一份就会有一天对不上。
 OCR_BTN_TEXT = "送去识别"
 
-#: 轮三十六 甲：「按当前筛选」那颗按钮的基础文案（与上面那颗认的东西不同 ——
-#: 它认 `filter_bar` 那份筛选，不认表格里的选中）。份数由 `PendingOcr` 递上来，不在界面里数。
-FILTER_OCR_BTN_TEXT = "按当前筛选送识别"
 
-
-class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
+class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
     """S1：宽档三栏常驻（分类树 | 文档表格 | 命中面板），窄档走 `ui/tier.py` 的降级。"""
 
     # (doc_id, page_no)；page_no 为 None 表示这一条命中没有页码（文件名/路径/元数据三通道）。
@@ -117,12 +115,8 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setPlaceholderText("输入检索内容...")
         self.search_input.returnPressed.connect(self._do_search)
-        # D-040 的浮层触发点："点搜索框 …覆盖在列表右侧 420px，可关"。
-        # 键位那半句 2026-10-17 定为 **Ctrl+F**（**ISSUES I53** ③甲 / **D-052**）：短路挂在
-        # `ui/main_window.py`（窗口级 accelerator 的归属就该是窗口），落点是下面的
-        # `focus_search()` —— 它**显式**唤浮层，不只靠 `FocusIn` 副作用：窗口未激活时
-        # `FocusIn` 不保证派发，键盘入口不能"有时候按了没反应"。
-        self.search_input.installEventFilter(self)
+        # D-040 的浮层触发点原是"点搜索框"：轮四十二 ⑭ 起右栏不常驻、默认关，
+        # 点框就唤出一块空白浮层是又一种堆积 —— 触发点收进 `_show_hits`（有结果才开）。
         search_lay.addWidget(self.search_input, 1)
 
         # 语义搜索切换
@@ -152,27 +146,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         center_lay.addWidget(self.last_read_hint)
         self.update_last_read_hint()
 
-        # 筛选条（**ISSUES I78** 乙）：chips 就是这一页的筛选状态，取数只认它递下来的那份 dict。
-        self.filter_bar = FilterBar(self.ctx, on_query_changed=self._apply_query,
-                                   set_status=self._set_status)
-        center_lay.addWidget(self.filter_bar)
-
-        # —— 轮三十六 甲：「按当前筛选送识别」—— 解决"待识别 2,457 份，但入口只有'在表格里
-        # 勾几份'"。它排的是上面那份筛选下的**全部**待识别份（`ocr_status='pending'`），
-        # 名单与份数都来自 `ctx.ocr.pending_in` 一个出口；按下去先展开同一块批次面板算账
-        # （该跑/不跑/代价/预算），确认后才排队 —— 与「送去识别」同一条老路，不是第二个实现。
-        # 位置紧贴筛选条、**不跟**「送去识别」同一排：那一颗认"表格里勾了哪几份"，这一颗认
-        # "筛选命中的那一批"，两句并排在同一行会让人以为它们是同一件事的两种说法。
-        # 同理也不进 `ocr_row`：面板展开时「送去识别（选中 2 份）」会变宽，那一排实测已到
-        # 823 地板档的边上（`test_面板展开时页面与窗口都不许顶过地板宽度`）。
-        filter_ocr_row = QtWidgets.QHBoxLayout()
-        self.filter_ocr_btn = QtWidgets.QPushButton(FILTER_OCR_BTN_TEXT)
-        self.filter_ocr_btn.setObjectName("clearBtn")
-        self.filter_ocr_btn.setEnabled(False)
-        self.filter_ocr_btn.clicked.connect(self._on_filter_ocr_requested)
-        filter_ocr_row.addWidget(self.filter_ocr_btn)
-        filter_ocr_row.addStretch(1)
-        center_lay.addLayout(filter_ocr_row)
+        # 筛选区（轮四十二 ⑬）：筛选条 + 「按当前筛选送识别」+ 收放开关，构造与收放逻辑
+        # 在 `ui/library_filter.py`（**ISSUES I96** 甲，同 `library_hits.py` 的混入先例）。
+        self._build_filter_area(center_lay)
 
         # 文档表格
         self.doc_table = QtWidgets.QTableWidget()
@@ -224,23 +200,28 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         # 产品里 `request_ocr` 的**第一个调用点**：此前 OCR 只能由 `gates/stage5.py` 与测试
         # 点名，S7 只有 O1/O2/O3 三个读数，界面上没有任何一处能把一份扫描件排进队列。
         # 建来是禁用的：没有当前行就没有点名的对象（与 `ai_classify_btn` 同一形状）。
-        ocr_row = QtWidgets.QHBoxLayout()
+        # 动作行（轮四十二 ⑯）：「送去识别」+ 三颗写入按钮整排**默认隐藏**，表格里点名
+        # ≥1 份才出现 —— 没选任何东西时它们全是灰按钮挂着，是纯堆积。
+        self.action_row = QtWidgets.QWidget()
+        action_lay = QtWidgets.QHBoxLayout(self.action_row)
+        action_lay.setContentsMargins(0, 0, 0, 0)
         self.ocr_btn = QtWidgets.QPushButton(OCR_BTN_TEXT)
         self.ocr_btn.setObjectName("searchBtn")
         self.ocr_btn.setEnabled(False)
         self.ocr_btn.setToolTip("把选中的份排进识别队列（按页幂等，版本没变的页不再推理）"
                                 "；选中多份时先展开面板算账，确认后才排队")
         self.ocr_btn.clicked.connect(self._on_ocr_requested)
-        ocr_row.addWidget(self.ocr_btn)
+        action_lay.addWidget(self.ocr_btn)
         # 同一排右边是三颗写入按钮（**ISSUES I78** 甲）：它只认"表格里点名了哪几份"和
         # "状态栏那一句怎么写"，两者都由这一页递进去 —— 按钮自己从不查库、不数条数。
         self.link_bar = CatalogLinkBar(self.ctx,
                                        selected_ids=self._selected_doc_ids,
                                        set_status=self._set_status,
                                        on_written=self._after_link_written)
-        ocr_row.addWidget(self.link_bar)
-        ocr_row.addStretch(1)
-        center_lay.addLayout(ocr_row)
+        action_lay.addWidget(self.link_bar)
+        action_lay.addStretch(1)
+        self.action_row.setVisible(False)
+        center_lay.addWidget(self.action_row)
 
         # 同一颗按钮在**选中多份**时展开的批次面板（**ISSUES I67** 乙 · 2026-10-19 勾「甲先乙后」，
         # 线框 §I67-yi）：多份点名要先看清"该跑几份、哪几份不跑、为什么不跑、今日预算够不够"，
@@ -282,9 +263,6 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self._query: dict = {}
         self._current_docs: list = []
         self._selected_doc_id: int | None = None
-        # 「按当前筛选送识别」的读数（轮三十六 甲）：`PendingOcr` 或 None（还没读过）。
-        # 由 `_refresh_pending_ocr` 写，按钮与提示条都只认这一份，不各自再查一次库。
-        self._pending_ocr = None
         # —— 浏览分页（**ISSUES I51**）——
         # `_browse_active`：表里这一列是不是"浏览库"来的。是 → 滚动到底补一批；
         #   否 → 表里是查询命中（有上限），滚动到底什么都不该再加。
@@ -339,7 +317,10 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         右栏那些命中是**上一次查询**的，换了筛选口径还挂着就是过期读数（与 **ISSUES I53** ②甲
         那条"命中面板只对当前查询负责"同一条纪律）。
         """
+        if bool(query) != bool(self._query):
+            self._filter_manual = None  # 自动状态变了，手动收放意愿交还给自动规则
         self._query = query
+        self._update_filter_area()
         self._start_browse()
         self._clear_hits()
         # 换了筛选口径，提示条上那句"本次筛选里 N 份还没识别"与按钮上的份数都过期了：
@@ -370,6 +351,8 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self._browse_active = True
         self._browse_exhausted = False
         self._browse_total = 0
+        # 轮四十二 ⑤：浏览态的口径是 `_browse_line()`，关键词那条 tooltip 是过期口径，清掉。
+        self.status_label.setToolTip("")
         self._current_docs = []
         self.doc_table.setRowCount(0)
         self._load_more()
@@ -392,7 +375,14 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         elif len(self._current_docs) + len(docs) >= self._browse_total:
             self._browse_exhausted = True
         self._append_rows(docs)
-        self._set_status(result.status_line())
+        # 轮四十二 ⑦：筛选是"分类 = X"、一页都没取到、且表格本来就空 ⇒ 十有八九是这个分类
+        # 底下还没有任何文档**归入**（真库实测 `document_categories` 0 行、14 个裸分类）。
+        # 只报「共 0 份文档」会让人以为程序坏了；出路指真实的写入口（catalog_links 那排按钮）。
+        if not docs and not self._current_docs and self._query.get("category_ids"):
+            self._set_status(f"{result.status_line()}｜这个分类还没有文档归入："
+                             "在表格里选中文件后，用那排写入按钮里的「归入分类…」建立关联。")
+        else:
+            self._set_status(result.status_line())
 
     def _append_rows(self, docs: list) -> None:
         if not docs:
@@ -425,12 +415,19 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
             self._apply_query(self._query)
             return
 
-        if self.semantic_toggle.isChecked():
-            # 语义搜索
-            self._do_semantic_search(query)
-        else:
-            # 关键词搜索（四通道）
-            self._do_keyword_search(query)
+        # 轮四十二 ⑥：真库一次检索 2–4s（G2 之外的最坏分支），没有任何反馈会被当成"点了没反应"
+        # 而连点几轮。等待光标比禁用按钮好：语义与关键词各自的成功路径都要改表格，
+        # 漏一处 enable 就是永久锁死；try/finally 保证异常路径也归还光标。
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            if self.semantic_toggle.isChecked():
+                # 语义搜索
+                self._do_semantic_search(query)
+            else:
+                # 关键词搜索（四通道）
+                self._do_keyword_search(query)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
     def _do_keyword_search(self, query: str) -> None:
         """关键词检索：四通道（文件名/路径/元数据/正文），**并且就在当前那排 chips 的条件里搜**。"""
@@ -455,6 +452,9 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         # 轮三十六 乙：一条都没命中时，如果这个筛选下真有没识别过的扫描件，就把原因摆到右栏。
         # 有命中/有查询词但不为空时一律收起 —— 它不是常驻横幅，只在"搜不到"这个情境里说话。
         self._update_ocr_hint(empty=not result.hits)
+        # 轮四十二 ⑤：栏里是短通道名，技术全称（trigram / LIKE 为何退回）挪进悬停。
+        # tooltip 也要后端出 —— 界面不存第二份口径。
+        self.status_label.setToolTip(result.status_detail())
 
     def _set_status(self, text: str, *, danger: bool = False) -> None:
         """状态栏那一行的唯一出口：红字与常态由同一处切。
@@ -471,6 +471,7 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         # 语义通道"没命中"的原因是向量库，不是"扫描件没识别过"（向量入场券 I116 甲已改成
         # 有可搜正文才入场）—— 那条提示条讲的是关键词正文通道的事，这里一律收起。
         self._update_ocr_hint(empty=False)
+        self.status_label.setToolTip("")  # 轮四十二 ⑤：语义那行没有 keyword 口径可悬停
         try:
             results = self.ctx.semantic_search.search(query, top_k=50)
         except Exception as exc:
@@ -551,6 +552,8 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self.ocr_panel.close_panel()
         named = len(self._selected_doc_ids())
         self.ocr_btn.setText(OCR_BTN_TEXT if named < 2 else f"{OCR_BTN_TEXT}（选中 {named} 份）")
+        # 动作行（轮四十二 ⑯）：点名 ≥1 份才出现，清空选中就整排收起。
+        self.action_row.setVisible(named > 0)
         row = self.doc_table.currentRow()
         if row < 0:
             self.detail_view.clear()
@@ -558,6 +561,7 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
             self.ocr_btn.setEnabled(False)
             self.ai_result_label.setText("")
             self._selected_doc_id = None
+            self._set_jump_fallback()
             return
         item = self.doc_table.item(row, DOC_ID_COLUMN)
         if not item:
@@ -567,8 +571,11 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
         self.ai_classify_btn.setEnabled(True)
         self.ocr_btn.setEnabled(True)
         self.ai_result_label.setText("")
-        if self._render_detail(doc_id):
-            # 详情是"选中这一行之后才有的内容"，窄档它藏在浮层里（这一栏的下半部），所以选中即唤出。
+        # 轮四十二 ①：命中列表没有可用选中时，跳转按钮退到"打开这份文档"。
+        self._set_jump_fallback()
+        if self._render_detail(doc_id) and not self._right_dismissed:
+            # 详情是"选中这一行之后才有的内容"，右栏默认关（轮四十二 ⑭）：选中即唤出，
+            # 但用户亲手按 ✕ 关掉后就不再追着开 —— 下一次搜索出新内容才重开。
             self.right_panel.open_overlay()
 
     def _selected_doc_ids(self) -> list[int]:
@@ -609,36 +616,6 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
                 self.doc_table.setItem(row, CATEGORY_COLUMN, category_cell(held.get(doc_id, [])))
         if self._selected_doc_id is not None:
             self._render_detail(self._selected_doc_id)
-
-    def _refresh_pending_ocr(self) -> None:
-        """按当前筛选重读"待识别"读数（轮三十六 甲）：按钮上的份数与提示条都用这一份。
-
-        数字与句子都不在这里算：份数/页数来自 `ctx.ocr.pending_in`（它再往下只有
-        `documents.pending_ocr_totals / ids_pending_ocr` 一条 SQL），界面只负责贴上去。
-        名单为空就把按钮置灰并收起提示条 —— 一颗点下去点不到任何一份的按钮不该亮着。
-        """
-        pending = self.ctx.ocr.pending_in(self._query)
-        self._pending_ocr = pending
-        self.filter_ocr_btn.setText(
-            f"{FILTER_OCR_BTN_TEXT}（{pending.documents:,} 份）" if pending.documents
-            else FILTER_OCR_BTN_TEXT)
-        self.filter_ocr_btn.setEnabled(bool(pending.ids))
-        self.filter_ocr_btn.setToolTip(
-            f"{pending.describe()}；按下去先展开这批的账（该跑/不跑/代价/今日预算），确认后才排队"
-            if pending.ids else "当前筛选里没有待识别的扫描件（已识别的与原生文字版都不在这一批）")
-        if not pending.ids:
-            self._update_ocr_hint(empty=False)
-
-    def _on_filter_ocr_requested(self) -> None:
-        """「按当前筛选送识别」/ 提示条那颗「送去识别这批」→ 同一块批次面板（轮三十六 甲）。
-
-        复用的是 I67 乙 那块面板：它拿到 id 之后自己去 `plan_ocr` 算账，界面不重算，
-        也不在按下按钮这一刻就写队列 —— 「先给账再排队」是那一块已验证的形状。
-        """
-        pending = self._pending_ocr
-        if pending is None or not pending.ids:
-            return
-        self.ocr_panel.open_for(list(pending.ids))
 
     def _on_ocr_requested(self) -> None:
         """「送去识别」：一份直接排队（**I67** 甲），两份以上先展开批次面板（**I67** 乙）。
@@ -681,11 +658,13 @@ class LibraryPage(LibraryHitsMixin, QtWidgets.QWidget):
             self.last_read_hint.hide()
             return
         exists = Path(doc.path).exists()
-        if doc.last_read_page and exists:
+        # 轮四十二 ③：`last_read_page == 1` 时「读到第 1 页」是"刚翻开"，不是"读到了哪"
+        # —— 两个分支要说出不同的动作（翻到第 1 页 = 从头看）。
+        if doc.last_read_page and doc.last_read_page > 1 and exists:
             self.last_read_hint.setText(
                 f"上次读到 《{doc.name}》 · 第 {doc.last_read_page} 页 —— 点此继续")
         elif exists:
-            self.last_read_hint.setText(f"上次读过 《{doc.name}》 —— 点此继续")
+            self.last_read_hint.setText(f"上次打开过 《{doc.name}》 —— 点此继续")
         else:
             self.last_read_hint.setText(f"上次在读《{doc.name}》，但文件已不在原位置")
         self.last_read_hint.setToolTip(self.last_read_hint.text())

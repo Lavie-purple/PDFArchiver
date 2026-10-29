@@ -29,7 +29,9 @@ PKG = SRC / "pdfarchiver"
 FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
     "ui": ("pdfarchiver.db", "pdfarchiver.fs", "pdfarchiver.parsing", "pdfarchiver.indexing",
            "pdfarchiver.search", "pdfarchiver.ocr", "pdfarchiver.semantic",
-           "pdfarchiver.jobs", "pymupdf"),
+           "pdfarchiver.jobs", "pymupdf", "fitz"),
+    # `fitz` 是 pymupdf 的弃用旧名（1.28 起打警告）：轮四十二 前阅读器靠它绕开了上面的
+    # `pymupdf` 禁令，改口时当场红 —— 旧名同单禁止，堵掉这个洞（S2 现走 services/pdf_view 门面）。
     "services": ("pdfarchiver.ui",),
     "db": ("pdfarchiver.ui", "pdfarchiver.services", "pdfarchiver.ocr",
            "pdfarchiver.semantic", "pymupdf"),

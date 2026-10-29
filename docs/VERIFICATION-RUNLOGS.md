@@ -999,3 +999,49 @@ doc **11003**（微信 filestorage 2026-10 新落的那份），**201/201 页、
 > **本册末行现数（2026-10-29 轮四十一收尾取）**：`CHANGELOG 518（余 82）｜DECISIONS 752（余 148）｜
 > 本册 999（余 201）｜ISSUES 158｜UI-WIREFRAMES 1,011（余 189）`。
 
+
+## 4.53 轮四十二 · S1 减堆积与默认隐藏 + DWM 暗色标题栏 + 其它屏空态（用户逐字确认，2026-10-30）
+
+用户原话：「走查结果 · 别扭点清单：S1 文档库和其它屏都修复，首次启动分步引导窗两个方案做一个简易
+低保真线框图我看看，进行对比才好选择，「内容堆积 / 分割感 / 默认隐藏」· 改法清单 都按你的推荐来；
+两条红框空带：乙 · 删掉标题行（推荐）；甲 · DWM 暗色标题栏（推荐）」。⑫（监测根 `C:\Users\lavie`）
+只是事实记录不改；⑮⑱ 明确留下一轮；引导窗甲/乙线框已交、**等勾选，未写一行码**。
+
+**A · fitz → pymupdf**：PyMuPDF 1.28.2 起 `import fitz` 弃用告警，全仓改 `import pymupdf`（启动告警清零）。
+**B · S1 别扭点 ①–⑦**：① 跳转按钮兜底（没搜过也能按中栏选中的那份开整份）；② 详情区占位话；
+③ 「上次读到」措辞按进度分档（读到第 1 页 ≠ 读到第 N 页）；④ 命中后缀短口径（`相关度 ≈0.xx`，指数
+记法上屏）；⑤ 状态栏栏里短通道名、技术全称挪悬停（`status_detail()` 后端出）；⑥ 检索期间等待光标；
+⑦ 空分类指真实的写入口（「归入分类…」）。④⑤ 的措辞全走 `SearchResult`，界面不存第二份口径（I60 延续）。
+**C · 减堆积 ⑬⑭⑯⑰ + 标题行乙**：见 **D-064** 全文 —— 筛选区/动作行默认收起、右栏两档浮层化
+（`FloatablePanel` 双模式）、QSS 去框、空标题行删除换「✕」角标。
+**D · DWM 暗色标题栏（甲）**：attribute 20 跟主题，showEvent 补一次（show 会重置）。
+**E · 其它屏空态 ⑨⑩⑪**：S9 没向量指 S7；S8 两栏空表指建树；S3 目标根提示随输入收放。
+**F · 守卫与坏法**：`tests/integration/test_round42_ux.py` **11 条全绿**；五条坏法当场红并逐条点名
+（⑯ `setVisible(True)` 红「清空选中就该整排收起」｜⑬ `visible=True` 红「默认收起」｜① 删
+`_set_jump_fallback()` 红「选中后按钮没亮」｜⑤ 删 setToolTip 红「tooltip 空」｜⑦ if 恒 False 红「指路缺席」）。
+守卫自己先错两处也如实记：`isVisibleTo(panel)` 对永久浮层的 ✕ 必须断言 True（写反是守卫的错）；
+`_page_at` 不能替 ArchivePage 发明 `reload()`。产品侧真红一条：`clearSelection()` 不重置 currentRow，
+跳转兜底改跟点名走（D-064 第 3 条）。
+**G · 回归**：第一场全量（轮四十二 F 开跑时点）**890 绿 / 4 红**：file_size 两条
+（`library_page.py` 771 > 700 自线）、architecture 一条（见 H）、G1 冷启动 2.62s > 1.5s
+—— G1 负载场单跑偶红（1.934s > 1.5s 那次聚焦复跑 3.08s 绿），负载绑定（§4.41 口径），
+不作数但如实记。修完 H 的拆分与门面后**整场重跑**见 I。
+**H · 拆分与门面（守卫逮住的真红，两处都是轮四十二自己引出来的）**：
+① `library_page.py` 771 行顶破 700 自线（I96 甲，不许抬线）→ 筛选区整段搬进
+`ui/library_filter.py`（126 行，`LibraryFilterMixin`，沿用 `library_hits.py` 先例：
+控件仍挂页面对象、`page.filter_bar` 等访问路径不变、`FILTER_OCR_BTN_TEXT` 经页面 re-export
+保住 `test_ocr_on_demand` 的导入）；页面 771 → **677 行**。拆完当场红过一次
+（`library_filter.py` 漏 `QtCore` 导入，NameError 穿出 Qt 槽 = 15 条集成红），补上即绿。
+② architecture 守卫红 `reader_page.py:17 · ui import 了 pymupdf`：轮四十二 A 把
+`import fitz` 改口 `import pymupdf` 修弃用警告，**暴露了守卫只禁新名、旧名 `fitz` 一直没禁的洞**
+—— 老代码是靠这个洞过的守卫。修法不是抬守卫：ui 走 services 层门面
+`services/pdf_view.py`（`AVAILABLE` / `open_document` / `Document` / `Matrix` 四个出口，
+渲染逻辑仍在 reader_page），`FORBIDDEN_IMPORTS["ui"]` 补 `"fitz"` 堵洞。
+坏法注入：`import fitz` 塞进 ui 目录新文件，守卫当场红且逐字点名
+「fitz 不许被 ui 依赖」，删除探针后绿。
+**I · 修后整场重跑**：**892 绿 / 2 红**（271.7s）：G1 冷启动又红（负载场，与本场 4.5 分钟里
+并行着文档写入同场，照 §4.41 口径聚焦复跑）；`test_probe_anchors` 红 4 条 —— p25 的
+D1/D2/E/I 四条锚点还指 `library_page.py`，代码搬进了 `library_filter.py`。修法：目标路径跟
+代码走（`FILTER` 常量 + 四条 `Edit(PAGE…)` 改 `Edit(FILTER…)`，锚点文本一字未动），
+锚点守卫 3/3 绿；G1 聚焦复跑 **2.24s 绿**。随后 **guards 59/59 ALL GREEN**（14.3s）——
+末次口径以此为准：全量回归除 G1 负载场外全绿，G1 聚焦复跑绿，guards 全绿。

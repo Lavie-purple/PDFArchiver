@@ -5,7 +5,7 @@
 
 1. 缩放档 —— `_zoom_in` / `_zoom_out` 的上下限（3.0 / 0.3）与倍率（1.2×）必须逐次生效，
    不超界、不跳步。
-2. 损坏 / 失效文件不崩且回显原文 —— `fitz.open()` 抛异常时必须走 `QMessageBox.critical`，
+2. 损坏 / 失效文件不崩且回显原文 —— `pymupdf.open()` 抛异常时必须走 `QMessageBox.critical`，
    标题是「打开 PDF 失败」，正文是异常原文（不是"未知错误"之类的遮罩）。
 3. 阅读进度跨重启恢复 —— 翻到第 N 页后 `last_read_page` 必须写进库；用同一个 `Engine`
    重新打开同一份文档，阅读器必须停在那一页（1-based 口径，与 `text_pages.page_no` 一致）。
@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import fitz
+import pymupdf
 import pytest
 from PySide6 import QtWidgets
 
@@ -55,7 +55,7 @@ def test_缩放档上下限与倍率(ctx, window, qapp, tmp_path: Path) -> None:
     初始 1.0 → zoom_out → 0.833… → zoom_out → 0.694… → … → 不能低于 0.3。
     """
     pdf_path = tmp_path / "zoom.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     for i in range(3):
         page = doc.new_page()
         page.insert_text((36, 40 + i * 30), f"第 {i+1} 页", fontsize=11, fontname="china-s")
@@ -86,10 +86,10 @@ def test_缩放档上下限与倍率(ctx, window, qapp, tmp_path: Path) -> None:
 
 
 def test_损坏PDF不崩且回显原文(ctx, window, qapp, tmp_path: Path) -> None:
-    """`fitz.open()` 抛异常时必须走 `QMessageBox.critical`，标题是「打开 PDF 失败」，
+    """`pymupdf.open()` 抛异常时必须走 `QMessageBox.critical`，标题是「打开 PDF 失败」，
     正文是异常原文。
 
-    用一份「合法文件头 + 垃圾字节」造出损坏件，`fitz.open()` 会抛 `RuntimeError`。
+    用一份「合法文件头 + 垃圾字节」造出损坏件，`pymupdf.open()` 会抛 `RuntimeError`。
     阅读器必须弹框而不是崩溃，且框里的文字是 PyMuPDF 的原文（不是"未知错误"）。
     """
     bad_path = tmp_path / "corrupt.pdf"
@@ -117,7 +117,7 @@ def test_阅读进度跨重启恢复(ctx, window, qapp, tmp_path: Path) -> None:
     这证明恢复逻辑从 DB 读值而不是从内存缓存。
     """
     pdf_path = tmp_path / "progress.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     for i in range(5):
         page = doc.new_page()
         page.insert_text((36, 40), f"第 {i+1} 页", fontsize=11, fontname="china-s")

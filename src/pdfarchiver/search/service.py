@@ -277,6 +277,21 @@ class SearchResult:
                 f"｜本页 {len(self.hits)} 行｜耗时 {self.took_ms}ms"
                 f"{self._truncation_text}{self._scan_text}"]
 
+    @property
+    def _short_channel(self) -> str:
+        """状态栏那一行用的**短通道名**（轮四十二 ⑤）。
+
+        `channel_label` 那句技术口径（trigram 字数 / LIKE 为何退回）整句在中栏里太长
+        —— I60 实测它单独一行 708–816px，挤压的是"符合筛选 / 行数 / 耗时"这些每轮都变的数。
+        状态栏只放方向：走了索引没、搜没搜正文。「慢速」二字必须保留 ——
+        用户搜 1–2 字看到它才明白是查询词太短（fts.py 模块注释里那条规矩），
+        `test_search_service` 与 `test_ui_tier` 都拿它当方向判据；完整口径挪进
+        `status_detail()`，两个口径同一个 owner。
+        """
+        if not self.channel:
+            return "只搜文件名 / 路径 / 元数据"
+        return "全文索引检索" if self.channel == VIA_FTS else "慢速逐页扫描"
+
     def status_line(self) -> str:
         """状态栏那一行的口径（**ISSUES I60**）。与 `lines()` 同源同字段，只降措辞密度：
         `lines()` 是给报告和终端读的整句（实测 1056px），而 S1 中栏在最宽的那档（窗口 1280）
@@ -284,12 +299,20 @@ class SearchResult:
         （查询词就在输入框里，重复一遍不增加信息）和"口径："前缀，线框点名的三样一条不少：
         通道口径、各通道取回的行数、截断 —— 且**没有任何界面自己算出来的数**。
         浅扫自报（**D-051**）也在这一行里：预算截停是真 happened，藏在报告里等于没说。
+        轮四十二 ⑤ 之后通道名用 `_short_channel`（技术全称挪去 `status_detail()` 悬停）。
         """
         if not self.criteria.text.strip():
             return self._browse_line()
-        return (f"{self.channel_label}｜符合筛选 {self.matching_documents} 份｜{self._counts_text}"
+        return (f"{self._short_channel}｜符合筛选 {self.matching_documents} 份｜{self._counts_text}"
                 f"｜本页 {len(self.hits)} 行｜{self.took_ms}ms"
                 f"{self._truncation_text}{self._scan_text}")
+
+    def status_detail(self) -> str:
+        """状态栏悬停（tooltip）里的完整口径（轮四十二 ⑤）：栏里是短话，悬停是全话 ——
+        两句都从这一个类出，界面不拼（**ISSUES I60** 同一条纪律）。"""
+        if not self.criteria.text.strip():
+            return f"浏览模式（未输入查询词，排序 {self.criteria.sort}）"
+        return self.channel_label
 
     def _browse_line(self) -> str:
         """没输入查询词时那一行，**两个数都必须在场**（**ISSUES I51**）。
@@ -334,12 +357,15 @@ class SearchResult:
             return "未输入查询词，按当前筛选列出，不带命中位置"
         if hit.field != FIELD_BODY:
             where = hit.field_label + (f"·{hit.field_detail}" if hit.field_detail else "")
-            return f"{where} 含查询词（子串匹配，不打 bm25）"
+            return f"{where} 含查询词（字面匹配）"
         n = len(self.criteria.text.strip())
+        # 措辞去行话（轮四十二 ④）：「trigram」「bm25」是实现名，用户要的是"走了索引没、
+        # 排得靠前靠后"。技术口径仍留在 `describe_channel` / `channel_label`（状态栏悬停），
+        # 这里只出人话。LIKE 分支保「慢速」二字 —— 告诉用户是查询词太短才没走索引。
         if self.channel == VIA_FTS:
-            head = f"正文·trigram（{n} 字）·bm25 {format_bm25(hit.score)}"
+            head = f"正文·全文索引（{n} 字）·相关度 {format_bm25(hit.score)}"
         else:
-            head = f"正文·慢速 LIKE（{n} 字，无索引，不打 bm25）"
+            head = f"正文·慢速逐页扫描（{n} 字，未用索引）"
         # 「-0.00」与「没有得分」长得一样的事归 `format_bm25` 一处管（上面只管报不报）。
         return head + ("｜浅扫未扫完（缺的是库里靠后的页）" if self.body_scan_incomplete else "")
 

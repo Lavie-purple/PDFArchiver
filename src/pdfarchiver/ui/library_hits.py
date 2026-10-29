@@ -57,8 +57,14 @@ class LibraryHitsMixin:
         # 不复制内容**。原先独占这一栏的文档详情留在**同一栏的下半部**：它是全站唯一显示
         # 单文档四种状态（解析/正文/OCR/索引）的地方，而 §S2 甲的顶栏与底栏没有元数据区，
         # 没有一个"已确认的位置"可搬 —— 这条差量与理由记在 **D-052**。
+        # 轮四十二 ⑭：右栏不再常驻占一栏（docked=False），两档都是浮层、默认关 ——
+        # 搜索命中或选中文档时才唤出；用户按 ✕ 关掉后，选中文档不再自动唤出
+        # （`_right_dismissed`），下一次搜索出新内容才重开。`_panels` 里仍留它：
+        # `sync_tier` 对它只走 `place()`（贴右沿），不吃档位。
         self.right_panel = FloatablePanel(self, "命中面板（当前查询）",
-                                          column_width=RIGHT_COLUMN_WIDTH)
+                                          column_width=RIGHT_COLUMN_WIDTH, docked=False)
+        self._right_dismissed = False
+        self.right_panel.closed.connect(self._on_right_closed)
 
         # 情境提示条（轮三十六 甲 · 乙）：只在「查询一条都没命中、而这个筛选下确实有没识别过的
         # 扫描件」时出现 —— 它回答的是"我明明有这类文件，为什么搜不到"，而不是一块常驻横幅。
@@ -103,6 +109,10 @@ class LibraryHitsMixin:
 
         self.detail_view = QtWidgets.QPlainTextEdit()
         self.detail_view.setReadOnly(True)
+        # 轮四十二 ②：右栏浮层被唤出而详情还是空的那块白底，与"坏了"长得一样。
+        # 占位文字说清"这里会出什么、去哪选中"。
+        self.detail_view.setPlaceholderText(
+            "选中左边表格里的一行，这里显示这份文档的路径、分类与标签。")
         self.right_panel.body.addWidget(self.detail_view, 2)
 
         self.ai_classify_btn = QtWidgets.QPushButton("🤖 AI 推荐分类")
@@ -121,18 +131,23 @@ class LibraryHitsMixin:
 
     # ---- 键盘入口（**D-052** / **ISSUES I53** ③甲）----
 
-    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        """「点搜索框 → 浮层出现」（D-040 §S1 降级那一段的触发点）。"""
-        if obj is self.search_input and event.type() == QtCore.QEvent.Type.FocusIn:
-            self.right_panel.open_overlay()
-        return super().eventFilter(obj, event)
+    def _on_right_closed(self) -> None:
+        """用户亲手按 ✕ 关掉右栏：此后选中文档不再自动唤出（轮四十二 ⑭），
+        直到下一次搜索出新内容（`_show_hits` 会把这个记号清掉）。
+        """
+        self._right_dismissed = True
+
+    def _open_right_panel(self) -> None:
+        """搜索出了新结果 → 右栏带着新内容唤出（旧内容还在时尊重用户关掉的选择）。"""
+        self._right_dismissed = False
+        self.right_panel.open_overlay()
 
     def focus_search(self) -> None:
-        """Ctrl+F 的落点（**ISSUES I53** ③甲 / **D-052**）：唤出右栏并把光标交给搜索框。
-        显式调 `open_overlay()` 而不是只靠上面的 `FocusIn` —— 窗口未激活时 Qt 不保证派发
-        `FocusIn`，那样的话"按了没反应"只在用户身上发生、测试里量不到。
+        """Ctrl+F 的落点（**ISSUES I53** ③甲 / **D-052**）：把光标交给搜索框。
+
+        轮四十二 ⑭ 起不再顺带唤右栏 —— 那一刻它还是空的，先把一块空白浮层盖在表格上
+        是又一种堆积；等搜索出了结果，`_show_hits` 自己会开。
         """
-        self.right_panel.open_overlay()
         self.search_input.setFocus()
         self.search_input.selectAll()
 
@@ -182,7 +197,7 @@ class LibraryHitsMixin:
             for hit, line in group:
                 self._add_hit_row(f"{line} · {result.suffix(hit)}",
                                   int(hit.doc.id or 0), hit.page_no, hit.doc.path)
-
+        self._open_right_panel()
 
     def _show_semantic_hits(self, results: list[tuple[int, int, float]]) -> None:
         """语义命中进同一栏、同一套跳转。
@@ -201,6 +216,7 @@ class LibraryHitsMixin:
             where = f"第 {page_no} 页" if page_no else "整份文档"
             self._add_hit_row(f"[{where}]｜语义命中（相近，非原文）｜相似度 {score:.3f}｜{doc.name}",
                               int(doc_id), page_no or None, doc.path)
+        self._open_right_panel()
 
     def _add_group(self, label: str, truncated: bool) -> None:
         header = QtWidgets.QListWidgetItem(label + ("（已截断）" if truncated else ""))
@@ -235,15 +251,35 @@ class LibraryHitsMixin:
                 return
 
     def _on_jump_clicked(self) -> None:
+        # 轮四十二 ①：跳转按钮的兜底。命中列表里有一条**可选中的**当前行 → 按命中跳；
+        # 没有（没搜过 / 刚清空 / 当前停在分组标题上）→ 按中栏选中的那份文档开整份。
+        # 按钮的形状（文字/可用性）由 `_on_hit_current` 与 `_set_jump_fallback` 两处
+        # 各自管，动作落点只有这一处判断，两处不会说两样话。
         item = self.hit_list.currentItem()
-        if item is None:
+        if item is not None and (item.flags() & QtCore.Qt.ItemFlag.ItemIsSelectable):
+            doc_id = item.data(_HIT_DOC_ROLE)
+            if doc_id is not None:
+                # 载荷是一个 tuple 而不是两个参数：`Signal(object)` 只接一arg，emit 两个当场
+                # TypeError，而它发生在 Qt 槽里 —— 按钮点下去什么都不做（探针实测）。
+                self.open_in_reader.emit((int(doc_id), item.data(_HIT_PAGE_ROLE)))
+                return
+        if self._selected_doc_id is not None:
+            self.open_in_reader.emit((int(self._selected_doc_id), None))
+
+    def _set_jump_fallback(self) -> None:
+        """中栏选中变化 → 命中列表没有可用选中时，让跳转按钮退到"打开选中的文档"。
+
+        命中列表的当前行**可选中**（一条真命中）时什么都不动 —— `_on_hit_current` 已经按
+        那一行定了按钮的形状；分组标题没有 `_HIT_DOC_ROLE`（不可选中，构造时就摘了
+        Selectable），落到兜底。可用性跟**点名**走（与动作行 ⑯ 同口径）：Qt 的
+        `clearSelection` 不重置 currentRow，表格已无高亮行时亮着一颗按钮等于指着一个
+        看不见的"选中"。点名非空才退到"打开文档"，空了就灰。
+        """
+        current = self.hit_list.currentItem()
+        if current is not None and (current.flags() & QtCore.Qt.ItemFlag.ItemIsSelectable):
             return
-        doc_id = item.data(_HIT_DOC_ROLE)
-        if doc_id is None:
-            return
-        # 载荷是一个 tuple 而不是两个参数：`Signal(object)` 只接一arg，emit 两个当场 TypeError，
-        # 而它发生在 Qt 槽里 —— 按钮点下去什么都不做（本轮探针 .probe_work/_sig_probe.py 实测）。
-        self.open_in_reader.emit((int(doc_id), item.data(_HIT_PAGE_ROLE)))
+        self.jump_btn.setEnabled(bool(self._selected_doc_ids()))
+        self.jump_btn.setText("打开文档 → S2")
 
     def _on_doc_activated(self, item: QtWidgets.QTableWidgetItem) -> None:
         doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)

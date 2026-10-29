@@ -11,13 +11,8 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from pdfarchiver.services import pdf_view
 from pdfarchiver.services.bootstrap import AppContext
-
-try:
-    import fitz  # PyMuPDF
-    FITZ_AVAILABLE = True
-except ImportError:
-    FITZ_AVAILABLE = False
 
 
 class ReaderPage(QtWidgets.QWidget):
@@ -27,13 +22,13 @@ class ReaderPage(QtWidgets.QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._current_doc_id: int | None = None
-        self._doc: fitz.Document | None = None if FITZ_AVAILABLE else None
+        self._doc: pdf_view.Document | None = None
         self._current_page = 0
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        if not FITZ_AVAILABLE:
+        if not pdf_view.AVAILABLE:
             layout.addWidget(QtWidgets.QLabel("PyMuPDF 未安装，无法显示 PDF"))
             return
 
@@ -84,7 +79,7 @@ class ReaderPage(QtWidgets.QWidget):
         库里记的页码与文件真实页数可以不一致（解析后被换过、OCR 只跑了一半），
         静悄悄落到第 1 页就是让用户对着错的那一页确认自己找的东西。
         """
-        if not FITZ_AVAILABLE:
+        if not pdf_view.AVAILABLE:
             return
 
         doc = self.ctx.documents.get(doc_id)
@@ -92,7 +87,7 @@ class ReaderPage(QtWidgets.QWidget):
             return
 
         try:
-            self._doc = fitz.open(doc.path)
+            self._doc = pdf_view.open_document(doc.path)
             self._current_doc_id = doc_id
             self._current_page = 0
 
@@ -118,7 +113,7 @@ class ReaderPage(QtWidgets.QWidget):
             return
 
         page = self._doc[self._current_page]
-        mat = fitz.Matrix(self._zoom_level, self._zoom_level)
+        mat = pdf_view.Matrix(self._zoom_level, self._zoom_level)
         pix = page.get_pixmap(matrix=mat)
         img = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride, QtGui.QImage.Format.Format_RGB888)
         pixmap = QtGui.QPixmap.fromImage(img)

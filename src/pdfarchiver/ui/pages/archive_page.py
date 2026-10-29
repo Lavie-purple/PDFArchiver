@@ -76,6 +76,17 @@ class ArchivePage(QtWidgets.QWidget):
         root_holder = QtWidgets.QWidget()
         root_holder.setLayout(root_row)
         top_lay.addRow("目标根目录:", root_holder)
+        # ⑪ 空态引导（轮四十二）：目标根为空时这一屏其实什么也做不了，别只留输入框等输入。
+        # 设置的生效值已在上面回显（settings 里有就有、没有就没有），所以这条只在真空态出现。
+        self.root_hint = QtWidgets.QLabel(
+            "还没设置目标根目录：填一个已存在的目录，或点「选择…」挑选。"
+            "执行归档会把勾选的文件复制到「目标根 / 按命名模板渲染出的路径」下。")
+        self.root_hint.setObjectName("muted")
+        self.root_hint.setWordWrap(True)
+        self.root_hint.setVisible(not self.target_root_input.text().strip())
+        self.target_root_input.textChanged.connect(
+            lambda text: self.root_hint.setVisible(not text.strip()))
+        top_lay.addRow(self.root_hint)
 
         self.template_input = QtWidgets.QLineEdit()
         # 回显只取生效值：这里再写一遍模板字面量就是第二个口径
