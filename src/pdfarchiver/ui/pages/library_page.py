@@ -164,21 +164,22 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         # 分类名一段按 5 字算。
         # 上一轮这三列反算的是**文本宽**、给的是 +8，于是显示成 `2026-1…` / `1…` ——
         # 少算了 Qt 单元格实测的 23px 内边距（见 table_layout.CELL_PADDING_WIDTH）。
-        # 五列合计 780px（220+200+86+163+111），而视口比它小得多：宽档（页面 1079px）实测
-        # 空库 463px、2 行 463px、40 行 455px；地板档（窗口 1024px / 页面 823px）40 行 748px。
-        # **行号列已经不在了**（**ISSUES I54**，`set_table_columns` 里 hide），所以读数不随
-        # 行号的位数漂；40 行比空库少的那 8px 是**纵向滚动条**（现测 `verticalScrollBar().width()`=8），
-        # 那是真占地方。装不装得下还随分档变，所以"超出就必须滚得过去"由
-        # `test_ui_layout.test_表格定宽列放不下时必须还能滚到` 在宽档钉住，
-        # "视口不随行数漂"由 `test_ui_tier.test_视口宽度只随滚动条变不随行的位数变` 钉住。
-        # 不给任何列设 Stretch：定宽列已经把视口吃满时，Stretch 那一列会被压到接近
-        # minimumSectionSize（实测「分类」掉到 38px），而且**永远是这一条缝** ——
-        # 滚动条能滚（范围按档不按像素），滚过去的还是那个窄条。
+        # 五列合计 780px（220+200+86+163+111）。视口三档实测（2026-10-31，空库，窗口高 720）：
+        # 758／1014／2294 —— 地板档（窗口 1024 / 页面 823）装不下 780，宽档反富余 234／1514。
+        # **行号列已经不在了**（**ISSUES I54**，`set_table_columns` 里 hide），所以读数不随行号的
+        # 位数漂；长列表顶出**纵向滚动条**那一档还要再窄一点，"只随滚动条变、不随行的位数变"由
+        # `test_ui_tier.test_视口宽度只随滚动条变不随行的位数变` 钉住。
+        # 「文件名」声明当吸收列（**ISSUES I121 ①甲**）：宽档吃掉剩余（1014 档 454 → 2294 档 1734），
+        # 地板档装不下时由 `table_layout` 的运行时判据自动退回全定宽 + 横向滚动。判据不写在这里 ——
+        # 原先这里写的是「不给任何列设 Stretch」，依据是「定宽列已经把视口吃满」，而那从来没人按
+        # 当时的视口算过，于是 780px 的五列在 2560 档右边空出 1,514px，文件名却永远挤在 220px 里。
+        # 两条判据各钉在哪：吸与退 = `test_吸收列按视口宽运行时决定且地板档退回全定宽`，
+        # 退回之后还得滚得过去 = `test_表格定宽列放不下时必须还能滚到`（同量地板档那档）。
         set_table_columns(self.doc_table,
                           {0: 220, 1: 200,
                            2: 63 + CELL_PADDING_WIDTH,
                            3: 140 + CELL_PADDING_WIDTH,
-                           4: 88 + CELL_PADDING_WIDTH})
+                           4: 88 + CELL_PADDING_WIDTH}, stretch_col=0)
         self.doc_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         # **ISSUES I78** 甲（2026-10-19）改多选：「批量打标签」在 SPEC 阶段 3 里写的是"一批文档"，
         # 单选的话一次只能归一份，那条验收仍然做不到。Ctrl/Shift 与 `SelectRows` 同一形状，

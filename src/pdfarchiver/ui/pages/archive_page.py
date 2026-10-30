@@ -121,11 +121,11 @@ class ArchivePage(QtWidgets.QWidget):
         self.doc_table.setColumnCount(4)
         self.doc_table.setHorizontalHeaderLabels(["选择", "文件名", "路径", "分类"])
         # 让「分类」当吸收列而不是「文件名」：定宽那三列合计 576px，地板档（窗口 1024px）下这张
-        # 表的视口实测 805px（空库读数），富余全落在吸收列上（实测「分类」229px）—— 文件名/路径
-        # 保住定宽，被吃掉的是信息量最低、且左栏分类树里本来就有的那一列。地板档已经压不出更窄的
-        # 视口了（**D-039** 的 1024px 地板，见 **ISSUES I52**），所以"吸收列落错地方"这一类
-        # 由 `test_压到地板宽度时归档表仍保住文件名与路径` 钉住，而不是靠窗口还能更小来暴露。
-        # 805px 现在是个**与行数无关**的读数（**ISSUES I54** 已销：行号列不再长出来）。
+        # 表的视口实测 807px（2026-10-31 复测，空库读数），富余全落在吸收列上（实测「分类」231px）
+        # —— 文件名/路径保住定宽，被吃掉的是信息量最低、且左栏分类树里本来就有的那一列。地板档
+        # 已经压不出更窄的视口了（**D-039** 的 1024px 地板，见 **ISSUES I52**），所以"吸收列落错
+        # 地方"这一类由 `test_压到地板宽度时归档表仍保住文件名与路径` 钉住，而不是靠窗口还能更小
+        # 来暴露。807px 现在是个**与行数无关**的读数（**ISSUES I54** 已销：行号列不再长出来）。
         set_table_columns(self.doc_table, {0: 56, 1: 280, 2: 240}, stretch_col=3)
         self.doc_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.doc_table.setAlternatingRowColors(True)
@@ -144,11 +144,12 @@ class ArchivePage(QtWidgets.QWidget):
         self.preview_table.setColumnCount(5)
         self.preview_table.setHorizontalHeaderLabels(
             ["源路径", "目标路径", "长度", "方式", "标记"])
-        # 五条全定宽、没有吸收列：合计 890px > 地板档视口（805px），按 `table_layout` 的口径
-        # 横向滚动。§S3 明写 1024 档"先砍长度、再缩源"，而「目标 / 方式 / 标记」不许砍
-        # （PROJECT_SPEC 3.6.5 明列的三项），所以这里宁可滚。
+        # 「目标路径」当吸收列（**ISSUES I121 ①甲**）：五列定宽合计 890px，地板档视口（实测 807px）
+        # 装不下 → 运行时判据自己退回全定宽 + 横向滚动，也就是 **D-040** 写明的既定降级；§S3 明写
+        # 1024 档"先砍长度、再缩源"，而「目标 / 方式 / 标记」不许砍（PROJECT_SPEC 3.6.5 明列的三项），
+        # 所以砍的只能是吸收入之外的宽度。宽档则吃掉剩余，右边不留空。
         set_table_columns(self.preview_table,
-                          {0: 240, 1: 260, 2: 64, 3: 126, 4: 200}, stretch_col=None)
+                          {0: 240, 1: 260, 2: 64, 3: 126, 4: 200}, stretch_col=1)
         self.preview_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.preview_table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)

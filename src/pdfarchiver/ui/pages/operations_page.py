@@ -61,8 +61,11 @@ class OperationsPage(QtWidgets.QWidget):
         self.item_table = QtWidgets.QTableWidget()
         self.item_table.setColumnCount(6)
         self.item_table.setHorizontalHeaderLabels(["ID", "类型", "源路径", "目标路径", "状态", "错误"])
+        # 「错误」当吸收列（**ISSUES I121 ①甲**）：它是这一屏唯一内容天生没上限的一列
+        # （第三方报错原文，在 `ELIDABLE_COLUMNS` 里、有 tooltip 回读），六列定宽合计 966px，
+        # 地板档视口装不下时由运行时判据退回全定宽 + 横向滚动。
         set_table_columns(self.item_table,
-                          {0: 56, 1: 110, 2: 240, 3: 240, 4: 80, 5: 240})
+                          {0: 56, 1: 110, 2: 240, 3: 240, 4: 80, 5: 240}, stretch_col=5)
         self.item_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.item_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.item_table.setAlternatingRowColors(True)

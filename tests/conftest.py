@@ -43,6 +43,22 @@ def settle(qapp, rounds: int = 6) -> None:
         qapp.processEvents()
 
 
+def resize_stepped(window, qapp, width: int, height: int) -> None:
+    """一级一级把窗口拉到目标宽（±50px），不要一次跳过去。
+
+    实测从 1000 直接 resize 到 356 时 `QHeaderView` **不重排 Stretch 列**，`sectionSize()`
+    留着改尺寸之前的 375px —— 守卫就这么假绿的（注入坏法时被抓到一次，见
+    `test_ui_layout.py` 里那条教训）。用户是拖着窗口变的，步进才等效。
+    和 `settle` 一样只许有一份：几何断言分布在五个模块里，抄两份就会漂。
+    """
+    step = 50 if width > window.width() else -50
+    while (width - window.width()) * step > 0:
+        nxt = min(window.width() + step, width) if step > 0 \
+            else max(window.width() + step, width)
+        window.resize(nxt, height)
+        settle(qapp, rounds=4)
+
+
 def page_at(window, qapp, page_id: str, width: int, height: int):
     """切到某一屏、重查一遍、压到指定窗口宽，返回页面对象。
 
