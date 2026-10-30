@@ -43,6 +43,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.collection_service import CollectionEntry
+from pdfarchiver.ui.empty_state import make_hint, sync_hint
 from pdfarchiver.ui.export_dialog import ExportDialog
 from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 
@@ -70,10 +71,11 @@ class CategoriesPage(QtWidgets.QWidget):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.splitter = splitter
 
-        # 左栏：分类树。树下面的三颗按钮（新建/改名/删除）在浮层里跟着树一起收 ——
-        # 若只把树收起来而把编辑按钮留在页面上，1024 档这一屏就变成"能改看不见"。
-        self.tree_panel = FloatablePanel(self, "分类树",
-                                        column_width=LEFT_COLUMN_WIDTH, strip_label="分类")
+        # 左栏：分类树。**D-066**（走查 ⑮）之后宽档也默认收成 48px 的条，点条展开成 236px
+        # 常驻列。树下面的三颗按钮（新建/改名/删除）跟着树一起走 —— 若只把树收起来而把编辑
+        # 按钮留在页面上，收成条的那一档这一屏就变成"能改看不见"。
+        self.tree_panel = FloatablePanel(self, "分类树", column_width=LEFT_COLUMN_WIDTH,
+                                        strip_label="分类", collapsible=True)
         self.category_tree = QtWidgets.QTreeWidget()
         self.category_tree.setHeaderHidden(True)
         # 右键菜单 = 「改父类… / 与…合并…」这两个动作的唯一入口（**ISSUES I78** 甲）。
@@ -102,12 +104,11 @@ class CategoriesPage(QtWidgets.QWidget):
         tag_title = QtWidgets.QLabel("标签")
         tag_title.setObjectName("sectionTitle")
         center_lay.addWidget(tag_title)
-        # ⑩ 空态引导（轮四十二）：两栏在真库上开局就是空的，一行话讲清东西从哪来 ——
-        # 标签与集合的写路径都在 S1（打标签 / 存为智能集合），这里只读，不指假出路。
-        self.tag_hint = QtWidgets.QLabel(
-            "还没有标签：在「文档库」选中文件后可批量打标签，或点下面「新建」。")
-        self.tag_hint.setObjectName("muted")
-        self.tag_hint.setWordWrap(True)
+        # ⑩ 空态引导（轮四十二）→ ⑱ 全站规则的唯一出口（**D-066**）：两栏在真库上开局就是
+        # 空的，一行话讲清东西从哪来 —— 标签与集合的写路径都在 S1（打标签 / 存为智能集合），
+        # 这里只读，不指假出路。样式与"跟着条数走"不再各页手抄（`ui/empty_state.py`）。
+        self.tag_hint = make_hint(
+            "还没有标签：在「文档库」选中文件后可批量打标签，或点下面「新建」。", center)
         center_lay.addWidget(self.tag_hint)
         self.tag_list = QtWidgets.QListWidget()
         center_lay.addWidget(self.tag_list, 1)
@@ -140,11 +141,9 @@ class CategoriesPage(QtWidgets.QWidget):
         coll_title = QtWidgets.QLabel("智能集合")
         coll_title.setObjectName("sectionTitle")
         right_lay.addWidget(coll_title)
-        self.coll_hint = QtWidgets.QLabel(
+        self.coll_hint = make_hint(
             "还没有智能集合：在「文档库」设好筛选条件后点「存为智能集合」，就会出现在这里"
-            "（双击一条集合回到那份条件）。")
-        self.coll_hint.setObjectName("muted")
-        self.coll_hint.setWordWrap(True)
+            "（双击一条集合回到那份条件）。", right)
         right_lay.addWidget(self.coll_hint)
         self.collection_list = QtWidgets.QListWidget()
         self.collection_list.itemDoubleClicked.connect(self._on_collection_activated)
@@ -201,6 +200,9 @@ class CategoriesPage(QtWidgets.QWidget):
                     parent_item.addChild(item)
             items_by_path[cat.name_path] = item
         self.category_tree.expandAll()
+        # 与 S1 同一口径（**D-066** / ⑮）：收成条时那颗小圆点亮在"已经有文档归过类"上，
+        # 不是"树非空"—— 默认分类开局就有 14 个，后者会让灯恒亮。
+        self.tree_panel.set_strip_dot(self.ctx.catalog.has_categorized_documents())
 
     def _reload_tags(self) -> None:
         """整列重查，每一行把**它自己那个标签的 id**挂在 `UserRole` 上（不是行号）。
@@ -214,7 +216,7 @@ class CategoriesPage(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(tag.name)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, tag.id)
             self.tag_list.addItem(item)
-        self.tag_hint.setVisible(self.tag_list.count() == 0)
+        sync_hint(self.tag_list)
 
     def _reload_collections(self) -> None:
         """整列重查：每一行带着**它自己那条** `CollectionEntry`（不是行号）。
@@ -228,7 +230,7 @@ class CategoriesPage(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(entry.label())
             item.setData(QtCore.Qt.ItemDataRole.UserRole, entry)
             self.collection_list.addItem(item)
-        self.coll_hint.setVisible(self.collection_list.count() == 0)
+        sync_hint(self.collection_list)
 
     # ---- 右键菜单（**ISSUES I78** 甲：改父类 / 合并 的唯一入口）----
 

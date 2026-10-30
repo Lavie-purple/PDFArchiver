@@ -27,6 +27,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.ui.empty_state import make_hint, sync_hint
 from pdfarchiver.ui.library_hits import set_text_role
 
 # 证据对象是 `semantic.qa_service.Evidence`，但 **ui 不 import semantic**（docs/ARCHITECTURE
@@ -103,6 +104,12 @@ class AskPage(QtWidgets.QWidget):
         history_lay.setContentsMargins(0, 0, 0, 0)
         history_lay.setSpacing(4)
         history_lay.addWidget(QtWidgets.QLabel("历史提问"))
+        # ⑱ 空态（**D-066**）：这一栏是**内存态**，每次启动都从空开始 —— 空框在这里不是
+        # "坏了"，而是"还没问过"，所以必须说一句它会有什么东西、以及怎么让它有东西。
+        self.history_hint = make_hint(
+            "还没有问过问题：在右边输入一句、点「提问」，问过的一条条列在这里，"
+            "点一条回到那次的答案。", history_pane)
+        history_lay.addWidget(self.history_hint)
         self.history_list = QtWidgets.QListWidget()
         self.history_list.itemClicked.connect(self._replay_history)
         history_lay.addWidget(self.history_list, 1)
@@ -120,9 +127,9 @@ class AskPage(QtWidgets.QWidget):
         answer_lay.addWidget(title)
         # ⑨ 空态引导（轮四十二）：没提问之前答案区一片空白，这句话告诉人这一屏怎么用、
         # 以及「向量 未建」时为什么提问不会有结果。第一次提问后整条隐藏。
-        self.empty_hint = QtWidgets.QLabel()
-        self.empty_hint.setObjectName("muted")
-        self.empty_hint.setWordWrap(True)
+        # 文案随向量读数变（`_update_empty_hint`），所以这里只造壳、内容由那一处填；
+        # 样式仍走 ⑱ 的唯一出口（**D-066**），不再手抄 `setObjectName` + `setWordWrap`。
+        self.empty_hint = make_hint("", host)
         answer_lay.addWidget(self.empty_hint)
         self.answer_label = QtWidgets.QLabel()
         self.answer_label.setWordWrap(True)
@@ -236,6 +243,7 @@ class AskPage(QtWidgets.QWidget):
         self.history_list.insertItem(0, QtWidgets.QListWidgetItem(query))
         while self.history_list.count() > HISTORY_MAX_ITEMS:
             self.history_list.takeItem(self.history_list.count() - 1)
+        sync_hint(self.history_list)
 
     def _replay_history(self, item: QtWidgets.QListWidgetItem) -> None:
         self.ask_input.setText(item.text())

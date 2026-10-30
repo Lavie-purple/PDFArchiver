@@ -137,6 +137,15 @@ class CatalogRepository:
     def count_categories(self) -> int:
         return self.engine.thread_connection().execute("SELECT count(*) FROM categories").fetchone()[0]
 
+    def has_categorized_documents(self) -> bool:
+        """库里到底有没有"文档 ↔ 分类"的关联 —— 左栏收成条时那颗小圆点读它（**D-066** / ⑮）。
+
+        取 `LIMIT 1` 而不是 `count(*)`：要回答的只是"有没有"，而 `count(*)` 在这张关联表
+        长到百万行档就是一趟全索引扫描（**ISSUES I109** 记的就是这类读数）。
+        """
+        return self.engine.thread_connection().execute(
+            "SELECT 1 FROM document_categories LIMIT 1").fetchone() is not None
+
     def _repath_subtree(self, conn, category_id: int, old_path: str, new_path: str,
                         ts: int) -> None:
         """改名或挪父子之后，把整枝后代的 `name_path` 前缀换掉 —— 一条规则，两处共用。

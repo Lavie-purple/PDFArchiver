@@ -4,7 +4,8 @@
 **D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏）与
 **ISSUES I53** ②甲/③甲 的命中面板与键盘入口（分组与页码片段、浏览态清空、Ctrl+F、
 跳到 S2 的那条链、越界页码拒绝）。轮四十二 ⑭ 之后右栏不再常驻：两档都是浮层、
-默认关、搜索出结果才开 —— `test_宽档左栏常驻而右栏默认关` 钉的是新契约。
+默认关、搜索出结果才开；轮四十四 ⑮（**D-066**）又把左树在宽档也收成 48px 的条 ——
+`test_宽档左树默认收成条而右栏默认关` 钉的是这两条叠在一起之后的契约。
 
 为什么单独成一个文件（`test_app_shell.py` 那一摊 2026-10-17 已按 **ISSUES I58** 丙 拆成四份，
 见 **REPO-JOURNAL R-010**）：这一组量的是**同一个控件在两个宽度档下的形状**，判据全部来自
@@ -77,40 +78,93 @@ def _page_at(window, qapp, page_id: str, width: int, height: int):
     return page
 
 
-def _seed_docs(ctx: AppContext, count: int = 3) -> None:
-    """灌几行进文档表 —— 空表量不到行高，长文件名才量得到"变行高展开"会不会发生。"""
+def _seed_docs(ctx: AppContext, count: int = 3) -> list[int]:
+    """灌几行进文档表 —— 空表量不到行高，长文件名才量得到"变行高展开"会不会发生。
+
+    返回落库后的 id：⑮ 那颗小圆点的用例要真去建一条"文档 ↔ 分类"关联。
+    """
+    ids: list[int] = []
     for n in range(count):
         name = f"归档范围与保留期限的请示（复函稿）第{n}版附件全部版本.pdf"
         path = f"D:\\用户资料\\2026 年度合同与结算凭证归档\\{name}"
-        ctx.documents.upsert(Document(
+        doc = ctx.documents.upsert(Document(
             path=path, path_key=identity_key(path), name=name,
             size_bytes=1024 * 1024, mtime_ns=1_760_000_000_000_000_000,
             sha256=f"{n:064x}", text_status="done", fts_status="done"))
+        ids.append(doc.id)
+    return ids
 
 
-def test_宽档左栏常驻而右栏默认关(window, qapp) -> None:
-    """左栏 236px 常驻；右栏自轮四十二 ⑭ 起不常驻（docked=False）——两档都是浮层、默认关。
+def test_宽档左树默认收成条而右栏默认关(window, qapp) -> None:
+    """**D-066**（走查 ⑮）之后的宽档：左树起始是一条 48px 的条，点条才展开成 236px 常驻列。
 
-    上一轮这里量到的是 [236, 481, 360]，看着对 —— 其实那三个数来自 `__init__` 里手写的
-    `setSizes`，切档代码在 Qt 虚函数里抛异常被吞了、从没跑过。所以 `narrow is False`
-    （而不是 None）这一条要先钉住：**切档真的跑过**，后面的宽度读数才算数。
-    右栏的 `narrow is None` 反而是新契约：它不吃档位（`set_narrow` 恒 False），
-    定宽靠构造时 `setFixedWidth(overlay_width)`。
+    这条改名自 `test_宽档左栏常驻而右栏默认关`（轮四十二 ⑭ 的契约，D-066 取消了它留给
+    左树的那条"宽档常驻"例外）。没动的两条读数：`narrow is False`（切档**真的跑过** ——
+    上一轮这里量到 [236, 481, 360] 看着对，其实那三个数来自 `__init__` 里手写的 `setSizes`，
+    切档代码在 Qt 虚函数里抛异常被吞了、从没跑过）；右栏 `docked=False` + 定宽 420 + 默认关。
     """
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     assert page.width() == PAGE_WIDTH_AT_DEFAULT, f"页面可用宽不是 {PAGE_WIDTH_AT_DEFAULT}：{page.width()}"
     assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下左树 + 中栏"
     tp = page.tree_panel
     assert tp.narrow is False, "切档没跑（还是 None）—— 异常被 Qt 的虚函数调用吞掉了"
-    assert tp.parent() is page.splitter, "宽档左栏得还在 splitter 里占槽"
-    assert tp.width() == LEFT_COLUMN_WIDTH, f"左栏不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{tp.width()}"
-    assert tp.strip is not None and not tp.strip.isVisible(), \
-        "宽档那条 48px 的条必须隐藏，否则左栏前面多出一条空栏"
+    assert tp.collapsible and tp.collapsed, "⑮：带条的左树宽档起始就该收成条"
+    assert tp.parent() is page and not tp.isVisible(), \
+        "收成条时面板还留在 splitter 里占槽 —— 那一栏没真的让出来"
+    assert tp.strip.isVisible() and tp.strip.width() == TREE_STRIP_WIDTH, \
+        f"宽档没留出 {TREE_STRIP_WIDTH}px 的条：{tp.strip.width()}"
+    assert page.splitter.count() == 2, f"收起后该只剩「条 + 中栏」两槽：{page.splitter.sizes()}"
+    center = page.splitter.widget(1)
+    assert center.width() >= page.width() - TREE_STRIP_WIDTH - 2, \
+        f"收起的没把宽度还给中栏：中栏 {center.width()}px，可用 {page.width() - TREE_STRIP_WIDTH}px"
+
+    # 点条展开 = D-040 原本的宽档形状（236px 常驻列，不是 420px 浮层）。
+    tp.strip_button.click()
+    _settle(qapp)
+    assert tp.isVisible() and tp.parent() is page.splitter, "点条没把这一栏放回 splitter"
+    assert tp.width() == LEFT_COLUMN_WIDTH, f"展开的左栏不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{tp.width()}"
+    assert tp.strip.isVisible(), "展开态条没了 ⇒ 这一栏收不回去（把手只有这一颗）"
+    assert not tp.close_button.isVisible(), "常驻列不该有「✕」—— 浮层才用角标出口"
+    assert page.splitter.count() == 3 and center.width() >= CENTER_MIN_WIDTH, \
+        f"展开后中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限：{center.width()}"
+
+    # 再点收回：两态可逆。展开态常驻列把窗口的最低宽度抬到 481（实测），收回成条后
+    # 必须**不增** —— 收起时漏清 `setFixedWidth(420)` 就是这一条先红。
+    hint = window.minimumSizeHint().width()
+    assert hint <= MIN_WINDOW_WIDTH, f"展开态已经吃掉 D-039 的 {MIN_WINDOW_WIDTH}px 地板余量：{hint}"
+    tp.strip_button.click()
+    _settle(qapp)
+    assert not tp.isVisible() and tp.parent() is page, "再点条没收回成条"
+    assert window.minimumSizeHint().width() <= hint, \
+        f"收回成条反而把窗口最低宽度顶宽了：{hint} → {window.minimumSizeHint().width()}"
+
     rp = page.right_panel
     assert rp.docked is False and rp.narrow is None, "右栏不该吃档位判定（轮四十二 ⑭）"
     assert rp.parent() is page and not rp.isVisible(), "右栏默认关、挂页面上当浮层"
     assert (rp.minimumWidth(), rp.maximumWidth()) == (tier.OVERLAY_WIDTH, tier.OVERLAY_WIDTH), \
         f"右栏定宽不是 {tier.OVERLAY_WIDTH}px"
+
+
+def test_条上小圆点跟着分类关联走(window, ctx, qapp) -> None:
+    """⑮ 那句"树里有内容时条上加个小圆点提醒" —— 判据是**有没有文档归过类**，不是树非空。
+
+    为什么不用节点数：装配时就种下 14 个默认分类（启动读数那句「分类 14 个（种下默认分类
+    14 个）」），拿节点数当信号等于装一颗永远亮着的灯 —— 与 **ISSUES I33** 修过的那类
+    "永不变的瞎读数"是同一种病，灯一旦恒亮就不再回答任何问题。
+    """
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    dot = page.tree_panel.strip_dot
+    assert dot is not None and not dot.isVisible(), "一份都没归入分类 ⇒ 灯不该亮"
+
+    ctx.catalog.link_categories(_seed_docs(ctx, 1), ctx.catalog.list_categories()[0].id)
+    page.reload()
+    _settle(qapp)
+    assert dot.isVisible(), "归入过分类了，条上的灯还灭着"
+
+    ctx.catalog.delete_category(ctx.catalog.list_categories()[0].id)
+    page.reload()
+    _settle(qapp)
+    assert not dot.isVisible(), "关联都删光了灯还亮着 —— 它没有在跟着库走"
 
 
 def test_窄档左栏收成_48px_的条而右栏同样不占槽(window, qapp) -> None:
@@ -177,7 +231,11 @@ def test_地板档下_S8_的树侧栏收起(window, qapp) -> None:
     浮层，否则 1024 档这一屏变成"能改看不见"。
     """
     wide = _page_at(window, qapp, "categories", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert wide.tree_panel.narrow is False and wide.tree_panel.width() == LEFT_COLUMN_WIDTH
+    assert wide.tree_panel.narrow is False and wide.tree_panel.collapsed, \
+        "D-066：S8 与 S1 同一条规则，宽档也起始收成条"
+    wide.tree_panel.strip_button.click()
+    _settle(qapp)
+    assert wide.tree_panel.width() == LEFT_COLUMN_WIDTH
 
     page = _page_at(window, qapp, "categories", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
     assert page.tree_panel.narrow is True, "D-039：1024 档 S8 的树侧栏必须收起"
@@ -584,6 +642,9 @@ def test_右栏两档都是浮层_宽档常驻树列关不掉(window, qapp) -> N
     assert not rp.isVisible(), "右栏的「✕」没把浮层关掉"
 
     tp = page.tree_panel
+    tp.expand()                        # D-066 之后宽档起始是条，先把它展开成常驻列
+    _settle(qapp)
+    assert tp.isVisible(), "用例前提：展开后的左栏是常驻列"
     assert not tp.close_button.isVisible(), "宽档常驻列不该有「✕」"
     tp.close_overlay()
     _settle(qapp)

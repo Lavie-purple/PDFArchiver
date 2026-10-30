@@ -18,6 +18,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.db_check import LAST_KEY, MODE_LABELS, format_duration
 from pdfarchiver.services.status_service import format_ts
+from pdfarchiver.ui.empty_state import make_hint, sync_hint
 from pdfarchiver.ui.pages.health_panel import HealthPanel
 from pdfarchiver.ui.pages.status_page import StatusPage
 
@@ -66,6 +67,12 @@ class SettingsPage(QtWidgets.QWidget):
         # 监测目录
         roots_group = QtWidgets.QGroupBox("监测目录")
         roots_lay = QtWidgets.QVBoxLayout(roots_group)
+        # ⑱ 空态（**D-066**）：这一栏开局就是空的，而「空」在这里的含义最重 —— 一条都没登记
+        # 就等于整个程序没有任何东西可索引。出路只指界面上真存在的那颗按钮。
+        self.roots_hint = make_hint(
+            "还没有登记监测目录：点下面「添加目录」告诉程序要整理哪个文件夹 —— "
+            "一条都没登记，文档表就永远不会出现任何文档。", roots_group)
+        roots_lay.addWidget(self.roots_hint)
         self.roots_list = QtWidgets.QListWidget()
         self.roots_list.setMaximumHeight(120)
         roots_lay.addWidget(self.roots_list)
@@ -235,6 +242,7 @@ class SettingsPage(QtWidgets.QWidget):
             item.setData(QtCore.Qt.ItemDataRole.UserRole, root.root_key)
             item.setToolTip(f"登记键：{root.root_key}")
             self.roots_list.addItem(item)
+        sync_hint(self.roots_list)
 
         # OCR 三读数（从 app_settings 现数，不缓存）
         try:

@@ -87,12 +87,13 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
 
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
-        # 左栏：分类树。宽档占 splitter 一槽，窄档整块变成浮层、原位留下 48px 的条（D-040）。
+        # 左栏：分类树。**D-066**（走查 ⑮）之后宽档也默认收成 48px 的条，点条才展开成
+        # D-040 那 236px 常驻列；窄档不变（条 + 420px 浮层）。条上那颗按钮自己管收/放。
         # 条上给的是"2 字按钮 + 真树浮层"而不是每类一枚图标：`Category` 里没有图标字段
         # （`db/models.py:54`）—— 线框那句"图标条"要的产品数据不存在，2026-10-17 按
         # **ISSUES I53** ①甲 定案**把线框改成现在这个形状**（见 `docs/UI-WIREFRAMES.md` §S1 定案记录）。
-        self.tree_panel = FloatablePanel(self, "分类筛选",
-                                         column_width=LEFT_COLUMN_WIDTH, strip_label="分类")
+        self.tree_panel = FloatablePanel(self, "分类筛选", column_width=LEFT_COLUMN_WIDTH,
+                                         strip_label="分类", collapsible=True)
         self.category_tree = QtWidgets.QTreeWidget()
         self.category_tree.setHeaderHidden(True)
         self.category_tree.itemClicked.connect(self._on_category_clicked)
@@ -296,6 +297,10 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
                     parent_item.addChild(item)
             items_by_path[cat.name_path] = item
         self.category_tree.expandAll()
+        # 宽档也收成条之后（**D-066** / ⑮），条上那颗小圆点是"里头有东西可点"的唯一线索。
+        # 判据用"有没有文档归过类"，不用"树有没有节点"：默认分类一开局就种 14 个，
+        # 后一条恒为真，等于装一颗永远亮着的灯。
+        self.tree_panel.set_strip_dot(self.ctx.catalog.has_categorized_documents())
 
     def _load_all_documents(self) -> None:
         """分类树那颗「显示全部」：只去掉「分类」这一条，其余 chips 留着（tooltip 写的就是它）。"""
