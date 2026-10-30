@@ -953,3 +953,54 @@ D-064 第 9 条明确留下一轮的两项，本轮做完。**这条取消了 D-
 旧数字"；D 把箭头钉成 ▸ ⇒ 红在"展开态的箭头没翻过来"；E 不挂 objectName ⇒ 红在"轨没挂上
 QSS 要的钩子"；F S8 退回 `collapsible=True` ⇒ 红在"丙：S8 的主对象不许默认收成条"。
 六条注入后逐文件与注入前**字节比对一致**（还原不是靠记得，是靠比出来的）。
+
+
+---
+
+## D-068 · 轮四十六 用户点名：S1「上次读到」提示行去掉框、去掉复读 tooltip（2026-10-30，用户原话「框选中的内容，上次打开这个选项，不需要在这个选项显示背景的框，也不需要在鼠标放在上面时候显示提示，这个选项本身就已经显示全部内容了，无需提示」+ 一张 2560 宽屏截图：红框圈住那一行，tooltip 正挂在旁边）
+
+**用户圈出的不是配色，是"形状说了假话"**：`lastReadHint` 是一颗 `QToolButton`（`library_page.py:142`
+挂的 objectName），原生 windowsvista 样式因此给它画了一圈边框、悬停时再点亮一遍；而这一行写的是
+「上次读到 《X》 · 第 N 页 —— 点此继续」—— 一句**可以直接点的话**。屏幕上读到的是按钮，语义上是提示。
+
+**三条实测把根因钉住**（offscreen 量几何 + 逐像素比色 + 全站 grep QSS）：
+
+1. **那圈框不是本项目画的**：QSS 里没有任何选择器命中 `#lastReadHint`；`QPushButton {...}`
+   （`theme.py:472`）也接不住它 —— QSS 类型选择器虽然匹配子类，但 `QToolButton` 直接继承
+   `QAbstractButton`，**不经过 `QPushButton`**。⇒ 框来自样式默认绘制。
+2. **构造处的 `setAutoRaise(True)` 早已在场，原生样式下不管事**：`hint.grab()` 取位图，外圈像素色集合
+   与内部色集合逐个比，常态/悬停两态的环差恒为空 —— 连"框在不在"都量不出来，谈不上证明它生效。
+3. **库里同一味的药有先例**：`QToolButton#chipRemove`（`theme.py:537`）就是靠显式
+   `background-color: transparent; border: none` 抹平的，真机有效。
+
+**两半各一处落点**：
+
+- **去框**（`ui/theme.py` +10 行含注释，新规则在 `:568`）：`QToolButton#lastReadHint` 声明
+  `background-color: transparent; border: none; padding: 0;`。**只写底与边、不写 color** —— 字色继续走
+  `QWidget` 继承，不新增一对字色/底色，对比守卫 `tests/unit/test_theme_contrast.py` 因此不会被这条
+  规则牵出新配对要量（`_hex()` 跳过 `transparent`，`state_rules_that_repaint()` 只扫带状态词的选择器）。
+- **去 tooltip**（`library_page.py` 删一行 `setToolTip(self.last_read_hint.text())`）：原话逐字符等于
+  自己这一行 ⇒ 纯复读。**同类扫描**（AGENTS「发现一类先问还有哪些同类」）：全站**只此一处**
+  `X.setToolTip(X.text())`；其余 tooltip 要么带增量信息（`status_label.setToolTip(result.status_detail())`），
+  要么是**被省略单元格的回读契约**，由 `test_db_check.py:158`、`test_ui_layout.py:123/150/350`、
+  `test_library_paging_ui.py:291` 钉着 —— 一条都没顺手动，也没顺手加。
+
+**代价（如实挂账 = ISSUES I122，不掩盖）**：被摘掉的那条 tooltip 是长名**唯一的回读**。按项目自己的
+7/13 真机字宽模型现读真库 16,754 份（2026-10-30）：整行宽 p50 388｜p90 815｜p99 1,214｜最大 1,919px，
+而这行的可用宽度四档实测 1024 档 **902**｜1280 档 **1,158**｜1920 档 **1,798**｜2560 档 **2,252**px ⇒
+**1024 档 1,144 份（6.83%）整行装不下**、1280 档 338 份（2.02%）、1920 档 7 份、2560 档 **0 份**。
+**用户那句前提在宽屏成立、在地板档不成立** —— 他截图那一档（2560）确实一份都不溢出，所以本轮按他说的做。
+
+**另一条量不到的**：框**是否真的消失**，本环境给不出证据 —— `QWidget.grab()` 复现不了原生 hot frame
+（环像素差在常态/悬停/offscreen/真机平台四种场合下全为 0，即使注入 `QtGui.QHoverEvent(HoverEnter)`）。
+最终目视确认归用户，与 **ISSUES I17** 同一口径的既有边界。同理**没扩大范围**：`filterToggle`、状态栏
+`themeBtn`、右栏浮层的 ✕ 角标这三类同样吃原生框，本轮只改用户点名的那一处。
+
+**后果**：`ui/theme.py`（+10 行）/ `ui/pages/library_page.py`（−1 行 + 2 行注释，685 行，线 700）。
+**测试**：`tests/integration/test_resume_reading.py::test_提示行不带框且不挂复读tooltip`（两半各钉一条）。
+**证据（坏法注入 3 条，逐条点名，`VERDICT: ALL BAD CAUGHT`）**：① 把 tooltip 挂回去 ⇒ 红在
+「不许用 tooltip 复读自己这一行」并回显整句原文；② 只删 `border: none` ⇒ 红在「缺一半都压不住框」；
+③ 整条规则删掉 ⇒ 红在「抹平规则不在了 —— 原生样式的框会直接回到屏上」。注入后逐文件还原。
+**验证读数**：guards **59/59**、提示行 + 对比 **15 绿**、全量 **915 passed / 1 skipped / 1 failed**
+（唯一红是 G1 冷启动 2.05s，同场基线对照 1.744s 也红 ⇒ 忙线场无有效读数，逐条见
+`docs/VERIFICATION-RUNLOGS.md` §4.57）。

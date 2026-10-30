@@ -674,7 +674,8 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
             self.last_read_hint.setText(f"上次打开过 《{doc.name}》 —— 点此继续")
         else:
             self.last_read_hint.setText(f"上次在读《{doc.name}》，但文件已不在原位置")
-        self.last_read_hint.setToolTip(self.last_read_hint.text())
+        # 故意不挂 tooltip（轮四十六）：这一行写的就是全部内容本身，悬停复读一遍
+        # 只是噪声。它不是表格里的省略单元格，没有"截断了要能回读"的契约要还。
         self.last_read_hint.setEnabled(exists)
         self.last_read_hint.setVisible(True)
 

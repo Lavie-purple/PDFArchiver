@@ -14,6 +14,7 @@ QApplication 的图标非空（冻结产物由 spec datas 收进包，漏收 = �
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pymupdf
@@ -85,6 +86,30 @@ def test_文件已挪走提示行可见但禁用(ctx, window, tmp_path: Path) ->
     assert hint.isVisible(), "文件挪走了也要说，不许悄悄藏起来"
     assert not hint.isEnabled(), "文件不在了就不许是一颗点得动的按钮"
     assert HINT_MISSING_FILE in hint.text(), f"要写明原因，实际：{hint.text()!r}"
+
+
+def test_提示行不带框且不挂复读tooltip(ctx, window, tmp_path: Path) -> None:
+    """轮四十六：这一行是"一句可以直接点的话"，不是一颗按钮。
+
+    两半各钉一处，缺一半就退回用户红框点出的样子：
+    - QSS 里 `QToolButton#lastReadHint` 必须同时声明 `border: none` 与透明底
+      —— 框是 windowsvista 样式给 QToolButton 画的，`setAutoRaise(True)` 在原生样式下不管事；
+    - 控件的 tooltip 必须是空串 —— 行里写的就是全部内容，悬停复读一遍只是噪声。
+    """
+    real = _make_pdf(tmp_path / "flat.pdf")
+    _insert_doc(ctx, path=real, name="flat.pdf", page_count=5,
+                last_read_page=4, last_read_at=2000.0)
+    page = window._pages["library"]
+    page.update_last_read_hint()
+    hint = page.last_read_hint
+    assert hint.text(), "用例前提：提示行得写上字"
+    assert hint.toolTip() == "", f"不许用 tooltip 复读自己这一行：{hint.toolTip()!r}"
+
+    qss = re.sub(r"/\*.*?\*/", "", window.theme.generate_qss(), flags=re.S)
+    block = re.search(r"QToolButton#lastReadHint\s*\{([^}]*)\}", qss)
+    assert block, "抹平规则不在了 —— 原生样式的框会直接回到屏上"
+    body = block.group(1)
+    assert "border: none" in body and "transparent" in body, f"缺一半都压不住框：{body}"
 
 
 def test_导航注册表8项且阅读器不再占一格() -> None:

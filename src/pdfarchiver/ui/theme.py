@@ -561,6 +561,16 @@ QToolButton#chipRemove:hover {{
     color: {c.text_primary};
 }}
 
+/* S1「上次读到」提示行（轮四十六）：它是一行**可以直接点的话**，不是一颗按钮。
+   windowsvista 样式给 QToolButton 画了一圈边框（用户在真机截图里红框点出的那个框），
+   `setAutoRaise(True)` 在原生样式下不管事 —— 与 `#chipRemove` 同一味药：显式抹平。
+   只写 background 与 border，不写 color：字色仍走 QWidget 继承，不新增字色搭配。 */
+QToolButton#lastReadHint {{
+    background-color: transparent;
+    border: none;
+    padding: 0;
+}}
+
 /* ===== 复选框 ===== */
 QCheckBox {{
     color: {c.text_secondary};

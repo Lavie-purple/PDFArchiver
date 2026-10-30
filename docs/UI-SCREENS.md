@@ -264,3 +264,28 @@ S9/S8/S3 的空态补话（走查 ⑨⑩⑪）：S9 没建向量时说清"先去
 拆后 `test_ui_tier.py` **577 行 / 18 条** + `test_ui_hits.py` **275 行 / 5 条**，条数一条没丢。
 坏法注入六条（A 删 `setSizePolicy` / B 三条 QSS 一起改名 / C 计数写死 / D 箭头钉成 ▸ /
 E 不挂 objectName / F S8 退回 `collapsible=True`）逐条点名红过，还原靠与注入前**字节比对**证明。
+
+---
+
+## 十一 · 轮四十六：S1「上次读到」是一行可以直接点的话，不是一颗按钮（定案 **D-068**）
+
+用户红框圈出这一行，原话「不需要在这个选项显示背景的框，也不需要在鼠标放在上面时候显示提示，
+这个选项本身就已经显示全部内容了，无需提示」。屏数仍 9 / 导航仍 8 项 / 没有新增界面，改的是
+**这一行的形状语义**：它由 `QToolButton` 承载，原生 windowsvista 样式因此给它画了一圈边框、悬停时
+再点亮一遍 —— 屏幕上读到的是按钮，语义上是提示。
+
+| 这一行 | 从此 | 为什么只能这么落 |
+| --- | --- | --- |
+| 底与边 | `ui/theme.py` 的 `QToolButton#lastReadHint` 显式写 `background-color: transparent` + `border: none` + `padding: 0` | 构造处的 `setAutoRaise(True)` 在原生样式下不管事；`QPushButton {...}` 也接不住它（`QToolButton` 直接继承 `QAbstractButton`，不经过 `QPushButton`）。库里同一味的先例是 `QToolButton#chipRemove` |
+| 字色 | **不写** `color`，继续走 `QWidget` 继承 | 不新增一对字色/底色 ⇒ 对比守卫 `tests/unit/test_theme_contrast.py` 不会因此多出要量的配对（它只认带状态词的选择器与实色底） |
+| 悬停提示 | **不挂** tooltip | 原先是 `setToolTip(self.last_read_hint.text())`，逐字符等于自己这一行 ⇒ 纯复读。全站同类扫描确认只此一处；其余 tooltip 要么带增量信息、要么是被省略单元格的回读契约（那些一条没动） |
+
+**代价与边界（挂在 ISSUES I122，不在界面措辞里藏）**：那条 tooltip 是长名唯一的回读 —— 这行的可用宽度
+实测 1024 档 902px／1280 档 1,158px／1920 档 1,798px／2560 档 2,252px，而真库整行宽（7/13 模型）p90 815／
+p99 1,214／最大 1,919px ⇒ 1024 档有 6.83% 的文档这一行装不下，2560 档 0 份。用户的前提在他截图那一档成立、
+在地板档不成立，取舍等他勾。**框是否真的消失，本环境量不到**：`QWidget.grab()` 复现不了原生 hot frame
+（常态／悬停／offscreen／真机四种场合环像素差恒为 0），目视确认归用户（**ISSUES I17** 同口径的既有边界）。
+
+守卫：`tests/integration/test_resume_reading.py::test_提示行不带框且不挂复读tooltip`（两半各钉一条：
+tooltip 必须是空串、QSS 规则必须同时声明 `border: none` 与透明底）。坏法注入三条（挂回 tooltip /
+只删 `border: none` / 整条规则删掉）逐条点名红过，读数在 `docs/VERIFICATION-RUNLOGS.md` §4.57。
