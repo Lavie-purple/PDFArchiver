@@ -75,9 +75,12 @@ class ReaderPage(QtWidgets.QWidget):
 
         # 「适应宽度」是这一态的**可见出口**（**Q1 甲-1**）：可按下，开着 = 按下，点放大/缩小即弹起。
         # 放在手动两颗**之前**、且不改动那两颗的次序 —— 它们原样留着，新加的那颗只是接管宽档。
+        # 默认开（2026-10-31 用户点名；甲-1 原判默认关，甲-3 才默认开）：宽屏首帧就铺满，
+        # 不用每启动一次按一次 —— `_render_page` 在开着时按现视口现算，首开即生效。
         self.fit_btn = QtWidgets.QPushButton("适应宽度")
         self.fit_btn.setObjectName("fitWidthBtn")
         self.fit_btn.setCheckable(True)
+        self.fit_btn.setChecked(True)
         self.fit_btn.clicked.connect(self._on_fit_clicked)
         toolbar.addWidget(self.fit_btn)
 

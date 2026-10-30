@@ -10,6 +10,8 @@
    重新打开同一份文档，阅读器必须停在那一页（1-based 口径，与 `text_pages.page_no` 一致）。
 4. 「适应宽度」那一态（**Q1 甲-1 / Q2 甲+乙**）—— 倍率 = 现视口宽 ÷ 当页 1.0 倍渲染宽，
    按下的那一次同步铺满、拖窗只停手铺一次、手动一动就弹起、且**不受手动上限卡**。
+   出厂默认开（2026-10-31 用户点名；甲-1 原判默认关）⇒ 可按下钮的 `click()` 在出厂态上是
+   弹起，「按下」这条路一律走「弹起 → 再按下」。
    这一组全部是量出来的（`.tmp_probe_fit` 一次性探针，已删）：1024/1280/1600/2560 四档
    铺满之后 渲染宽 − 视口宽 = 0、横向滚动 `maximum()` 恒为 0。
 
@@ -111,6 +113,10 @@ def test_适应宽度按下即按现视口铺满(ctx, window, qapp, tmp_path: Pa
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(595, 842)] * 2)
     resize_stepped(window, qapp, width, 720)
 
+    # 出厂已是按下态（2026-10-31 用户点名默认开）：可按下按钮的 `click()` 在按下态上是**弹起**，
+    # 所以「按下那颗」这条路 = 先弹起再按下；第二下的重铺是同步的，不等防抖（settle 一样只给重排）。
+    reader.fit_btn.click()
+    assert not reader.fit_btn.isChecked(), "出厂是按下态，第一下点击应当弹起"
     reader.fit_btn.click()
     settle(qapp)
 
@@ -122,20 +128,51 @@ def test_适应宽度按下即按现视口铺满(ctx, window, qapp, tmp_path: Pa
         f"{width} 档铺出了横向滚动，说明倍率算到了可视宽之外")
 
 
+@pytest.mark.parametrize("width", [1024, 2560])
+def test_适应宽度默认开_不点按钮首开即铺满(ctx, window, qapp, tmp_path: Path, width: int) -> None:
+    """**2026-10-31 用户点名「改成默认开」**：不碰任何按钮，开文档这一下就该铺满。
+
+    甲-1 原判默认关（宽屏首帧右侧空、每启动一次要按一次）。默认开之后这条钉住**出厂态**：
+    坏法 = 摘掉构造里那句 `setChecked(True)` ⇒ 两条都红（isChecked 与渲染宽差一条视口）。
+    先改窗再开文档：用户真实动线就是窗开着、点开一份 PDF。
+    """
+    from tests.conftest import resize_stepped, settle
+    path = tmp_path / "fitdefault.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=595, height=842)
+    doc.save(str(path))
+    doc.close()
+
+    doc_id = _insert_doc(ctx, path=str(path).replace("\\", "/"))
+    reader = _navigate_to_reader(window, qapp)
+    resize_stepped(window, qapp, width, 720)
+    reader.open_document(doc_id)
+    settle(qapp)
+
+    assert reader.fit_btn.isChecked(), (
+        "出厂就该是按下态（默认开）；一红说明构造里那句 setChecked(True) 被摘了")
+    rendered, avail = _filled(reader)
+    assert abs(rendered - avail) <= 2, (
+        f"{width} 档首开没铺满：渲染 {rendered}px / 视口 {avail}px（差 {rendered - avail}px）")
+    assert reader.pdf_view.horizontalScrollBar().maximum() == 0
+
+
 def test_适应宽度不受手动上限卡(ctx, window, qapp, tmp_path: Path) -> None:
     """**Q2 甲**：这一态的倍率不许被 `_ZOOM_MAX` 截 —— 截了就永远占不满宽档。
 
     100×200 的窄页在 2560 档要 23.35×（渲染 2335×4670 = 10.90M 像素，仍在预算内）才铺得满；
     手动上限 4.0 一卡就只剩 400px 宽，右侧空 1900 多 px。
 
-    这一份样本还额外走了一条别的路：1.0 倍时它只有 200px 高，**按下之前是没有竖条的**，
-    铺满之后才冒出来 —— 所以视口宽必须等一次重排才作数（同上一条的说明）。
+    这一份样本还额外走了一条别的路：1.0 倍时它只有 200px 高。出厂已按下（默认开），
+    开档即铺；这里照旧走一遍「弹起 → 再按下」把用户路径过全 —— 再按下之后竖条才冒出来，
+    所以视口宽必须等一次重排才作数。
     """
     from tests.conftest import resize_stepped, settle
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(100, 200)])
     resize_stepped(window, qapp, 2560, 720)
 
-    reader.fit_btn.click()
+    reader.fit_btn.click()   # 出厂按下 ⇒ 这一下弹起
+    reader.fit_btn.click()   # 再按下 → 立刻铺满
     settle(qapp)
 
     assert reader._zoom_level > _ZOOM_MAX, (
@@ -151,10 +188,9 @@ def test_超预算的窄长页按预算夹住(ctx, window, qapp, tmp_path: Path)
     夹完是 448×26833 = 12.02M —— 比预算多出的那 0.2% 是 PyMuPDF 把每条边**向上取整**
     （8.9443×50 = 447.2 → 448）来的，所以容差按 1% 写，不是把预算写松。
     横向留一条空是这一档**设计内**的（断言反过来钉它），但竖向照旧、横向滚动照旧为 0。
+    出厂已按下（默认开）：开档那次渲染就是这条路的现值，不再补按。
     """
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(50, 3000)])
-
-    reader.fit_btn.click()
 
     pix = reader.pdf_label.pixmap()
     assert pix.width() * pix.height() <= _FIT_PIXEL_BUDGET * 1.01, (
@@ -176,7 +212,7 @@ def test_手动缩放弹起适应宽度并不再跟窗走(ctx, window, qapp, tmp
     from tests.conftest import resize_stepped, settle
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(595, 842)] * 3)
     resize_stepped(window, qapp, 1024, 720)
-    reader.fit_btn.click()
+    _await_refit(qapp)   # 出厂已按下（默认开）：先把改窗触发的重铺等完，再开始数数
 
     renders: list[int] = []
     real = reader._render_page
@@ -228,7 +264,7 @@ def test_拖窗只在停手之后铺一次(ctx, window, qapp, tmp_path: Path) ->
     from tests.conftest import resize_stepped, settle
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(595, 842)] * 3)
     resize_stepped(window, qapp, 1024, 720)
-    reader.fit_btn.click()
+    _await_refit(qapp)   # 出厂已按下（默认开）：先把改窗触发的重铺等完，下面从零数
     reader._next_page()
 
     renders: list[int] = []
@@ -254,11 +290,12 @@ def test_翻页按当页宽窄逐页重算(ctx, window, qapp, tmp_path: Path) ->
     这一页是整组里唯一需要等防抖才收敛的：1024 档横版页第一次同步铺的时候竖滚条还挂着
     （按 799 算），铺完它消失了、可视宽变 807，于是停手那一次再铺成 807（实测
     0.9489 → 0.9584）。所以这里断言写在 `_await_refit` 之后，量的是收敛完的那一次。
+    出厂已按下（默认开）：改窗排进防抖的那一次先等完，再翻页 —— 翻页那次同步铺。
     """
     from tests.conftest import resize_stepped
     reader = _open_sized_pdf(ctx, window, qapp, tmp_path, [(595, 842), (842, 595)])
     resize_stepped(window, qapp, 1024, 720)
-    reader.fit_btn.click()
+    _await_refit(qapp)
 
     reader._next_page()
     _await_refit(qapp)
@@ -278,8 +315,9 @@ def test_缩放档上下限与倍率(ctx, window, qapp, tmp_path: Path) -> None:
     上限在轮四十七从 3.0 抬到 4.0（**Q2 乙**）：2560 档要看清一处局部需要 3.92，3.0 恰好卡在
     那一步够不着的地方；抬到 4.0 单页 2382×3368 = 8.02M 像素，仍在「适应宽度」那一条的预算内。
 
-    初始 1.0 → zoom_in → 1.2 → zoom_in → 1.44 → … → 不能超过 4.0；
-    初始 1.0 → zoom_out → 0.833… → zoom_out → 0.694… → … → 不能低于 0.3。
+    出厂已按下（默认开，2026-10-31 用户点名）：开档倍率由适应宽度现算，不再是写死的 1.0 ——
+    先把这一态弹起，梯子从**现值**起量：`base` → zoom_in → 1.2× → zoom_out 回 `base` → …
+    上下限两条不变。
     """
     pdf_path = tmp_path / "zoom.pdf"
     doc = pymupdf.open()
@@ -293,13 +331,17 @@ def test_缩放档上下限与倍率(ctx, window, qapp, tmp_path: Path) -> None:
     reader = _navigate_to_reader(window, qapp)
     reader.open_document(doc_id)
 
-    assert reader._zoom_level == 1.0, "初始缩放必须是 1.0"
+    reader.fit_btn.click()   # 出厂按下 ⇒ 这一下弹起，倍率就地变成手动轴的现值
+    base = reader._zoom_level
+    assert base > 0, "弹起之后手动轴必须有一个现值可接"
 
     reader._zoom_in()
-    assert abs(reader._zoom_level - 1.2) < 0.01, f"第一次放大应是 1.2，实际 {reader._zoom_level}"
+    assert abs(reader._zoom_level - base * 1.2) < 0.01 * base, (
+        f"第一次放大应是 {base}×1.2，实际 {reader._zoom_level}")
 
     reader._zoom_out()
-    assert abs(reader._zoom_level - 1.0) < 0.01, f"放大后缩小应回到 1.0，实际 {reader._zoom_level}"
+    assert abs(reader._zoom_level - base) < 0.01 * base, (
+        f"放大后缩小应回到 {base}，实际 {reader._zoom_level}")
 
     for _ in range(20):
         reader._zoom_in()

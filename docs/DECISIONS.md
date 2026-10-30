@@ -1117,11 +1117,16 @@ S3 底部／S4／S5 ① 段工具行／S6 备份按钮行／S7 体检行（Q4 �
 
 **一处如实留下的形状（不是遗漏）**：Q1 甲-1 的「适应宽度」默认是**关**的（三案里只有甲-3 默认开），
 所以宽屏首帧右侧仍空，**每启动一次要按一次**才铺满。改成默认开是一行的事，等他点名，本轮不自加。
+（**追注 2026-10-31 · 用户当场点名「改成默认开」**：构造里加 `fit_btn.setChecked(True)`，宽屏首帧即铺满，
+上面那条形状就此不再成立；出厂态由新断言 `test_适应宽度默认开_不点按钮首开即铺满` 钉住（1024／2560 两档），
+坏法 = 摘掉 `setChecked(True)` ⇒ 两档当场红在 `isChecked`。可按下钮的 `click()` 在出厂按下态上是**弹起**，
+既有用例里「点一下 = 按下」的前提随之改口径（按下路径 = 弹起 → 再按下），`test_reader_assertions.py` 聚焦
+**14 passed**。两问的结果：Q1 由 甲-1 改记 **甲-3 的默认**（默认开），其余甲-1 形状（可见出口、同步铺满）不变。）
 
 **同批勾选的另一条**：**ISSUES I122** 定 甲 = 维持现状、代码不动，本条起状态为 `WONTFIX`（1024 档 1,248 行
 整行装不下且无回读，是用户明确接受的代价）。
 
-**后果**：`ui/pages/reader_page.py`（246 行）/ 新增 `ui/viewport_fit.py`（69）/ 新增 `ui/action_row.py`（204）/
+**后果**：`ui/pages/reader_page.py`（249 行，轮四十八追记默认开 +3）/ 新增 `ui/viewport_fit.py`（69）/ 新增 `ui/action_row.py`（204）/
 `ui/table_layout.py`（那句判据搬出，改为 import `viewport_fit` 那一份）/ `ui/theme.py`
 （`QPushButton#fitWidthBtn:checked`）/ 五个登记点 `ui/pages/{archive_page,operations_page,dedup_page,
 backup_page}.py` 与 `ui/pages/health_panel.py`（各接一行 `ActionRow` + 一句 `absorb()`，改写完读数后再调 `sync()`）/
