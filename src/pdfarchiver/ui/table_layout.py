@@ -35,7 +35,9 @@
 """
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtWidgets
+
+from pdfarchiver.ui.viewport_fit import HostResizeWatcher, fits_absorbing
 
 # 单元格文字两侧的内边距，实测值：`sizeHintForColumn(c) − 该列最长文本的 advance` 在
 # 五张表的五个列上都等于 23（127−104 / 231−208 / 309−286 / 36−13 / 283−260）。
@@ -63,12 +65,13 @@ ELIDABLE_COLUMNS = frozenset({
 STRETCH_MIN_WIDTH = 140
 
 
-class _ViewportStretchPolicy(QtCore.QObject):
+class _ViewportStretchPolicy:
     """吸收列到底吸不吸，按**当时的视口宽**算。
 
-    判据是 `其余定宽列合计 + 吸收列下限 ≤ 视口`。装得下就给 Stretch（那一列吃掉剩余宽度，
-    表内右侧不留空）；装不下就把它降回 Interactive + `STRETCH_MIN_WIDTH`，全表横向滚动 ——
-    也就是 **D-040** 的 1024 地板档既定降级。
+    判据是 `fits_absorbing(其余定宽列合计, 吸收列下限, 视口宽)` —— 式子在
+    `ui/viewport_fit.py`，与动作行末那格共用同一份（**ISSUES I121** ④）。装得下就给
+    Stretch（那一列吃掉剩余宽度，表内右侧不留空）；装不下就把它降回 Interactive +
+    `STRETCH_MIN_WIDTH`，全表横向滚动 —— 也就是 **D-040** 的 1024 地板档既定降级。
 
     装不下还硬给 Stretch，被压成缝的正是这一列（`minimumSectionSize` 只有 16px），
     而滚动条滚过去看见的还是那条缝 —— 见模块开头那段。
@@ -76,47 +79,21 @@ class _ViewportStretchPolicy(QtCore.QObject):
 
     def __init__(self, table: QtWidgets.QTableWidget, widths: dict[int, int],
                  stretch_col: int) -> None:
-        super().__init__(table)
         self._table = table
-        self._viewport = table.viewport()
         self._stretch_col = stretch_col
         self._others = sum(w for col, w in widths.items() if col != stretch_col)
         self._floor = widths.get(stretch_col, STRETCH_MIN_WIDTH)
-        self._applying = False
+        self._watcher = HostResizeWatcher(table.viewport(), self._apply).attach()
 
-    def attach(self) -> None:
-        """盯住视口的宽变化。对象 parent 在表上，随表一起销毁。"""
-        self._viewport.installEventFilter(self)
-
-    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        # 只看 Resize，不另接 Show：隐藏的页切过来那一刻，Qt 会把攒下的那次改尺寸**补发**成
-        # Resize —— `test_ui_layout.py` 地板档那一半走的就是"先压到 1024 再头一回进这一屏"，
-        # 把 Show 分支删掉它照样绿，所以接两条等于把同一件事判两遍。
-        # 两条判据都比的是 Python 包装对象、且不回摸 `self._table`：拆窗口时表的 C++ 侧比
-        # 视口的收尾事件先没，摸了就抛 "Internal C++ object already deleted" 刷屏。
-        if event.type() != QtCore.QEvent.Type.Resize or watched is not self._viewport:
-            return False
-        self._apply()
-        return False
-
-    def _apply(self) -> None:
-        if self._applying:
-            return
-        viewport = self._viewport.width()
-        if viewport <= 0:
-            return                       # 还没进过布局，此刻的读数不是视口
-        self._applying = True
-        try:
-            fits = self._others + self._floor <= viewport
-            self._table.horizontalHeader().setSectionResizeMode(
-                self._stretch_col,
-                QtWidgets.QHeaderView.ResizeMode.Stretch if fits
-                else QtWidgets.QHeaderView.ResizeMode.Interactive)
-            if not fits:
-                # Stretch 期间这一列的"用户宽度"被 Qt 改成了拉伸值，降回来时必须显式钉回下限。
-                self._table.setColumnWidth(self._stretch_col, self._floor)
-        finally:
-            self._applying = False
+    def _apply(self, viewport_width: int) -> None:
+        fits = fits_absorbing(self._others, self._floor, viewport_width)
+        self._table.horizontalHeader().setSectionResizeMode(
+            self._stretch_col,
+            QtWidgets.QHeaderView.ResizeMode.Stretch if fits
+            else QtWidgets.QHeaderView.ResizeMode.Interactive)
+        if not fits:
+            # Stretch 期间这一列的"用户宽度"被 Qt 改成了拉伸值，降回来时必须显式钉回下限。
+            self._table.setColumnWidth(self._stretch_col, self._floor)
 
 
 def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
@@ -150,7 +127,8 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
         table.setColumnWidth(col, width)
     if stretch_col is not None:
         header.setSectionResizeMode(stretch_col, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        _ViewportStretchPolicy(table, widths, stretch_col).attach()
+        # 构造时就挂上事件过滤器并按当时的视口宽判一次（`HostResizeWatcher.attach`）。
+        _ViewportStretchPolicy(table, widths, stretch_col)
 
 
 def loaded_line(total: int, loaded: int, unit: str) -> str:

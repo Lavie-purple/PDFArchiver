@@ -24,6 +24,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.services.archive_service import PlannedMove
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.confirm import DangerSummary, confirm_dangerous
 from pdfarchiver.ui.format import format_bytes
 from pdfarchiver.ui.pages.status_page import unwired_lines
@@ -156,21 +157,23 @@ class ArchivePage(QtWidgets.QWidget):
         self.preview_table.setAlternatingRowColors(True)
         layout.addWidget(self.preview_table, 1)
 
-        btn_lay = QtWidgets.QHBoxLayout()
+        self.action_row = ActionRow()
         self.load_btn = QtWidgets.QPushButton("加载文档库")
         self.load_btn.clicked.connect(self._load_documents)
-        btn_lay.addWidget(self.load_btn)
+        self.action_row.add_button(self.load_btn)
 
         self.preview_btn = QtWidgets.QPushButton("生成预览")
         self.preview_btn.clicked.connect(self._generate_preview)
-        btn_lay.addWidget(self.preview_btn)
+        self.action_row.add_button(self.preview_btn)
 
         self.execute_btn = QtWidgets.QPushButton("执行归档")
         self.execute_btn.setObjectName("searchBtn")
         self.execute_btn.clicked.connect(self._execute_archive)
-        btn_lay.addWidget(self.execute_btn)
-        btn_lay.addStretch()
-        layout.addLayout(btn_lay)
+        self.action_row.add_button(self.execute_btn)
+        # 「共 N 份｜表格里 M 份」那句本来在表格上方（`loaded_note`），行末那根弹簧什么也不装。
+        # 宽档装得下就搬进右端，地板档留在原位 —— 同一句、同一个控件，只换画在哪（**ISSUES I121** ④）。
+        self.action_row.absorb(layout, self.loaded_note)
+        layout.addWidget(self.action_row)
 
         # 输入位任何一个动过，旧预览就不再是"将要执行的那一份"，必须重算。
         self.target_root_input.textChanged.connect(self._invalidate_preview)
@@ -287,6 +290,8 @@ class ArchivePage(QtWidgets.QWidget):
             self.doc_table.setItem(row, 3, cat_item)
         self.doc_table.blockSignals(False)
         self.loaded_note.setText(loaded_line(total, len(docs), "份文档"))
+        # QLabel 没有"文字变了"信号，这一格只能由改写那句的地方自己重判一次（**ISSUES I121** ④）。
+        self.action_row.sync()
         self._invalidate_preview()
 
     def _invalidate_preview(self, *_ignored: object) -> None:

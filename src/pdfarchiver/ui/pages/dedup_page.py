@@ -22,12 +22,13 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton,
                                 QTableWidget, QTableWidgetItem, QGroupBox,
                                 QProgressBar, QMessageBox)
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_day
+from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.format import format_bytes as _format_bytes
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, loaded_line, set_table_columns
 
@@ -85,19 +86,19 @@ class DedupPage(QWidget):
         self.lbl_cost.setObjectName("muted")
         group_layout.addWidget(self.lbl_cost)
 
-        btn_row = QHBoxLayout()
+        btn_row = ActionRow()
         self.btn_start = QPushButton("发起全库判重")
         self.btn_start.setObjectName("searchBtn")
         self.btn_start.setMinimumHeight(32)
         self.btn_start.clicked.connect(self._start_dedup)
-        btn_row.addWidget(self.btn_start)
+        btn_row.add_button(self.btn_start)
 
         self.btn_refresh = QPushButton("刷新读数")
         self.btn_refresh.clicked.connect(self.reload)
-        btn_row.addWidget(self.btn_refresh)
-        btn_row.addStretch()
+        btn_row.add_button(self.btn_refresh)
+        self.action_row = btn_row
 
-        group_layout.addLayout(btn_row)
+        group_layout.addWidget(btn_row)
         group.setLayout(group_layout)
         parent_layout.addWidget(group)
 
@@ -163,6 +164,11 @@ class DedupPage(QWidget):
         self.lbl_progress.setVisible(False)
         parent_layout.addWidget(self.lbl_progress)
 
+        # 进度那句认给 ① 段的行末（**ISSUES I121** ④）：进度条是它的同伴，两个一起搬 ——
+        # 把句子挪进行末而把条子留在页底，等于把一句读数劈成两半。地板档两个都回原位。
+        self.action_row.absorb(parent_layout, self.lbl_progress,
+                               companions=(self.progress_bar,))
+
     def reload(self) -> None:
         self._reload_participation()
         self._reload_summary()
@@ -174,7 +180,17 @@ class DedupPage(QWidget):
 
         `reload()` 里的组表要查 500 组、每组再查一次成员，把它挂到 5 秒一次的定时器上
         等于每 tick 做一次接近全量的重查；而进度只需要 `latest_of_kind` 那一行。
+
+        末尾那一次 `action_row.sync()` 不是保险丝：这一格搬不搬的判据要看那句**可见不可见**，
+        而 `setVisible` 不发信号（`textChanged` 在还藏着的时候就已经发过了）。三个出口都用
+        `finally` 走同一条，改天多一个提前 return 也不会漏刷。
         """
+        try:
+            self._apply_progress_reading()
+        finally:
+            self.action_row.sync()
+
+    def _apply_progress_reading(self) -> None:
         job = self.ctx.jobs.latest_of_kind("dedup")
         self._active_job = job
         self._sync_start_button()

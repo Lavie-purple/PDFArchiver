@@ -11,6 +11,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.services.bootstrap import AppContext
+from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.confirm import DangerSummary, confirm_dangerous
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, loaded_line, set_table_columns
 
@@ -72,18 +73,19 @@ class OperationsPage(QtWidgets.QWidget):
         layout.addWidget(self.item_table, 1)
 
         # 按钮
-        btn_lay = QtWidgets.QHBoxLayout()
+        self.action_row = ActionRow()
         self.refresh_btn = QtWidgets.QPushButton("刷新")
         self.refresh_btn.setObjectName("searchBtn")
         self.refresh_btn.clicked.connect(self.reload)
-        btn_lay.addWidget(self.refresh_btn)
+        self.action_row.add_button(self.refresh_btn)
 
         self.undo_btn = QtWidgets.QPushButton("撤销选中批次")
         self.undo_btn.clicked.connect(self._undo_operation)
-        btn_lay.addWidget(self.undo_btn)
+        self.action_row.add_button(self.undo_btn)
 
-        btn_lay.addStretch()
-        layout.addLayout(btn_lay)
+        # 「共 N 条｜表格里 M 条」那句本来贴在批次表上方，行末那根弹簧空着（**ISSUES I121** ④）。
+        self.action_row.absorb(layout, self.loaded_note)
+        layout.addWidget(self.action_row)
 
         self.reload()
 
@@ -103,6 +105,8 @@ class OperationsPage(QtWidgets.QWidget):
         # 「共 N 条」必须数自库，不能是 `len(ops)` —— 后者是被 limit 截过的取回数（**ISSUES I76**）
         self.loaded_note.setText(loaded_line(self.ctx.operations.count_operations(),
                                              len(ops), "条操作批次"))
+        # 同一屏改写完那句要重判一次搬不搬（QLabel 没有 textChanged，见 `ui/action_row.py`）。
+        self.action_row.sync()
         self._sync_item_hint()
 
     def _sync_item_hint(self) -> None:

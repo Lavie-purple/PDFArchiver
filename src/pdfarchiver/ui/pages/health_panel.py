@@ -37,6 +37,7 @@ from pdfarchiver.services.db_check import (
     format_duration,
     last_full_elapsed,
 )
+from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.library_hits import set_text_role
 from pdfarchiver.ui.table_layout import set_table_columns
 
@@ -84,18 +85,19 @@ class HealthPanel(QtWidgets.QWidget):
         self.cost_label.setObjectName("muted")
         lay.addWidget(self.cost_label)
 
-        buttons = QtWidgets.QHBoxLayout()
+        self.action_row = ActionRow()
         self.quick_btn = QtWidgets.QPushButton("快速体检")
         self.quick_btn.setToolTip(QUICK_COST)
         self.quick_btn.clicked.connect(lambda: self.start(QUICK))
-        buttons.addWidget(self.quick_btn)
+        self.action_row.add_button(self.quick_btn)
 
         self.full_btn = QtWidgets.QPushButton("全库体检…")
         self.full_btn.setToolTip(FULL_COST)
         self.full_btn.clicked.connect(self._confirm_full)
-        buttons.addWidget(self.full_btn)
-        buttons.addStretch()
-        lay.addLayout(buttons)
+        self.action_row.add_button(self.full_btn)
+        # 「上次体检 …」那句本来在按钮上方，行末那根弹簧空着（**ISSUES I121** ④）。
+        self.action_row.absorb(lay, self.last_check_label)
+        lay.addWidget(self.action_row)
 
         self.status_label = QtWidgets.QLabel("还没有跑过。快速体检是十几秒量级的，可先跑它。")
         self.status_label.setWordWrap(True)
@@ -126,6 +128,8 @@ class HealthPanel(QtWidgets.QWidget):
 
     def set_last_check(self, text: str) -> None:
         self.last_check_label.setText(text)
+        # 这一句是行末那格认出去的读数，改写后要重判一次搬不搬（**ISSUES I121** ④）。
+        self.action_row.sync()
 
     # ---- 起跑 ----
 

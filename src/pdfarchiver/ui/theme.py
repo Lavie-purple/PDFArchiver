@@ -488,6 +488,15 @@ QPushButton:hover {{
 QPushButton:pressed {{
     background-color: {c.accent_light};
 }}
+/* 「适应宽度」那颗是**可按下态**（轮四十七 甲-1）：开着 = 按下。按钮族此前只有 `:hover`／
+   `:pressed`／`:disabled` 三档，没有 `:checked` —— 不补这一条，按下与松开在屏幕上逐格相同，
+   而这一态存在的全部意义就是"看得出现在听谁的"。三个值全取现成令牌：accent_text 压 accent_light
+   两主题实测 4.75／6.38（已在 `test_theme_contrast.live_pairs` 里量过），不新造第三种蓝。 */
+QPushButton#fitWidthBtn:checked {{
+    background-color: {c.accent_light};
+    color: {c.accent_text};
+    border: 1px solid {c.accent};
+}}
 QPushButton#searchBtn {{
     background-color: {c.btn_primary_bg};
     color: #ffffff;
@@ -517,6 +526,15 @@ QPushButton#searchBtn:disabled {{
     background-color: {c.accent_light};
     color: {c.accent_text};
     border: 1px solid {c.input_border};
+}}
+/* `#fitWidthBtn:checked`（特异度 111）压得过 `QPushButton:disabled`（11）：不补这一条，
+   那颗门被禁用时屏幕上仍是亮底 = 看着是开的。当前代码没有任何一处禁用它，这条守的是 Qt
+   无条件的那句话 —— **显式写过 bg/color 就不拿调色板的 Disabled 组画**（**ISSUES I74** 机制面），
+   由守卫 `test_接过调色板的按钮必须有disabled配对` 逐条点名。 */
+QPushButton#fitWidthBtn:disabled {{
+    background-color: {c.btn_disabled_bg};
+    color: {c.btn_disabled_text};
+    border: 1px solid {c.btn_disabled_border};
 }}
 /* id 选择器的优先级高于状态词（CSS2 特异度 101 > 10）：不写这一条，上面那条
    `QPushButton:disabled` 的 `color` 会被 `#clearBtn` 盖掉，禁用态字色还是压不住灰底的 #6c757d。 */

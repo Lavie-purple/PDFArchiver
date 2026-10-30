@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
 
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_ts
+from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 
 log = logging.getLogger("pdfarchiver.ui.backup")
@@ -82,21 +83,24 @@ class BackupPage(QWidget):
         self.lbl_current.setWordWrap(True)
         layout.addWidget(self.lbl_current)
 
-        btn_row = QHBoxLayout()
+        self.action_row = ActionRow()
         self.btn_backup = QPushButton("创建备份")
         self.btn_backup.setObjectName("searchBtn")
         self.btn_backup.clicked.connect(self._create_backup)
-        btn_row.addWidget(self.btn_backup)
+        self.action_row.add_button(self.btn_backup)
 
         self.btn_backup_to = QPushButton("备份到...")
         self.btn_backup_to.clicked.connect(self._create_backup_to)
-        btn_row.addWidget(self.btn_backup_to)
+        self.action_row.add_button(self.btn_backup_to)
 
         self.btn_refresh_backups = QPushButton("刷新列表")
         self.btn_refresh_backups.clicked.connect(self._reload_backups)
-        btn_row.addWidget(self.btn_refresh_backups)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        self.action_row.add_button(self.btn_refresh_backups)
+        # 「当前库：\<路径>（结构版本 N）」那句本来贴在按钮上方，行末那根弹簧空着
+        # （**ISSUES I121** ④）。它已经由 `_elided` 中段省略并挂了完整路径 tooltip，
+        # 所以这一格只在**整句装得下**时才搬 —— 截第二刀会让 tooltip 之外的全文没处看。
+        self.action_row.absorb(layout, self.lbl_current)
+        layout.addWidget(self.action_row)
 
         backup_title = QLabel("已有备份：")
         backup_title.setObjectName("sectionTitle")
@@ -185,6 +189,8 @@ class BackupPage(QWidget):
             f"当前库：{_elided(db_path, self.lbl_current)}"
             f"（结构版本 {self.ctx.schema_version}）")
         self.lbl_current.setToolTip(db_path)
+        # 路径与版本号都在这句里，改写完要重判一次它搬不搬进行末（**ISSUES I121** ④）。
+        self.action_row.sync()
 
     def _reload_backups(self) -> None:
         """刷新备份列表。"""
