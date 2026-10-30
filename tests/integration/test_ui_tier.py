@@ -1,15 +1,20 @@
 """**D-039 / D-040** 的降级几何 —— 1024 档收起侧栏，两屏共用 `ui/tier.py` 那一条规则；
 外加 **ISSUES I54** 的表格几何（行号列在不在场、视口随不随数据量漂）、
 **ISSUES I60** 的状态栏几何（口径那一行长什么样、折行之后顶不顶宽）、
-**D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏）与
-**ISSUES I53** ②甲/③甲 的命中面板与键盘入口（分组与页码片段、浏览态清空、Ctrl+F、
-跳到 S2 的那条链、越界页码拒绝）。轮四十二 ⑭ 之后右栏不再常驻：两档都是浮层、
-默认关、搜索出结果才开；轮四十四 ⑮（**D-066**）又把左树在宽档也收成 48px 的条 ——
-`test_宽档左树默认收成条而右栏默认关` 钉的是这两条叠在一起之后的契约。
+**D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏），以及 `FloatablePanel`
+自己的两条形状账（宽档右栏是浮层而左栏是常驻列、「✕」不许漏成桌面顶层窗）。
+轮四十二 ⑭ 之后右栏不再常驻：两档都是浮层、默认关、搜索出结果才开；轮四十四 ⑮（**D-066**）
+又把左树在宽档也收成 48px 的条、轮四十五 乙 把那根条做成**标题轨**（整根可点 + 带分类计数）、
+丙 把 S8 从可收起里摘出去 —— `test_宽档左树默认收成条而右栏默认关`、
+`test_轨整根可点且带分类计数`、`test_地板档下_S8_的树侧栏收起而宽档常驻` 三条钉的是这三轮
+叠在一起之后的契约。
 
 为什么单独成一个文件（`test_app_shell.py` 那一摊 2026-10-17 已按 **ISSUES I58** 丙 拆成四份，
 见 **REPO-JOURNAL R-010**）：这一组量的是**同一个控件在两个宽度档下的形状**，判据全部来自
 `ui/tier.py` 与 `ui/table_layout.py` 的常量，跟外壳/读数/列宽底线守卫不是一条链。
+**ISSUES I53** ②甲/③甲 那一节（命中面板的行文案、浏览态清空、Ctrl+F、跳到 S2 的链、
+越界页码）2026-10-30 按同一理由拆进 `test_ui_hits.py` —— 它量的是**数据到文字的链路**，
+不是控件在两个宽度下的形状。
 
 所有断言都在 offscreen 量**真实几何**（不是截图）：离屏截图只有形状没有 CJK 字形，
 而 Qt 在这里的坑全是"数字看着对、其实没重排"，只有量 `width()/sizes()/rowHeight()` 能判。
@@ -19,11 +24,10 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
-from PySide6 import QtCore, QtWidgets, QtTest
+from PySide6 import QtWidgets
 
 from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.db.repositories.documents import DocFilter
@@ -39,7 +43,6 @@ from pdfarchiver.ui.main_window import (
 )
 from pdfarchiver.ui.nav import NAV_ITEMS
 from pdfarchiver.ui.pages import categories_page, library_page
-from pdfarchiver.ui.pages.reader_page import ReaderPage
 from pdfarchiver.ui.tier import (
     CENTER_MIN_WIDTH,
     LEFT_COLUMN_WIDTH,
@@ -48,34 +51,15 @@ from pdfarchiver.ui.tier import (
     TREE_STRIP_WIDTH,
     FloatablePanel,
 )
-from tests.conftest import settle as _settle
+from tests.conftest import page_at as _page_at, settle as _settle
 
 # 页面可用宽 = 窗口宽 − 导航 − 1px 边框（实测 1024→823、1280→1079；这条 −1 的口径
 # 与 `test_ui_layout.AVAILABLE_WIDTH` 同一个来源，两处都不写死像素）。
 PAGE_WIDTH_AT_FLOOR = MIN_WINDOW_WIDTH - NAV_WIDTH - 1     # 823
 PAGE_WIDTH_AT_DEFAULT = DEFAULT_WINDOW_WIDTH - NAV_WIDTH - 1   # 1079
 
-
-# `window` 夹具走 conftest 那一份（**ISSUES I58** 丙，2026-10-17：`test_app_shell.py` 拆成四份后
-# 四组都要它，本地再留一份一模一样的就是第二个口径）。
-
-
-def _page_at(window, qapp, page_id: str, width: int, height: int):
-    """切到某一屏、重查一遍、压到指定窗口宽，返回页面对象。
-
-    必须**真的切过去**再 resize：`QStackedWidget` 里隐藏的页不重排，没看过的页面量出来
-    是一串 0（离屏 Qt 的既有陷阱）。
-    还要显式 `reload()`：已经在当前页时 `setCurrentRow` 不发信号，外壳的刷新链一次都不走，
-    测试中途灌进库的行就读不到（实测文档表停在 0 行）。
-    """
-    window._select_by_page_id(page_id)
-    _settle(qapp)
-    page = window._pages[page_id]
-    page.reload()
-    window.resize(width, height)
-    _settle(qapp)
-    assert page.isVisible(), f"用例前提：{page_id} 这一屏得是当前可见页，否则量到的都是 0"
-    return page
+# `window` 夹具与 `_page_at` 走 conftest 那一份（**ISSUES I58** 丙，2026-10-17：
+# `test_app_shell.py` 拆成四份后四组都要它，本地再留一份一模一样的就是第二个口径）。
 
 
 def _seed_docs(ctx: AppContext, count: int = 3) -> list[int]:
@@ -167,6 +151,50 @@ def test_条上小圆点跟着分类关联走(window, ctx, qapp) -> None:
     assert not dot.isVisible(), "关联都删光了灯还亮着 —— 它没有在跟着库走"
 
 
+def test_轨整根可点且带分类计数(window, ctx, qapp) -> None:
+    """**轮四十五 乙**：那根 48px 的条从此是**标题轨**，不是"顶上 20px 能点的死列"。
+
+    四条读数各对着改前的一次实测：
+    - 可点区占比 ≥ 90%（改前那颗按钮 44×20 压 48×875 = **2.1%**，97.9% 的面积点不动）；
+    - `objectName="treeRail"` **且**运行时 stylesheet 里真有 `QWidget#treeRail` 那条 ——
+      只量 objectName 的话，把 QSS 里那条删掉照样绿，而屏上又变回"另一栏"；
+    - 轨上有分类计数：零篇归类时那颗圆点恒灭（⑮ 的实测就是 0 行挂载），"有几类可归"
+      是轨上唯一答得上话的东西。**跟着库走**那条才是关键 —— 写死 14 也能过前一条；
+    - 箭头跟着形状翻（收起朝右 = 点开它，展开朝左 = 点它收回）。
+    """
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    tp = page.tree_panel
+    strip, button = tp.strip, tp.strip_button
+    assert strip is not None and button is not None, "用例前提：带条的面板才谈得上标题轨"
+
+    hit = button.width() * button.height()
+    rail = strip.width() * strip.height()
+    assert rail > 0 and hit / rail >= 0.9, \
+        f"轨上只有 {hit / rail:.1%} 可点（改前 2.1%）—— 其余是一条点不动的死列"
+
+    assert strip.objectName() == "treeRail", f"轨没挂上 QSS 要的钩子：{strip.objectName()!r}"
+    # 运行时那份 QSS 是外壳自己 `setStyleSheet` 上去的（`main_window.py:211`），不在 qapp 上 ——
+    # 拿 `qapp.styleSheet()` 量会恒读到空串，这条就成了一条永真断言。
+    assert "QWidget#treeRail" in window.styleSheet(), \
+        "objectName 挂上了但样式表里没有对应选择器 —— 观感照旧是 splitter 边框"
+
+    expected = len(ctx.catalog.category_tree())
+    assert str(expected) in button.text(), f"轨上没有分类计数（{expected} 类）：{button.text()!r}"
+    assert "\n" in button.text(), f"计数与标签得竖排才塞得进 48px：{button.text()!r}"
+
+    ctx.catalog.delete_category(ctx.catalog.list_categories()[-1].id)
+    page.reload()
+    _settle(qapp)
+    assert str(expected - 1) in button.text() and str(expected) not in button.text(), \
+        f"删掉一类之后轨上还是旧数字：{button.text()!r}"
+
+    assert button.text().startswith("▸"), f"收起态的箭头该朝右（点开它）：{button.text()!r}"
+    button.click()
+    _settle(qapp)
+    assert tp.isVisible() and button.text().startswith("◂"), \
+        f"展开态的箭头没翻过来（点它收回）：{button.text()!r}"
+
+
 def test_窄档左栏收成_48px_的条而右栏同样不占槽(window, qapp) -> None:
     """**D-040** 的取舍：地板档放不下三栏，牺牲的是命中/详情栏，**不是分类树**。
 
@@ -224,18 +252,24 @@ def test_浮层默认关可关且不把窗口顶宽(window, qapp) -> None:
         "浮层开了就把窗口的最低宽度顶宽 —— 它不该参与布局"
 
 
-def test_地板档下_S8_的树侧栏收起(window, qapp) -> None:
+def test_地板档下_S8_的树侧栏收起而宽档常驻(window, qapp) -> None:
     """**D-039** 尺寸段点名要写成界面断言的那一条：1024 档收起 S8 的树侧栏。
+
+    宽档那半是 **轮四十五 丙** 改的（改名自 `test_地板档下_S8_的树侧栏收起`）：**D-066**
+    曾把 S8 也收成条，而 ⑮ 那条实测判据（14 个默认分类零篇挂载）说的是 **S1 的筛选**场景 ——
+    S8 是**管理**场景，这棵树正是这一屏要编辑的主对象，默认藏进 48px 是语义错放。
+    于是这一条现在读的是「宽档 236px 常驻 + 条不在场，窄档才收成条」。
 
     顺带钉住"收起的是一整块、不是只收树"：树下面的新建/改名/删除三颗按钮跟着面板一起进
     浮层，否则 1024 档这一屏变成"能改看不见"。
     """
     wide = _page_at(window, qapp, "categories", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert wide.tree_panel.narrow is False and wide.tree_panel.collapsed, \
-        "D-066：S8 与 S1 同一条规则，宽档也起始收成条"
-    wide.tree_panel.strip_button.click()
-    _settle(qapp)
-    assert wide.tree_panel.width() == LEFT_COLUMN_WIDTH
+    tp = wide.tree_panel
+    assert tp.narrow is False and tp.collapsible is False, \
+        "丙：S8 的主对象（分类树）不许默认收成条 —— 收起判据来自 S1 的筛选场景"
+    assert tp.isVisible() and tp.parent() is wide.splitter, "宽档 S8 的树没常驻在 splitter 里"
+    assert tp.width() == LEFT_COLUMN_WIDTH, f"常驻的树不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{tp.width()}"
+    assert not tp.strip.isVisible(), "宽档不收起的这一屏还留着那 48px 的条 —— 白占一槽"
 
     page = _page_at(window, qapp, "categories", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
     assert page.tree_panel.narrow is True, "D-039：1024 档 S8 的树侧栏必须收起"
@@ -249,6 +283,8 @@ def test_地板档下_S8_的树侧栏收起(window, qapp) -> None:
 
 
 @pytest.mark.parametrize("page_id", ["library", "categories"])
+
+
 def test_两屏的面板都来自同一条规则(page_id: str, window, qapp) -> None:
     """AGENTS.md「禁止同类问题逐个打补丁」的机器版本：命中这一类的面板必须是同一个类。
 
@@ -312,6 +348,7 @@ def test_文档表行高统一不许变行高展开(window, ctx, qapp) -> None:
 # 全项目没有一处主动要过这一列，但只要有行它就在场，而且**按行号的位数变宽**
 # （2026-10-17 现测：空表 0 / 2 行 38 / 40 行 51px）。两条断言分管两头：
 # 第一条管"在场不在场"（逐屏扫），第二条管"在场会造成什么"（视口随数据量漂）。
+
 
 def test_每张表都不许带行号列(window, ctx, qapp) -> None:
     """9 张表逐个点名 —— 这条是"第 10 张表冒出来时会不会漏"的牙。
@@ -442,6 +479,7 @@ def test_状态栏那行口径在两档都不裁字不顶宽(window, ctx, qapp) 
 # **D-051**：浅扫自报的界面半边
 # ---------------------------------------------------------------------------
 
+
 def _seed_bodies(ctx: AppContext, count: int = 3) -> None:
     """给 `_seed_docs` 那几份各补一页正文 —— 浅扫预算管的是 `text_pages` 里的行，
     没有正文行就没有窗口，标签上那句「未扫完」也无从出现（`_seed_docs` 只建主记录）。"""
@@ -475,151 +513,12 @@ def test_浅扫自报要出现在状态栏标签上(window, ctx, qapp, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# **ISSUES I53** ②甲/③甲（2026-10-17 定案，记在 **D-052**）：右栏是真命中面板
+# `FloatablePanel` 自己的两条形状账
 # ---------------------------------------------------------------------------
-# 这一节管的是"控件在场、链路也得在场"：面板里每行的文字、每行挂的 doc_id/页码、
-# 键盘入口、跳到 S2 的那条链、以及越界页码的读法。判据数字来自本轮探针
-# `.probe_work/i53_geometry_probe.py`（log 同目录）。
-
-_DOC_ROLE = library_hits._HIT_DOC_ROLE
-_PAGE_ROLE = library_hits._HIT_PAGE_ROLE
-_PAGE_IN_TEXT = re.compile(r"第 \d+ 页")
-
-
-def _seed_hit_corpus(ctx: AppContext, make_pdf) -> int:
-    """一份三页**真** PDF（查询词只在第 2 页）+ 一份只有文件名/路径能命中的文档。
-
-    为什么非得是真 PDF：这一节要量到跳转的终点 `ReaderPage.open_document`，它对路径做
-    `fitz.open()` —— 假路径会走进 except 弹**模态框**，测试是卡住而不是变红（那比红更糟）。
-    """
-    path = make_pdf("归档范围与保留期限的请示.pdf",
-                    page_lines=[["本件为内部流转稿"],
-                                ["归档范围与保留期限的请示正文第三段"],
-                                ["附件清单另列"]]).replace("\\", "/")
-    ctx.documents.upsert(Document(
-        path=path, path_key=identity_key(path), name="归档范围与保留期限的请示.pdf",
-        size_bytes=20480, mtime_ns=1_760_000_000_000_000_000, page_count=3,
-        text_status="done", fts_status="done"))
-    doc_id = int(ctx.documents.list(limit=1)[0].id)
-    ctx.texts.replace_pages(doc_id, [
-        TextPage(doc_id=doc_id, page_no=1, body="本件为内部流转稿", char_count=9),
-        TextPage(doc_id=doc_id, page_no=2, body="归档范围与保留期限的请示正文第三段", char_count=17),
-        TextPage(doc_id=doc_id, page_no=3, body="附件清单另列", char_count=6)])
-    other = "D:/用户资料/请示（复函稿）.pdf"
-    ctx.documents.upsert(Document(
-        path=other, path_key=identity_key(other), name="请示（复函稿）.pdf",
-        size_bytes=1024, mtime_ns=1_760_000_000_000_000_000,
-        text_status="done", fts_status="done"))
-    return doc_id
-
-
-def _rows(page) -> list[tuple[str, object, object]]:
-    return [(page.hit_list.item(i).text(),
-             page.hit_list.item(i).data(_DOC_ROLE),
-             page.hit_list.item(i).data(_PAGE_ROLE))
-            for i in range(page.hit_list.count())]
-
-
-def _headers(page) -> list[str]:
-    return [item.text() for item in (page.hit_list.item(i) for i in range(page.hit_list.count()))
-            if not (item.flags() & QtCore.Qt.ItemFlag.ItemIsSelectable)]
-
-
-def _activate(window, qapp) -> None:
-    """把窗口标成"活动"并跑几轮事件循环。
-
-    offscreen 下 `QShortcut`（WindowShortcut）只在活动窗口里派发 —— 本轮实测：不激活时
-    按键完全没反应（`.probe_work/i53_geometry_probe.log`）。真用户在活动窗口里按键，
-    所以这一步是**还原前提**，不是给断言铺路。
-    """
-    window.activateWindow()
-    for _ in range(4):
-        qapp.processEvents()
-
-
-def test_命中面板按通道分组带页码与片段且无页码的通道不编页码(window, ctx, qapp, make_pdf) -> None:
-    """§S1 甲那一栏点名的三样：**分组、页码、片段**，一条不许界面自己编。
-
-    两向都钉：正文行必须写「第 2 页」并带出片段原文；文件名/路径行**必须没有**页码
-    （`Hit.page_no is None`，编一个「第 1 页」就是让用户翻到错的那一页去找东西）。
-    文字取自后端 `SearchResult.rows()`，界面不重拼（**ISSUES I60** 那条"格式化只有一个
-    owner"在这里同样成立）。空组不占一行 —— 这批文档没写元数据，所以「元数据」整组不在场。
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`，四条各自红在不同的断言上）：
-    ① 把 `_show_hits` 的行文案换成 `hit.doc.name` ⇒ 红在「页码 + 片段」那条；
-    ② 把后端 `rows()` 的 `where` 换成 `f"第 {hit.page_no or 1} 页" if True` ⇒ 红在「无页码通道」那条；
-    ③ 把 `rows()` 的 `source` 恒置空 ⇒ 只红在「出处」那条（页码与片段仍绿，说明三样各钉得住）；
-    ④ 把组头的 flags 加上 `ItemIsSelectable` ⇒ 红在分组标题那条（读数变成 `[]`）。
-    """
-    _seed_hit_corpus(ctx, make_pdf)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    page.search_input.setText("保留期限")   # 4 字 ⇒ trigram 正文通道，命中在第 2 页
-    page._do_search()
-    _settle(qapp)
-
-    assert _headers(page) == ["文件名", "路径", "正文"], \
-        f"分组标题不对（顺序按 `criteria.in_fields`，空组不占行）：{_headers(page)}"
-    rows = _rows(page)
-    body = [row for row in rows if row[2] is not None]
-    assert len(body) == 1, f"正文命中该恰好一条，读到 {len(body)} 条：{rows}"
-    text, doc_id, page_no = body[0]
-    assert page_no == 2, f"查询词只在第 2 页，面板写的是第 {page_no} 页"
-    assert "第 2 页" in text and "正文第三段" in text, f"这一行既要有页码也要有片段原文：{text}"
-    assert "原生正文" in text, f"正文命中必须带出处（原生 vs OCR 是两个可信度）：{text}"
-
-    no_page = [row for row in rows if row[1] is not None and row[2] is None]
-    assert no_page, "用例前提：文件名/路径通道的命中得在场，否则这条只测了正文那一半"
-    for text, _, _ in no_page:
-        assert not _PAGE_IN_TEXT.search(text), f"没有页码的通道被编了页码：{text}"
-
-
-def test_浏览态不许留着上一次查询的命中(window, ctx, qapp, make_pdf) -> None:
-    """右栏的标题是「命中面板（**当前查询**）」—— 没有当前查询时它就该是空的。
-
-    走的是用户那颗「清除」按钮而不是直接调 `_clear_hits()`：入口没接线时这一屏在
-    浏览态会一直挂着上次检索的命中，那是**过期读数**（与 **ISSUES I55** 同一类）。
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：删掉
-    `_load_all_documents()` 末尾那句 `_clear_hits()` ⇒ 红在「还留着 6 行过期读数」那条
-    （查完有命中那条前提仍绿，所以红的是清空链路而不是用例数据）。
-    """
-    _seed_hit_corpus(ctx, make_pdf)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    page.search_input.setText("保留期限")
-    page._do_search()
-    _settle(qapp)
-    assert page.hit_list.count() > 0, "用例前提：查完要有命中在场"
-    page.hit_list.setCurrentRow(0)
-    _settle(qapp)
-
-    page.clear_btn.click()
-    _settle(qapp)
-    assert page.hit_list.count() == 0, f"清除查询后右栏还留着 {page.hit_list.count()} 行过期读数"
-    assert not page.jump_btn.isEnabled(), "面板空了跳转按钮还亮着 = 按下去什么都不知道"
-
-
-def test_Ctrl_F_把光标交给搜索框而右栏等搜索结果(window, qapp) -> None:
-    """③甲 定的键位（轮四十二 ⑭ 改约：Ctrl+F 只交焦点，右栏等搜索出结果再开）。
-
-    1. **焦点在导航列表上按 Ctrl+F** —— 焦点最终落在搜索框。这一条同时验两件事：短路挂在
-       **窗口**（`WindowShortcut`，所以焦点不在 S1 的控件里也有效）与槽真的会 `setFocus()`。
-    2. 键面就是 **Ctrl+F**（改成 Ctrl+G 也算"有快捷键"，但那是线框之外的第二个口径）。
-    3. 右栏**不**因为 Ctrl+F 打开 —— 那一刻它还是空的，空白浮层盖在表格上是又一种堆积。
-
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：
-    ① 键位改成 Ctrl+G ⇒ 红在判据 2；
-    ③ 把 `QShortcut` 的 parent 从窗口改成 `self.stack` 并降成 `WidgetWithChildrenShortcut`
-       ⇒ 红在判据 1（焦点在导航列表上按键没反应）。
-    """
-    for width in (MIN_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH):
-        page = _page_at(window, qapp, "library", width, MIN_WINDOW_HEIGHT)
-        assert str(window.search_shortcut.key().toString()) == "Ctrl+F"
-        assert not page.right_panel.isVisible(), "用例前提：右栏默认是关的"
-        window.nav.setFocus()
-        _activate(window, qapp)
-        assert QtWidgets.QApplication.focusWidget() is not page.search_input, "用例前提：焦点先在别处"
-        QtTest.QTest.keyClick(window, QtCore.Qt.Key.Key_F, QtCore.Qt.KeyboardModifier.ControlModifier)
-        _settle(qapp)
-        assert QtWidgets.QApplication.focusWidget() is page.search_input, "Ctrl+F 没把焦点交给搜索框"
-        assert not page.right_panel.isVisible(), "Ctrl+F 只交焦点；右栏等搜索出结果再开（轮四十二 ⑭）"
+# 上面那些用例管的是"什么时候收成什么形状"，这两条管的是"收成的那种形状有没有真做成"：
+# 常驻列不许被 `close_overlay()` 收走（收走就再也回不来），浮层的「✕」不许漏成顶层孤儿窗。
+# **ISSUES I53** ②甲/③甲 那一节（命中面板的行文案、浏览态清空、Ctrl+F、跳 S2 的链、
+# 越界页码）在 `test_ui_hits.py`。
 
 
 def test_右栏两档都是浮层_宽档常驻树列关不掉(window, qapp) -> None:
@@ -652,100 +551,6 @@ def test_右栏两档都是浮层_宽档常驻树列关不掉(window, qapp) -> N
         "宽档的常驻树列被 close_overlay() 收走了 —— 这一档没有'关掉整栏'这回事"
 
 
-def test_跳转按钮与双击真的走到_S2_并落在那一页(window, ctx, qapp, make_pdf) -> None:
-    """②甲 的落点：面板不是用来看的，是"看到 → 翻到那一页"。
-
-    走真控件（`setCurrentRow` + `click()`），不走直接调槽：本轮实测过 ——
-    `Signal(object)` 挂两个参数 emit 时抛 TypeError，而异常发生在 Qt 槽里被吞掉，
-    按钮点下去**什么都不做**（`.probe_work/_sig_probe.py`）。只有真点一次才量得到。
-    顺带把 §S1「必须承接的六件事」第 6 条（双击行打开文件）接上：此前
-    `ReaderPage.open_document` 在全项目**零调用**，阅读器是一屏进不去的界面。
-
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`，四条红在四个不同环节）：
-    ① emit 改回两个参数 ⇒ 红在取阅读器页那一步（当场 `KeyError: 'reader'`，
-       这一页压根没被创建 —— 死按钮的证据是"那屏根本不存在"，比红一行文案更硬）；
-    ② emit 的页码改成恒 `None` ⇒ 红在「阅读器停在第 1 页」；
-    ③ 撤掉 `itemDoubleClicked` 那根线 ⇒ 只红在最后那条双击判据；
-    ④ `_on_hit_current` 里把 `_select_doc_row()` 换成 `pass` ⇒ 红在中栏联动那条。
-    """
-    doc_id = _seed_hit_corpus(ctx, make_pdf)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    page.search_input.setText("保留期限")
-    page._do_search()
-    _settle(qapp)
-
-    body_row = next(i for i in range(page.hit_list.count())
-                    if page.hit_list.item(i).data(_PAGE_ROLE) == 2)
-    page.hit_list.setCurrentRow(body_row)
-    _settle(qapp)
-    assert page.jump_btn.isEnabled() and page.jump_btn.text() == "跳到该页 → S2"
-    assert page.doc_table.currentRow() == 0, "选中一条命中没把中栏那行一起选上（§S1 的联动）"
-
-    page.jump_btn.click()
-    _settle(qapp)
-    reader = window._pages["reader"]
-    assert isinstance(window.stack.currentWidget(), ReaderPage), "点了跳转没切到 S2"
-    assert reader._current_doc_id == doc_id, f"打开的不是那份文档：{reader._current_doc_id}"
-    assert reader._current_page == 1, f"命中在第 2 页，阅读器停在第 {reader._current_page + 1} 页"
-    assert reader.page_label.text().startswith("2 / 3"), reader.page_label.text()
-
-    # 没有页码的那条：措辞换成「打开文档」，且不许编一个页码
-    window._select_by_page_id("library")
-    _settle(qapp)
-    name_row = next(i for i in range(page.hit_list.count())
-                    if page.hit_list.item(i).data(_DOC_ROLE) is not None
-                    and page.hit_list.item(i).data(_PAGE_ROLE) is None)
-    page.hit_list.setCurrentRow(name_row)
-    _settle(qapp)
-    assert page.jump_btn.text() == "打开文档 → S2", page.jump_btn.text()
-    page.jump_btn.click()
-    _settle(qapp)
-    assert isinstance(window.stack.currentWidget(), ReaderPage)
-
-    # 双击中栏的行（真鼠标事件，不是直接发信号）
-    window._select_by_page_id("library")
-    _settle(qapp)
-    page.search_input.setText("保留期限")
-    page._do_search()
-    _settle(qapp)
-    _activate(window, qapp)
-    viewport = page.doc_table.viewport()
-    center = page.doc_table.visualRect(page.doc_table.model().index(0, 0)).center()
-    # 先单击再双击 = 用户真实的手序。只发 DblClick 时 Qt 的
-    # `QAbstractItemView::mouseDoubleClickEvent` 因为 `pressedIndex` 无效会直接 return，
-    # offscreen 下实测第一发会被吞（本轮探针「真双击矩阵」）。
-    QtTest.QTest.mouseClick(viewport, QtCore.Qt.MouseButton.LeftButton,
-                           QtCore.Qt.KeyboardModifier.NoModifier, center)
-    QtTest.QTest.mouseDClick(viewport, QtCore.Qt.MouseButton.LeftButton,
-                            QtCore.Qt.KeyboardModifier.NoModifier, center)
-    _settle(qapp)
-    assert isinstance(window.stack.currentWidget(), ReaderPage), "双击文档行没打开阅读器（§S1 第 6 条）"
-
-
-def test_越界页码拒绝并说明原因而不是就近取整(window, ctx, qapp, make_pdf) -> None:
-    """§S2 甲的断言点：库里记的页码与文件真实页数可以不一致，静默落到第 1 页最坏。
-
-    两向都钉：在范围内的跳转不许出现「不存在」；越界的那次要**说清共几页、停在哪一页**，
-    并且真的停在原来那一页（既不折回第 1 页也不夹到最后一步）。
-    坏法注入实测（2026-10-17，`.probe_work/i53_guard_injection.py`）：在 `if page_no is not None:`
-    之后插一句 `page_no = min(page_no, len(self._doc))` ⇒ 红在「越界没说明原因」那条，
-    而前半条（范围内不许出现「不存在」）**仍然绿** —— 就近取整不会让在范围内的跳转出错，
-    它只在用户翻到库里记错了的那一页时才骗人，所以两向都得钉。
-    """
-    doc_id = _seed_hit_corpus(ctx, make_pdf)
-    window._open_in_reader((doc_id, 2))
-    _settle(qapp)
-    reader = window._pages["reader"]
-    assert "不存在" not in reader.status_label.text(), reader.status_label.text()
-
-    window._open_in_reader((doc_id, 99))
-    _settle(qapp)
-    text = reader.status_label.text()
-    assert "第 99 页不存在" in text and "共 3 页" in text, f"越界没说明原因：{text}"
-    assert "已停在第 2 页" in text, f"要能说清现在到底停在哪：{text}"
-    assert reader._current_page == 1, f"越界被就近取整了：现在在第 {reader._current_page + 1} 页"
-
-
 def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
     """2026-10-29 真实事故：桌面漏出一个 135×59 的「✕ 关闭」顶层小窗。
 
@@ -770,5 +575,3 @@ def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
     orphans = [w for w in QtWidgets.QApplication.topLevelWidgets()
                if isinstance(w, QtWidgets.QToolButton) and w.text() == "✕"]
     assert not orphans, f"桌面级顶层控件里扫到 {len(orphans)} 颗孤儿「✕」按钮"
-
-

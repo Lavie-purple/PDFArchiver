@@ -297,7 +297,9 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
                     parent_item.addChild(item)
             items_by_path[cat.name_path] = item
         self.category_tree.expandAll()
-        # 宽档也收成条之后（**D-066** / ⑮），条上那颗小圆点是"里头有东西可点"的唯一线索。
+        # 轨上那句计数（**轮四十五 乙**）拿上面那次查询的现成结果，不再查第二遍。
+        self.tree_panel.set_strip_count(len(tree))
+        # 宽档也收成条之后（**D-066** / ⑮），那颗小圆点是"已经有文档归过类"的信号。
         # 判据用"有没有文档归过类"，不用"树有没有节点"：默认分类一开局就种 14 个，
         # 后一条恒为真，等于装一颗永远亮着的灯。
         self.tree_panel.set_strip_dot(self.ctx.catalog.has_categorized_documents())

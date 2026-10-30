@@ -31,6 +31,16 @@ AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪
 回去；条在展开态也留在场，它就是那颗收回的把手（宽档展开时没有「✕」，`close_overlay()`
 对常驻列仍然早退 —— 轮三十九那条牙不动）。
 窄档的形状与开关完全没变：条 → 420px 浮层 → 「✕」关。
+
+轮四十五 乙 给这根条定身份（走查 ⑮ 落地后的实测：条 48×875、可点的只有顶上那颗 44×20 的
+按钮 ⇒ 97.9% 是死区；且条没有 objectName，外观全靠 splitter 边框，读起来是"另一栏"）：
+条从此是**标题轨** —— 按钮撑满整根（竖排「▸ 分类 14」，可点区 2.1% → ~100%）、挂
+`objectName="treeRail"` 由 `theme.py` 给它自己的底色与 hover 左边线、上面带**分类计数**，
+于是"一篇都没归类"那颗圆点恒灭时，轨上也有一句答得上话的东西。
+
+轮四十五 丙 把 S8 从 `collapsible` 里摘出去：⑮ 那条实测说的是 **S1 的筛选**场景（14 个默认
+分类零篇挂载），S8 是**管理**场景，那棵树正是这一屏要编辑的主对象 —— 默认藏起来是语义错放。
+**D-066** 那句"没有布局例外"随之改成按角色判定，定案写在 **D-067**（`docs/DECISIONS.md`）。
 """
 from __future__ import annotations
 
@@ -58,6 +68,10 @@ class FloatablePanel(QtWidgets.QWidget):
     （QSplitter 给隐藏项 0 宽），所以切换只改父对象和可见性，不在两个控件之间搬东西。
     条上那颗按钮是浮层的入口，面板右上角那颗「✕」是出口；关掉时发 `closed`，
     调用方用它区分"用户亲手关了"与"从来没开过"。
+
+    带条的面板就是**标题轨**（轮四十五 乙）：`objectName="treeRail"`、按钮撑满整根、
+    文字竖排成「箭头 + 标签逐字 + 计数」。它同时是标题和把手，两个身份都由同一颗按钮承担 ——
+    分成两个控件就等于把"这一栏叫什么"再抄一遍，而且展开态那条 48px 会重新变成死区。
 
     面板内容只有一份：复制一份控件就等于把同一份读数写进两个地方 ——
     **D-040** 第三条后果在 S7 上刚犯过一次（状态读数被抄了两遍），这里不重犯。
@@ -111,14 +125,24 @@ class FloatablePanel(QtWidgets.QWidget):
         self.strip: QtWidgets.QWidget | None = None
         self.strip_button: QtWidgets.QToolButton | None = None
         self.strip_dot: QtWidgets.QLabel | None = None
+        self._strip_label = strip_label
+        self._strip_count: int | None = None
         if docked and strip_label:
             self.strip = QtWidgets.QWidget()
+            # 这条 objectName 是给 theme.py 那段 QSS 的钩子（`QWidget#treeRail`）。
+            # 裸 QWidget 不吃样式表的背景，得显式开 WA_StyledBackground。
+            self.strip.setObjectName("treeRail")
+            self.strip.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
             strip_lay = QtWidgets.QVBoxLayout(self.strip)
-            strip_lay.setContentsMargins(2, 8, 2, 8)
+            strip_lay.setContentsMargins(0, 0, 0, 6)
+            strip_lay.setSpacing(0)
             self.strip_button = QtWidgets.QToolButton()
-            self.strip_button.setText(strip_label)
+            self.strip_button.setText(self._rail_text())
+            # 撑满整根条：原先它只占顶上那颗 44×20，条 97.9% 的面积点不动（轮四十五 乙 的实测）。
+            self.strip_button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
             self.strip_button.clicked.connect(self._on_strip_clicked)
-            strip_lay.addWidget(self.strip_button)
+            strip_lay.addWidget(self.strip_button, 1)
             # 收成条之后这一栏只剩一颗按钮，小圆点是"里头有东西可看"的唯一线索（⑮ 原话）。
             # 构造时显式挂父（同一批孤儿按钮的教训），再进布局。
             self.strip_dot = QtWidgets.QLabel("●", self.strip)
@@ -126,7 +150,6 @@ class FloatablePanel(QtWidgets.QWidget):
             self.strip_dot.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
             self.strip_dot.setVisible(False)
             strip_lay.addWidget(self.strip_dot)
-            strip_lay.addStretch(1)
             self.strip.setFixedWidth(TREE_STRIP_WIDTH)
             self.strip.setVisible(False)
 
@@ -154,6 +177,19 @@ class FloatablePanel(QtWidgets.QWidget):
         if self.narrow:
             return f"展开「{self._title}」（窄档把这一栏收成这一条）"
         return f"{'展开' if self.collapsed else '收起'}「{self._title}」"
+
+    def _rail_text(self) -> str:
+        """轨上那句竖排字：箭头 + 标签逐字 + 计数（「▸ / 分 / 类 / 14」）。
+
+        48px 的宽放不下横排两字，竖排是这一档唯一的排法；箭头按状态翻，
+        收起时朝右（点开它）、展开时朝左（点它收回）。计数让轨在**一篇都没归类**时
+        也有话可说 —— 那时那颗小圆点恒灭，光靠它这一栏就等于没标签。
+        """
+        arrow = "▸" if (self.narrow or self.collapsed) else "◂"
+        lines = [arrow, *self._strip_label]
+        if self._strip_count is not None:
+            lines.append(str(self._strip_count))
+        return "\n".join(lines)
 
     def attach(self, splitter: QtWidgets.QSplitter) -> None:
         """常驻列的宽档形状：条（若有）排在面板前面，两者都进 splitter。
@@ -183,6 +219,8 @@ class FloatablePanel(QtWidgets.QWidget):
         if self.strip is not None:
             self.strip.setVisible(self._wants_strip())
             self.strip_button.setToolTip(self._strip_hint())
+            # 箭头跟着形状翻：收起/窄档朝右（点开它），宽档展开态朝左（点它收回）。
+            self.strip_button.setText(self._rail_text())
         if self.narrow:
             # PySide6 6.8 的 QSplitter 没有 removeWidget；`setParent(host)` 本身就会经
             # ChildRemoved 把它从 splitter 里摘掉（实测 count 3→2）。
@@ -245,6 +283,17 @@ class FloatablePanel(QtWidgets.QWidget):
         """条上那颗小圆点：收成条时替用户回答"这一栏里现在有没有东西可看"。"""
         if self.strip_dot is not None:
             self.strip_dot.setVisible(bool(has_content))
+
+    def set_strip_count(self, count: int) -> None:
+        """轨上那句计数（轮四十五 乙）：分类有几类。
+
+        由页面在**重查树的那一处**传进来（`len(category_tree())` 的现成结果），不在这里
+        查第二遍 —— 同一份读数抄两处就是 **D-040** 那条老路。计数与那颗圆点回答的不是
+        同一个问题：圆点问"归过类吗"，计数问"有几类可归"，后者在零篇归类时照样有话可说。
+        """
+        if self.strip_button is not None and count != self._strip_count:
+            self._strip_count = int(count)
+            self.strip_button.setText(self._rail_text())
 
     def place(self) -> None:
         """贴在页面右沿；不参与布局，所以位置只能自己算。"""

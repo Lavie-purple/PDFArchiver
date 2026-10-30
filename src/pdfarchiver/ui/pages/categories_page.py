@@ -71,11 +71,14 @@ class CategoriesPage(QtWidgets.QWidget):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.splitter = splitter
 
-        # 左栏：分类树。**D-066**（走查 ⑮）之后宽档也默认收成 48px 的条，点条展开成 236px
-        # 常驻列。树下面的三颗按钮（新建/改名/删除）跟着树一起走 —— 若只把树收起来而把编辑
-        # 按钮留在页面上，收成条的那一档这一屏就变成"能改看不见"。
+        # 左栏：分类树。**轮四十五 丙** 把它从 **D-066** 的"宽档也收成条"里摘出来：
+        # ⑮ 那条实测判据（14 个默认分类零篇挂载）说的是 S1 的**筛选**场景，而 S8 是**管理**
+        # 场景 —— 这棵树正是这一屏要编辑的主对象，默认藏起来等于把主对象收成 48px。
+        # 窄档（1024 档）照 **D-039** 收成条 + 浮层，条上那颗按钮跟着 `strip_label` 走。
+        # 树下面的三颗按钮（新建/改名/删除）跟着树一起走 —— 窄档只把树收进浮层而把编辑按钮
+        # 留在页面上，这一屏就变成"能改看不见"。
         self.tree_panel = FloatablePanel(self, "分类树", column_width=LEFT_COLUMN_WIDTH,
-                                        strip_label="分类", collapsible=True)
+                                        strip_label="分类")
         self.category_tree = QtWidgets.QTreeWidget()
         self.category_tree.setHeaderHidden(True)
         # 右键菜单 = 「改父类… / 与…合并…」这两个动作的唯一入口（**ISSUES I78** 甲）。
@@ -200,6 +203,8 @@ class CategoriesPage(QtWidgets.QWidget):
                     parent_item.addChild(item)
             items_by_path[cat.name_path] = item
         self.category_tree.expandAll()
+        # 轨上那句计数（**轮四十五 乙**）拿上面那次查询的现成结果，不再查第二遍。
+        self.tree_panel.set_strip_count(len(tree))
         # 与 S1 同一口径（**D-066** / ⑮）：收成条时那颗小圆点亮在"已经有文档归过类"上，
         # 不是"树非空"—— 默认分类开局就有 14 个，后者会让灯恒亮。
         self.tree_panel.set_strip_dot(self.ctx.catalog.has_categorized_documents())

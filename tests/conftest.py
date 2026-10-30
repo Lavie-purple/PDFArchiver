@@ -43,6 +43,25 @@ def settle(qapp, rounds: int = 6) -> None:
         qapp.processEvents()
 
 
+def page_at(window, qapp, page_id: str, width: int, height: int):
+    """切到某一屏、重查一遍、压到指定窗口宽，返回页面对象。
+
+    搬进 conftest（轮四十五 拆 `test_ui_tier.py` 时）：`test_ui_tier.py` 与
+    `test_ui_hits.py` 两组都要它。**必须真的切过去**再 resize：`QStackedWidget` 里隐藏的页
+    不重排，没看过的页面量出来是一串 0（离屏 Qt 的既有陷阱）。
+    还要显式 `reload()`：已经在当前页时 `setCurrentRow` 不发信号，外壳的刷新链一次都不走，
+    测试中途灌进库的行就读不到（实测文档表停在 0 行）。
+    """
+    window._select_by_page_id(page_id)
+    settle(qapp)
+    page = window._pages[page_id]
+    page.reload()
+    window.resize(width, height)
+    settle(qapp)
+    assert page.isVisible(), f"用例前提：{page_id} 这一屏得是当前可见页，否则量到的都是 0"
+    return page
+
+
 @pytest.fixture
 def window(qapp, ctx):  # qapp 必须先于 ctx 之外存在：没有 QApplication 就构造 QWidget 是直接 abort 进程
     """起真外壳、关窗、并把上下文收干净。

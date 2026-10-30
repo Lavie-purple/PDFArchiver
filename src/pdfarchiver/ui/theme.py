@@ -401,6 +401,32 @@ QTreeWidget::item:selected {{
     border-radius: 4px;
 }}
 
+/* ===== 分类标题轨（收成条的那 48px，**D-066** / 走查 ⑮ → 轮四十五 乙）=====
+   钩子是 `ui/tier.py` 给条挂的 `objectName="treeRail"`；没有它，条只剩继承来的底色和
+   splitter 边框，读起来是"另一栏"（实测：可点区只占 2.1%，剩下 97.9% 是死区）。
+   底色取表头那一档（比正文底深一点）⇒ 条与它守着的树**同色**，中间只剩 1px 分割线，
+   读起来就是"树收起来的样子"。字色用表头字/表头底那一对（浅色 7.76:1、暗色 11.87:1），
+   悬停换成 accent 字压树悬停底（4.79:1 / 5.74:1），两主题都过 AA。
+   `border-left` 静止时与底同色（不写 `transparent`：Qt 的 QSS 没有这个颜色关键字），
+   悬停才亮出一条 accent 左边线 —— 这一栏能收回去，就得看得出按中了谁。 */
+QWidget#treeRail {{
+    background-color: {c.table_header_bg};
+    border: none;
+}}
+QWidget#treeRail QToolButton {{
+    background-color: {c.table_header_bg};
+    color: {c.table_header_text};
+    border: none;
+    border-left: 3px solid {c.table_header_bg};
+    font-size: 12px;
+    padding: 6px 0;
+}}
+QWidget#treeRail QToolButton:hover {{
+    background-color: {c.tree_hover};
+    color: {c.accent_text};
+    border-left: 3px solid {c.accent};
+}}
+
 /* ===== 列表控件 =====
    轮四十二 ⑰：同表格。命中面板/详情这类整栏列表不再自带描边。 */
 QListWidget {{
