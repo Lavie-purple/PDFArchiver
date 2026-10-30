@@ -25,6 +25,9 @@ from pdfarchiver.ui.pages.status_page import StatusPage
 class SettingsPage(QtWidgets.QWidget):
     """S7：上半区状态 + 下半区设置。"""
 
+    #: 重开首启引导 —— 页面只发信号，不认识外壳（与 S1 `open_in_reader`、S8 `play_requested` 同形状）
+    replay_onboarding = QtCore.Signal()
+
     def __init__(self, ctx: AppContext, cold_start_seconds: float | None = None,
                  parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,6 +52,11 @@ class SettingsPage(QtWidgets.QWidget):
         self.health_toggle_btn.setToolTip("就地打开库体检（不另开窗口）；上半区的状态读数一直还在")
         self.health_toggle_btn.clicked.connect(self._toggle_lower)
         header.addWidget(self.health_toggle_btn)
+        # 重开首启引导（轮四十三 甲：向导里「以后不再显示」勾了之后，这是唯一能把三屏再调出来的入口）
+        self.replay_onboarding_btn = QtWidgets.QPushButton("首次引导…")
+        self.replay_onboarding_btn.setToolTip("重开首次使用引导的三个步骤")
+        self.replay_onboarding_btn.clicked.connect(self.replay_onboarding)
+        header.addWidget(self.replay_onboarding_btn)
         lower_lay.addLayout(header)
 
         self.settings_view = QtWidgets.QWidget()

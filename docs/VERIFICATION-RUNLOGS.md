@@ -1045,3 +1045,47 @@ D1/D2/E/I 四条锚点还指 `library_page.py`，代码搬进了 `library_filter
 代码走（`FILTER` 常量 + 四条 `Edit(PAGE…)` 改 `Edit(FILTER…)`，锚点文本一字未动），
 锚点守卫 3/3 绿；G1 聚焦复跑 **2.24s 绿**。随后 **guards 59/59 ALL GREEN**（14.3s）——
 末次口径以此为准：全量回归除 G1 负载场外全绿，G1 聚焦复跑绿，guards 全绿。
+
+## 4.54 轮四十三 · 首次启动引导窗落地（用户勾选「甲」，2026-10-30）
+
+用户原话：「首次启动引导窗选择甲」+ 两次「继续执行未完成的」。甲 = **独立模态向导窗**（三屏：
+① 黑窗口别关 / 数据只在本机 / □以后不再显示 → ② 「告诉我要整理哪个文件夹」选完**立即**登记监测根
+→ ③ 验收说明；按钮排 跳过 / 上一步 / 下一步→ / 完成）。这一案**推翻了 UI-SCREENS §4.2 第 1 条**
+原判（「不做首次启动引导屏」），定案见 **D-065**，线框与硬条件表见 **W-ONBOARD**。屏数仍 9、
+导航仍 8 项 —— 多出来的不是屏，是一个模态对话框。
+
+**A · 实现四处**：新文件 `ui/onboarding_wizard.py`（`OnboardingWizard(QDialog)` + `ONBOARDING_KEY`）；
+`main_window.py` 的 `_should_show_onboarding` / `maybe_show_onboarding(force=)` / `_replay_onboarding`
+/ `closeEvent` 先合向导；`app.py` 在 `_start_background` 之后、`app.exec()` 之前挂
+`QTimer.singleShot(0, window.maybe_show_onboarding)`；`settings_page.py` 加头部「首次引导…」按钮 +
+`replay_onboarding` 信号（页面不认识外壳，与 S1 `open_in_reader` 同形状）。
+
+**B · 两条形而实实的触发点约束**：① 向导**不能**在构造期 `exec()` —— 测试夹具 `settle(qapp)` 要跑
+6 次 `processEvents`，一次模态阻塞会把每个 UI 测试挂死；② 触发线放在后台起好之后，冷启动 G1
+（≤1.5s）量的那段路里没有向导，且用户在第②屏登记时已有 worker 领任务。
+
+**C · 唯一持久化口径**：`app_settings["ui.wizard.done"]` 一个键，三种收尾（完成 / 跳过 /
+勾选后关窗）都只写它；✕ 关窗且没勾选 ⇒ 不写 ⇒ 下次还弹。坏法 B14 用「另写第二个键」验证过
+`keys == [ONBOARDING_KEY]` 那条会红。`register_root("")` 实测**不抛异常**、会把空串解析成
+**当前工作目录**并落一行 —— 所以第②屏那句 `if not raw: return` 是承重的，不是装饰。
+
+**D · 断言与坏法**：`tests/integration/test_onboarding_wizard.py` **15 条全绿**（6.38s）。
+坏法 **14 处逐条点名红过**（B2–B13 + B1a/B1b + B14）：B8 连带 2 条、B11 连带 12 条属同源传染，
+不是假绿。真进程那条 `test_真进程首启弹出向导且关窗退得掉` 跑的是仓库根 `main.py --data-dir <新目录>
+--exit-after 1.0`，一次钉三件事：**退出码 0**（模态没把进程挂住）、`app.log` 里有「首启引导已弹出」
+（组合根那条线没断）、`ui.wizard.done` **仍为空**（程序自己关窗不该替用户记账）。
+
+**E · 两条假绿当场自纠（AGENTS.md「不会变红的断言直接删」）**：
+① 「再点上一步不许跑到负数」—— `QStackedWidget.setCurrentIndex(-1)` **回读是 0**，这条恒真、
+永不可能红；删断言，同时把产品里那层 `max(0, …)` 夹取也删掉（越界由 Qt 自己收），改用
+B1a（断 `prev_btn.clicked`）+ B1b（漏调 `_sync_buttons()`）证伪「上一步能退回去」。
+② 「重开入口按钮存在」—— 造了没 `addWidget` 的按钮照样进 `findChildren`、照样发信号；补
+`isVisibleTo(page)` 后 B12（不挂进头部布局）才真的红。
+同类小坑一并记：从未 show 的对话框，子控件 `isVisible()` 恒 False，判据只能用 `isHidden()` /
+`isVisibleTo(ancestor)`；隐藏按钮的 `click()` 仍会派发 `clicked`。
+
+**F · 回归**：guards **59/59 ALL GREEN**（13.92s）；全量 **909 passed / 1 skipped（208.71s，
+FULL_EXIT=0）** —— 本轮**零红**，G1 冷启动在向导接线进场之后仍过线（上一条 skipped 属既有条件跳过，
+非本轮引入）。文档同步：D-065 / W-ONBOARD / UI-SCREENS §4.2 第 1 条改写 + 新增 §八 /
+QUICKSTART 第 2 步 / USAGE S7 行 / CHANGELOG 轮四十三 / 本条。
+⑮⑱ 与 I120 照旧留下一轮，本轮未动。

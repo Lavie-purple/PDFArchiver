@@ -101,6 +101,9 @@ def run(argv: list[str] | None = None, process_started_at: float | None = None) 
     if not _start_background(ctx, window):
         ctx.shutdown()
         return EXIT_BOOTSTRAP_FAILED
+    # 首启引导（轮四十三 甲）：后台起好之后再排队，用户在向导里登记监测根时才有 worker 领任务；
+    # singleShot(0) 让它落在 app.exec() 的第一个事件上，不进 G1 冷启动那条测量路径。
+    QtCore.QTimer.singleShot(0, window.maybe_show_onboarding)
     code = app.exec()
     ctx.shutdown()  # 幂等：closeEvent 里已经调过一次，这里兜住不用窗口关闭路径退出的情况
     return code

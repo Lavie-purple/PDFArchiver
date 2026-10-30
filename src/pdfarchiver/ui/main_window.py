@@ -19,6 +19,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pdfarchiver import __version__
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.nav import NAV_ITEMS, NavItem
+from pdfarchiver.ui.onboarding_wizard import ONBOARDING_KEY, OnboardingWizard
 from pdfarchiver.ui.pages.archive_page import ArchivePage
 from pdfarchiver.ui.pages.ask_page import AskPage
 from pdfarchiver.ui.pages.backup_page import BackupPage
@@ -121,6 +122,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_sync_cell()
 
         self._select_by_page_id(ctx.session.last_nav_page() or NAV_ITEMS[0].page_id)
+        self._onboarding: OnboardingWizard | None = None
+
+    # ---- 首启引导 ----
+
+    def _should_show_onboarding(self) -> bool:
+        """没写过「看过引导」就要弹 —— 唯一判据是 `app_settings[ONBOARDING_KEY]`。"""
+        return not bool(self.ctx.app_settings.get(ONBOARDING_KEY, False))
+
+    def _replay_onboarding(self) -> None:
+        self.maybe_show_onboarding(force=True)
+
+    def maybe_show_onboarding(self, *, force: bool = False) -> None:
+        """弹首启向导（模态）。触发点在组合根（`app.run()` 起来之后挂 singleShot），
+        不在构造期 —— 冷启动 G1 量的是"进程起来→窗口就绪"，向导不许进那条路径，
+        测试夹具的 `processEvents` 也不该被一次模态弹窗拦住。
+        """
+        if not force and not self._should_show_onboarding():
+            return
+        wizard = OnboardingWizard(self.ctx, self)
+        self.theme.apply_palette(wizard)
+        self._onboarding = wizard
+        log.info("首启引导已弹出（%s）", "重开" if force else "首次启动")
+        try:
+            wizard.exec()
+        finally:
+            self._onboarding = None
 
     # ---- 跨页动作 ----
 
@@ -224,7 +251,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _make_page(self, item: NavItem) -> QtWidgets.QWidget:
         if item.page_id == "monitor":
-            return SettingsPage(self.ctx, cold_start_seconds=self._cold_start)
+            page = SettingsPage(self.ctx, cold_start_seconds=self._cold_start)
+            # S7「首次引导…」→ 重开向导（force：这是明确按出来的，不看那个键）
+            page.replay_onboarding.connect(self._replay_onboarding)
+            return page
         if item.page_id == "categories":
             page = CategoriesPage(self.ctx)
             # S8 右栏双击一条集合 → 由外壳切到 S1 回放（同一个做法：页面只发信号，不认识外壳）。
@@ -365,6 +395,10 @@ class MainWindow(QtWidgets.QMainWindow):
             page.reload_status()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802 - Qt 命名
+        # 模态向导在场时先合上它，否则窗口关不掉：G20 的 `--exit-after` 冒烟
+        # 在首启（干净库 = 向导必弹）那一场就等着这条路退出。
+        if self._onboarding is not None:
+            self._onboarding.close()
         try:
             row = self.nav.currentRow()
             if 0 <= row < len(NAV_ITEMS):
