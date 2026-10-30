@@ -35,6 +35,10 @@
 - **台账后果**：那条改名让 `LEDGER_STALE_CAP` 按 I70 写的程序 **6 → 7**（就地追注继任者 + 在 I70 写理由），
   第二次红是因为追注自己给老名字加了反引号 —— 那条账会把自己算进去。
 - **回归**：全量 **914 passed / 1 skipped（223.99s）**，本轮零红。
+- **本轮追记**（用户「2+ I120 乙」）：**ISSUES I120** 走 **ISSUES I119** 先例定案 `WONTFIX`，代价写进台账格子
+  （`C3·lavie` 每场 consistency 如实红 1，整链因此拿不到 `ALL GREEN`）—— **台账 OPEN 首次归 0**
+  （120 行｜CLOSED 93｜MITIGATED 24｜WONTFIX 3）。推送远端收敛回单一 `origin`：本地 `private` remote 已删，
+  GitHub 上那个私有仓库**原样保留不动**；立规矩 —— 今后凡动 GitHub 侧（建仓 / 删仓 / 改设置 / 花凭据调 API）先回问。
 
 ---
 

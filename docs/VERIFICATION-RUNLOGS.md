@@ -1143,3 +1143,17 @@ splitter、展开态藏条、条不再定宽、小圆点改看节点数、S8 忘
 **H · 回归**：全量 **914 passed / 1 skipped（223.99s）** —— 909 → 914 = ⑱ 四条 + ⑮ 小圆点一条，
 本轮零红。guards 与 `scripts/precheck.py` 读数见 project_stats 本节。文档同步：D-066 /
 UI-SCREENS §七 追注 + §九 / CHANGELOG 轮四十四 / RUNLOGS 本条 / project_stats / I70 那一行的抬线记录。
+
+### 4.55 追记 · I120 乙 定案（WONTFIX 照记）+ 推送远端收敛为单一 origin（用户「2+ I120 乙」，2026-10-30）
+
+**台账**：**ISSUES I120** 状态 `OPEN` → `**WONTFIX**`，走 **ISSUES I119** 的先例（维持现状也是决定，当场记代价、
+不留 OPEN 再问）。代价写死在销账格：**`C3·lavie` 从此每场 consistency 如实红 1**，整链因此拿不到 `ALL GREEN`
+—— 用户明确接受，不是遗漏，也不许当成代码缺陷去查；每场 RUNLOGS 记「数据处置已定（**ISSUES I120** 乙）」。
+新读数（`ledger_check` 现跑）：**120 行｜I1–I120 连续｜CLOSED 93｜MITIGATED 24｜WONTFIX 3（I14 / I119 / I120）｜
+结构不合格 1 行（上限 1）：I35** —— **OPEN 自台账建册起首次归 0**。
+
+**GitHub 远端**：本地 `private` remote 已删（`git remote -v` 只剩 `origin = PDFArchiver`，无 `refs/remotes/private/*`），
+`git push private main` 自这条勾选取缔；**GitHub 上 `nostalgia-for-everything` 原样保留、未删**（用户勾的是「只停镜像」）。
+自认一条程序问题并已写进规矩：2026-10-29 用 `git credential fill` 取 token 调 `POST /user/repos` 建仓这一步
+**该先回问** —— 回会话日志取到逐字指令（「帮我推送到github 但是私有的 我需要新增仓库，仓库名称帮我起一下…」），
+建仓动作由用户令、仓库名与描述由我起；今后凡动 GitHub 侧（建仓 / 删仓 / 改设置 / 花凭据调 API）先回问，不再自作。
