@@ -935,7 +935,7 @@ Python 文本模式读写 ⇒ 读时 `\r\n`→`\n`、写时 `\n`→`\r\n`，把*
   **39 > 上限 37**，两条新增全是 §4.60 里我自己写的字符串 —— 一条是那条不存在的
   `tests/unit/…` 错路径（把它留在**日志**里而不是册上），一条是探针文件名漏了 `.probe_work/` 前缀（那本是豁免前缀，
   也是本项目写探针名的既有规矩）。⇒ **上限一字未抬**，改措辞后回到 **37｜测试名那半边 7**，两条都正好在上限内。
-- **收尾预检 `scripts/precheck.py` 文档定稿前后各一次，两次都 ALL GREEN**（`.probe_work/u49_precheck.log` / `u49_precheck_final.log`）：
+- **收尾预检 `scripts/precheck.py` 文档定稿前后各一次，两次都 ALL GREEN**（`.probe_work/u49_precheck.log` 定稿前 / `.probe_work/u49_precheck_final.log` 定稿后）：
   第 1 步 `tests/guards` 全量 **59 passed（22.55s → 33.99s**，同一批守卫两次差 1.5 倍，负载读数见上）；第 2 步 `gates/final.py` **合计判定 9 条｜未跑 10 段逐段明示**
   （consistency／soak／package／g2 各自的「这一场全绿不覆盖它」都印出来了）｜**合计 2 步｜红 0**。
 
