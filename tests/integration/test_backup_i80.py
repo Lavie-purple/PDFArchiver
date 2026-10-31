@@ -67,21 +67,25 @@ def test_恢复后settings也跟着到了新目录(library, tmp_path) -> None:  
 
 
 def test_恢复前完整性检查拒绝坏库并删除残留(library, tmp_path) -> None:  # noqa: ANN001
-    """恢复前跑 `PRAGMA integrity_check`，坏库当场拒绝并尝试删除已拷贝的文件。"""
+    """库被换成不是库的东西 ⇒ 当场拒绝，且在 `integrity_check` 之前就拦住。
+
+    两条拒绝路径都算这一条验收：清单在场时字节数先对不上（**ISSUES I123** ①甲 之后
+    `manifest.json` 记着 `catalog.db` 的字节数），没有清单的老包才走到 `integrity_check`。
+    """
     backup_dir = library.backup.create_backup()
 
     corrupt_db = backup_dir / "catalog.db"
     corrupt_db.write_bytes(b"NOT-A-REAL-DATABASE")
 
     target = tmp_path / "restored"
-    with pytest.raises(ValueError, match="无法打开|完整性检查失败"):
+    with pytest.raises(ValueError, match="完整性检查失败|不完整"):
         library.backup.restore_to_new_dir(backup_dir, target)
 
     # Windows 文件锁可能导致延迟释放；核心断言是"坏库被拒绝"，文件清理是尽力而为
     import time
     import sys
     for _ in range(15):
-        if not (target / "catalog.db").exists():
+        if not (target / "data" / "catalog.db").exists():
             break
         time.sleep(0.3)
 
@@ -90,11 +94,15 @@ def test_恢复前完整性检查拒绝坏库并删除残留(library, tmp_path) 
         # 核心验收：坏库被拒绝（上面的 pytest.raises 已断言）
         pass
     else:
-        assert not (target / "catalog.db").exists(), "坏库被拒绝后残留文件没删干净"
+        assert not (target / "data" / "catalog.db").exists(), "坏库被拒绝后残留文件没删干净"
 
 
 def test_旧格式单个db文件仍然能恢复(library, tmp_path) -> None:  # noqa: ANN001
-    """旧格式（单个 `.db` 文件）仍然能被 `restore_to_new_dir` 识别并恢复。"""
+    """旧格式（单个 `.db` 文件）仍然能被 `restore_to_new_dir` 识别并恢复。
+
+    落点口径（**ISSUES I123** ②）：`target_root` 是**数据根目录**，库恢复成 `target_root/data/catalog.db`
+    —— 与 `AppPaths` 和应用启动时读的那条路径同源。
+    """
     old_format_db = tmp_path / "catalog-20260101-120000-v8.db"
     src_conn = sqlite3.connect(str(library.engine.path))
     try:
@@ -108,7 +116,7 @@ def test_旧格式单个db文件仍然能恢复(library, tmp_path) -> None:  # n
 
     target = tmp_path / "restored"
     restored = library.backup.restore_to_new_dir(old_format_db, target)
-    assert restored == target / "catalog.db"
+    assert restored == target / "data" / "catalog.db"
     assert restored.exists()
 
     engine = Engine(restored)

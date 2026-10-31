@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 
+from pdfarchiver.services import backup_service
 from pdfarchiver.services.db_check import (
     FULL,
     LAST_KEY,
@@ -80,6 +81,26 @@ def test_全库档把零字节快照判红且只跑最新一份整库体检(ctx)
     assert c11.ok is False, c11.measured
     assert "是 0 字节" in c11.measured, c11.measured
     assert "只跑最新一份" in c11.measured, c11.measured
+
+
+def test_C11_认得备份目录包里的库(ctx) -> None:
+    """①甲 之后 S6 的产物是**目录包**：只按顶层 `*.db` 数快照，会把刚做出来的包静默漏掉 ——
+    「整库体检只跑最新一份」体检的还是迁移时的旧快照，真包一次也没被打开，而读数照绿。
+
+    坏法注入（真跑过，`.probe_work/u49_inject_backup.py` 的 B13）：把 `snapshot_paths` 里
+    枚举包成员那三行删掉 → 本条先在「包里的 catalog.db 没进快照口径」上红。
+    """
+    pkg = ctx.backup.create_backup()
+    snaps = backup_service.snapshot_paths(ctx.paths.backups_dir)
+
+    assert pkg / "catalog.db" in snaps, f"S6 刚产出的包没进快照口径：{snaps}"
+
+    c11 = _row(ctx.db_check.run(FULL), "C11")
+    assert c11.measured.startswith(f"快照 {len(snaps)} 份"), \
+        f"份数与唯一口径算出来的不平（应 {len(snaps)} 份）：{c11.measured}"
+    assert f"{pkg.name}/catalog.db" in c11.measured, \
+        f"最新一份整库体检没点名这个包 ⇒ 包里的库根本没被打开：{c11.measured}"
+    assert c11.ok is not False, c11.measured
 
 
 def test_上次体检只落盘六个键(ctx) -> None:

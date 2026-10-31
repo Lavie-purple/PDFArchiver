@@ -60,6 +60,11 @@ class AppPaths:
         return self.data_dir / "catalog.db"
 
     @property
+    def vectors_file(self) -> Path:
+        """语义向量库的 mmap 文件。与 `catalog.db` 同属"库"，备份必须成对（**ISSUES I123** ①）。"""
+        return self.data_dir / "vectors.npy"
+
+    @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
 

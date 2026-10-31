@@ -104,7 +104,7 @@ def test_恢复到新目录之后逐键读数与备份前相等(library, tmp_pat
     backup_path = library.backup.create_backup()
     restored = library.backup.restore_to_new_dir(backup_path, tmp_path / "restored")
 
-    assert restored == tmp_path / "restored" / "catalog.db"
+    assert restored == tmp_path / "restored" / "data" / "catalog.db"
     assert restored != library.engine.path, "恢复到新目录的结果不许就是当前库那一份"
     engine = Engine(restored)
     try:
@@ -136,13 +136,14 @@ def test_恢复出来的库当场搜得到那一页(library, tmp_path) -> None: 
 
 
 def test_目标目录已有库时拒绝恢复且一个字节都不写(library, tmp_path) -> None:  # noqa: ANN001
-    """恢复必须写到**新目录**：目标已经有 `catalog.db` 就报错，不能把人现在的库顶掉。"""
+    """恢复必须写到**新数据根**：`<root>/data/catalog.db` 已经存在就报错，不能把人现在的库顶掉。"""
     backup_path = library.backup.create_backup()
     target = tmp_path / "已有库"
-    target.mkdir()
-    (target / "catalog.db").write_bytes(b"NOT-A-DB")
+    (target / "data").mkdir(parents=True)
+    (target / "data" / "catalog.db").write_bytes(b"NOT-A-DB")
 
     with pytest.raises(FileExistsError):
         library.backup.restore_to_new_dir(backup_path, target)
-    assert (target / "catalog.db").read_bytes() == b"NOT-A-DB", "拒绝之前已经把目标库覆盖了"
-    assert not (target / "catalog.db-wal").exists(), "留下 WAL 残尸就是半个库"
+    assert (target / "data" / "catalog.db").read_bytes() == b"NOT-A-DB", "拒绝之前已经把目标库覆盖了"
+    assert not (target / "data" / "catalog.db-wal").exists(), "留下 WAL 残尸就是半个库"
+    assert not (target / "config").exists(), "库还没谈拢就先把设置写进去了 —— 拒绝要拒绝在动笔之前"

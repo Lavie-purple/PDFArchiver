@@ -63,6 +63,7 @@ from pdfarchiver.db.sqltext import like_prefix  # noqa: E402
 from pdfarchiver.fs.exclude import Exclusions  # noqa: E402
 from pdfarchiver.fs.identity import identity_key  # noqa: E402
 from pdfarchiver.fs.scanner import KIND_ERROR, KIND_EXCLUDED, KIND_OTHER, KIND_PDF, iter_tree  # noqa: E402
+from pdfarchiver.services.backup_service import snapshot_label, snapshot_paths  # noqa: E402 快照口径与 S7 C11 同源
 from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE  # noqa: E402
 from _timed import breakdown, timed  # noqa: E402 同级模块：逐条计时（见 _timed.py）
 
@@ -407,8 +408,10 @@ def c11_backups(data_root: Path, deep: bool = False) -> Row:
     # 目录口径必须问产品自己：快照住在 `<root>/data/backups`（`AppPaths.backups_dir`），
     # 不是 `<root>/backups`。第一版在这里写死了根目录，结果真冻结现场（快照明明有 3 份）
     # 被判成「一份快照都没有」的未验 —— 探针和数据根吵架，正是模块说明第 2 条要避免的事。
+    # 「哪些文件算快照」同样不另写一套：读产品的 `snapshot_paths()`（**ISSUES I123** ①甲 之后
+    # 产物是目录包，只 glob 顶层 `*.db` 会把新备份静默漏掉，探针就会绿着漏验）。
     backup_dir = AppPaths.resolve(data_root).backups_dir
-    snaps = sorted(backup_dir.glob("*.db")) if backup_dir.is_dir() else []
+    snaps = snapshot_paths(backup_dir)
     if not snaps:
         return Row("C11", "最新快照整库体检，其余快照开库读版本", False,
                    "backups/ 里一份快照都没有 —— 从没跑过迁移就不会有，但交付时不能拿「没有」当「验过」",
@@ -421,29 +424,30 @@ def c11_backups(data_root: Path, deep: bool = False) -> Row:
     detail: list[str] = []
     checked: list[str] = []
     for snap in snaps:
+        label = snapshot_label(snap, backup_dir)
         size = snap.stat().st_size
         if size == 0:
-            bad.append(f"{snap.name} 是 0 字节")
+            bad.append(f"{label} 是 0 字节")
             continue
         try:
             conn = _ro(snap)
         except sqlite3.DatabaseError as exc:
-            bad.append(f"{snap.name} 打不开：{type(exc).__name__}: {exc}")
+            bad.append(f"{label} 打不开：{type(exc).__name__}: {exc}")
             continue
         try:
             # 迁移前的第一份快照来自空库：那时连 schema_version 都还没有，v0 是它的正当取值
             version = int(_scalar(conn, "SELECT coalesce(max(version), 0) FROM schema_version")) \
                 if conn.execute("SELECT count(*) FROM sqlite_master WHERE name='schema_version'"
                                 " AND type='table'").fetchone()[0] else 0
-            detail.append(f"{snap.name} {round(size / 1024)}KiB@v{version}")
+            detail.append(f"{label} {round(size / 1024)}KiB@v{version}")
             if deep or snap == newest:
                 t0 = time.perf_counter()
-                ok, measured = _health(conn, snap.name)
-                checked.append(f"{snap.name} {round((time.perf_counter() - t0) * 1000)}ms")
+                ok, measured = _health(conn, label)
+                checked.append(f"{label} {round((time.perf_counter() - t0) * 1000)}ms")
                 if not ok:
                     bad.append(measured)
         except sqlite3.DatabaseError as exc:
-            bad.append(f"{snap.name} 读不动：{type(exc).__name__}: {exc}")
+            bad.append(f"{label} 读不动：{type(exc).__name__}: {exc}")
         finally:
             conn.close()
     if deep:

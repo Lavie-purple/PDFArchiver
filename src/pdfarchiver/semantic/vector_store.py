@@ -60,7 +60,7 @@ class VectorStore:
         from pdfarchiver.config.paths import resolve_data_root
         self._data_root = data_root or resolve_data_root()
         self._paths = AppPaths.resolve(self._data_root)
-        self._vectors_path = self._paths.data_dir / "vectors.npy"
+        self._vectors_path = self._paths.vectors_file
         self._db_path = self._paths.catalog_db
 
     def _connect(self) -> sqlite3.Connection:

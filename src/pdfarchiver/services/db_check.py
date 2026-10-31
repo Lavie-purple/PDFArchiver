@@ -44,6 +44,7 @@ from pdfarchiver.db.repositories.health import (
 )
 from pdfarchiver.db.repositories.settings import SettingsRepository
 from pdfarchiver.fs.identity import identity_key
+from pdfarchiver.services.backup_service import snapshot_label, snapshot_paths
 from pdfarchiver.services.default_catalog import DEFAULT_CATEGORY_TEMPLATE
 
 log = logging.getLogger("pdfarchiver.services.db_check")
@@ -373,7 +374,7 @@ class DbCheckService:
                               + ("；".join(problems) if problems else "四项全部自洽"))
 
     def _c11(self) -> tuple[bool | None, str]:
-        snaps = sorted(self.backups_dir.glob("*.db")) if self.backups_dir.is_dir() else []
+        snaps = snapshot_paths(self.backups_dir)
         if not snaps:
             return None, ("backups/ 里一份快照都没有 —— 从没跑过迁移就不会有；"
                           "这一条在应用里没有可体检的对象，不是通过")
@@ -382,22 +383,23 @@ class DbCheckService:
         detail: list[str] = []
         checked: list[str] = []
         for snap in snaps:
+            label = snapshot_label(snap, self.backups_dir)
             size = snap.stat().st_size
             if size == 0:
-                bad.append(f"{snap.name} 是 0 字节")
+                bad.append(f"{label} 是 0 字节")
                 continue
             try:
                 version = self.repo.snapshot_version(snap)
             except Exception as exc:  # noqa: BLE001 - 单份打不开只判这一份，其余照跑
-                bad.append(f"{snap.name} 打不开：{type(exc).__name__}: {exc}")
+                bad.append(f"{label} 打不开：{type(exc).__name__}: {exc}")
                 continue
-            detail.append(f"{snap.name} {round(size / 1024)}KiB@v{version}")
+            detail.append(f"{label} {round(size / 1024)}KiB@v{version}")
             if snap == newest:
                 t0 = time.perf_counter()
                 ok, measured = self.repo.snapshot_health(snap)
-                checked.append(f"{snap.name} {round((time.perf_counter() - t0) * 1000)}ms")
+                checked.append(f"{label} {round((time.perf_counter() - t0) * 1000)}ms")
                 if not ok:
-                    bad.append(f"{snap.name}：{measured}")
+                    bad.append(f"{label}：{measured}")
         scope = (f"整库体检只跑最新一份，其余 {len(snaps) - 1} 份仅开库读版本"
                  f"（旧快照内部损坏不在本口径内，ISSUES I98）")
         return not bad, (f"快照 {len(snaps)} 份｜{_brief(detail, 4)}｜整库体检 1 份：{_brief(checked, 4)}"

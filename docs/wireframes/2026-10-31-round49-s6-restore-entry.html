@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>轮四十九线框 · ②乙 S6 恢复入口的形状 · 2026-10-31</title>
+<style>
+  :root { --ink:#111; --mid:#666; --faint:#b0b0b0; --hair:#dcdcdc; --wash:#f4f4f4; --bg:#fff; }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 1160px; margin: 40px auto 80px; padding: 0 28px; line-height: 1.65; font-size: 14px; }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 24px; }
+  header h1 { margin: 0 0 6px; font-size: 25px; letter-spacing: 1px; }
+  header .sub { color: var(--mid); font-size: 13px; }
+  nav.toc { border: 1px solid var(--ink); padding: 10px 14px; margin: 18px 0 32px; font-size: 13px;
+            display: flex; flex-wrap: wrap; gap: 6px 24px; }
+  nav.toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--mid); }
+  section { margin-top: 46px; }
+  section > h2 { font-size: 20px; border-left: 4px solid var(--ink); padding-left: 10px; margin: 0 0 6px; }
+  section > .why { color: var(--mid); font-size: 13px; padding-left: 14px;
+                   border-left: 3px solid var(--faint); margin: 8px 0 20px; }
+  section > .why b { color: var(--ink); }
+  article.option { border: 1px solid var(--ink); padding: 16px 18px 14px; margin: 0 0 22px; }
+  article.option h3 { margin: 0 0 4px; font-size: 16px; }
+  article.option .tag { font-size: 12px; color: var(--mid); }
+  pre.box { border: 1px solid var(--hair); background: var(--wash); padding: 10px 12px;
+            overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 12px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 4px; font-size: 13px; }
+  th, td { border: 1px solid var(--hair); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--wash); font-weight: 600; }
+  ul { margin: 8px 0 4px; padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  .rec { border-color: var(--ink); border-width: 2px; }
+  .rec h3::after { content: "  ← 推荐"; font-size: 12px; color: var(--mid); font-weight: 400; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .no { color: var(--mid); }
+</style>
+</head>
+<body>
+<header>
+  <h1>轮四十九线框 · ②乙 S6「恢复」入口的形状</h1>
+  <div class="sub">
+    黑白线框，<b>禁配色 / 禁图标 / 禁真实文案</b> —— 框里的中文只表示"这里放什么种类的东西"。<br>
+    按 <b>1280</b> 档画，另给 <b>1024</b> 档（D-039 地板）的降级说明。<br>
+    闸门：AGENTS.md「界面线框未经我逐屏确认前，禁止写界面代码」。<b>本页零界面代码改动</b>，勾完才落地。<br>
+    本轮另一半（①甲 备份包含 <code>vectors.npy</code> + <code>manifest.json</code>、恢复落点改成数据根）
+    是<b>服务层</b>改动，不新增控件，已落地并有 12 条坏法注入各自点名变红。<b>本页只谈"人怎么选要恢复的那个包"。</b>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#facts">§0 先摆事实（现读，无一条是估的）</a>
+  <a href="#why">§1 为什么这是个问题（把动线走一遍）</a>
+  <a href="#jia">§2 甲 · 恢复页用同一张备份表（推荐）</a>
+  <a href="#yi">§3 乙 · 动作留在备份页，恢复页缩成备用入口</a>
+  <a href="#bing">§4 丙 · 只把文件对话框换成下拉</a>
+  <a href="#compare">§5 三案对照</a>
+  <a href="#q">§6 编号决策项（等勾选）</a>
+  <a href="#never">§7 绝对不做（防蔓延）</a>
+</nav>
+
+<section id="facts">
+  <h2>§0 先摆事实（2026-10-31 现读）</h2>
+  <div class="why">取数方式：直接读产品源文件与真数据根的目录清单（<code>ls -la</code> + <code>stat</code>）。
+    <b>没测过的写在最后一行，不编。</b></div>
+  <table>
+    <tr><th>事实</th><th>出处（可 grep）</th></tr>
+    <tr><td>备份产物现在是<b>目录包</b>：<code>backup-时间戳-v版本\</code>，内含 <code>catalog.db</code>、
+      <code>vectors.npy</code>（建过语义索引才在场）、<code>settings.json</code>（文件在场才拷）、
+      <code>manifest.json</code>（最后一步写）</td>
+      <td><code>src/pdfarchiver/services/backup_service.py</code> <code>create_backup()</code></td></tr>
+    <tr><td>恢复入口只能选<b>文件</b>：过滤器写死 <code>"数据库文件 (*.db)"</code>，
+      所以人必须<b>钻进目录包里</b>点那一颗 <code>catalog.db</code></td>
+      <td><code>src/pdfarchiver/ui/pages/backup_page.py:235</code> <code>_select_backup()</code></td></tr>
+    <tr><td>服务层已经认得"从包里单独点库"这件事并<b>按整包恢复</b>（向量与设置一起回来），
+      所以功能不残缺 —— 残留的只是入口别扭</td>
+      <td><code>backup_service.py</code> <code>restore_to_new_dir()</code> 顶上那三条 <code>if</code>；
+        断言 <code>test_从包里单独选中catalog_db文件也按整包恢复</code></td></tr>
+    <tr><td><b>备份那张表已经把每个包列出来了</b>（文件名 / 版本 / 修改时间三列，按 mtime 倒序），
+      但<b>选中一行不产生任何效果</b>：既没有接线，"恢复"标签页也读不到它</td>
+      <td><code>backup_page.py:195</code> <code>_reload_backups()</code>（只 <code>setItem</code>，
+        无 <code>itemSelectionChanged</code>）</td></tr>
+    <tr><td><code>list_backups()</code> 的返回里<b>已经带 <code>kind</code></b>
+      （<code>"dir"</code> | <code>"file"</code>），所以"这是包还是裸库"这个信息在后端现成，界面上没显示</td>
+      <td><code>backup_service.py</code> <code>list_backups()</code></td></tr>
+    <tr><td>本机真库一个包的实际体积：<code>catalog.db</code> 12,121,096,192 B +
+      <code>vectors.npy</code> 1,073,741,952 B = <b>13,194,838,144 B</b>（约 12.3 GiB）。
+      界面上<b>一个字都没说</b>恢复要在目标盘准备同样大的空间</td>
+      <td>真数据根 <code>%LOCALAPPDATA%\PdfArchiver\data\</code> 的 <code>stat</code> 读数</td></tr>
+    <tr><td>本机 <code>config\settings.json</code> <b>不存在</b> —— 写它的函数在产品里零调用点
+      （台账 <b>ISSUES I72</b>），界面改的设置存在<b>库里的 <code>app_settings</code> 表</b>，
+      因此<b>跟着 <code>catalog.db</code> 一起进包</b>。⇒ 今天真库产出的包实际只有 <b>2 个成员</b>，不是 3 个</td>
+      <td><code>config\</code> 目录现读为空；<code>config/settings.py</code> <code>save()</code>
+        零调用方（本轮现数）</td></tr>
+    <tr><td>真备份目录里现在躺着 ≈<b>24 GB</b> 两样东西，其中<b>只有一样在表上看得见</b>：
+      ① <code>backup-20261025-045656-v8\</code>（老代码产物：<b>只有</b> <code>catalog.db</code>
+      11,995,631,616 B、<b>没有</b> <code>manifest.json</code>，包里还留着 <code>catalog.db-shm</code>
+      32,768 B / <code>-wal</code> 0 B 两只边文件）；
+      ② <code>pre-migration-0008-20261020T122144.db</code> 11,967,422,464 B（迁移前的手工快照，不是 S6 产的）——
+      名字既不匹配 <code>backup-*</code> 也不匹配 <code>catalog-*.db</code> ⇒ <b>列表口径把它当空气</b></td>
+      <td><code>data\backups\</code> 现读；<code>list_backups()</code> 的两个 <code>glob</code> 模式</td></tr>
+    <tr><td>目标根里<b>已经有</b> <code>data\catalog.db</code> ⇒ 后端当场 <code>FileExistsError</code> 拒绝，
+      不覆盖现场；这条已经在服务层断言里钉住</td>
+      <td><code>backup_service.py</code> <code>restore_to_new_dir()</code> 第一道闸</td></tr>
+    <tr><td class="no"><b>没测过、因此本页不许写数字的</b>：恢复 12.3 GB 一次要多少秒（服务层是同步拷 +
+      <code>integrity_check</code>，只在小库上验过）；备份页在 1024 档加新列之后的最低宽度实测（要等落地才量）</td>
+      <td class="no">—</td></tr>
+  </table>
+</section>
+
+<section id="why">
+  <h2>§1 为什么这是个问题（把动线走一遍）</h2>
+  <div class="why"><b>现状</b>：想恢复一次备份，人要按的顺序是 ——
+    切到「恢复」标签页 → 按「选择备份文件」→ 在<b>文件</b>对话框里手工导航到
+    <code>…\data\backups\backup-20261031-…-v8\</code> → 点其中的 <code>catalog.db</code> →
+    回到标签页确认"已选择"那句 → 按「恢复到新目录…」→ 再开<b>目录</b>对话框选一个<b>空</b>目录 →
+    等它跑完读回一句路径。<b>两次对话框、两种模式（一次选文件一次选目录），
+    而且第一个对话框根本不能直接选那个包。</b></div>
+  <pre class="box">现状（①甲 落地之后）　「恢复」标签页，1280 档
+
+┌ S6 · 备份与恢复 ───────────────────────────────────────────────────────────┐
+│ [ 备份 ] [ 恢复 ] [ 迁移历史 ]                                              │
+├────────────────────────────────────────────────────────────────────────────┤
+│ 从备份恢复。恢复必须写到新目录，不覆盖当前库。                              │
+│                                                                             │
+│ [ 选择备份文件 ]                                 ← 只能选文件               │
+│ 未选择备份文件                ← 选完填「已选择：&lt;中段省略&gt;catalog.db」       │
+│                                                                             │
+│ [ 恢复到新目录… ]                               ← 没选之前按不动             │
+│ （跑完之后这一行填「恢复成功：&lt;路径&gt; + 要重启才生效」那句）                  │
+│                                                                             │
+│                    ← 整页其余是空白（layout.addStretch）                    │
+└────────────────────────────────────────────────────────────────────────────┘</pre>
+  <div class="why">同一屏上「备份」标签页<b>已经有一张列出全部包的表</b>，两者读的是同一个后端函数，
+  中间却没有任何一条路连通 —— 这就是本轮要改的东西。<b>三案的差别在"选包这件事落在哪一屏、
+  选中之后能看见什么"，不在按钮措辞。</b></div>
+</section>
+
+<section id="jia">
+  <h2>§2 甲 · 「恢复」页用同一张备份表来选包</h2>
+  <article class="option rec">
+    <h3>甲：选包 = 在表里点一行；选中之后把"包里到底有什么"摊开给人看</h3>
+    <div class="tag">改动面：<code>backup_page.py</code> 的 <code>_make_restore_tab()</code> 整段重写 +
+      <code>_select_backup()</code> 退役；备份页那张表照旧（两页共用一个刷新函数）。
+      新后端方法一个：<code>BackupService.describe_backup(path)</code> —— 读 <code>manifest.json</code>，
+      无清单的旧包按目录实际内容算，裸 <code>.db</code> 只有库。</div>
+    <pre class="box">甲　「恢复」标签页，1280 档（内容宽约 1000px = 主窗 1280 − 侧栏 200 − 各级内边距）
+
+┌ S6 · 备份与恢复 ───────────────────────────────────────────────────────────┐
+│ [ 备份 ] [ 恢复 ] [ 迁移历史 ]                                              │
+├────────────────────────────────────────────────────────────────────────────┤
+│ 从备份恢复。恢复写到新数据根，绝不覆盖当前库。                                │
+│ ┌ 已有备份（与「备份」页那张表同一个来源 list_backups()）─────────────────┐│
+│ │ 名称                            类型   版本  修改时间              体积  ││
+│ │ backup-20261031-…-v8            包     v8    2026-10-31 …Z      12.3 GB  ││
+│ │ backup-20261025-…-v8            包     v8    2026-10-25 13:59Z  11.2 GB  ││ ← 选中行
+│ │ catalog-20261016-…-v6.db        裸库   v6    2026-10-16 …Z       9.8 GB  ││ ← 旧产物
+│ └─────────────────────────────────────────────────────────────────────────┘│
+│ 选中内容：catalog.db 12,121,096,192 B ＋ vectors.npy 1,073,741,952 B         │
+│           （清单在场 ⇒ 恢复时逐个按这份清单核对字节数）                       │
+│ 目标根：[_____________________________]  [ 选目录… ]                        │
+│ 落点：  &lt;目标根&gt;\data\catalog.db ＋ &lt;目标根&gt;\data\vectors.npy               │
+│ [ 恢复到新目录… ]        ← 没有选中行 或 没有目标目录 ⇒ 按不动                │
+│ （结果行照旧；目标根里已有 data\catalog.db ⇒ 如实写「拒绝：目标库已存在」）    │
+└────────────────────────────────────────────────────────────────────────────┘</pre>
+    <ul>
+      <li><b>"类型"列的意义</b>：包与裸库<b>能恢复回来的东西不一样</b>（裸库只有 <code>catalog.db</code>，
+        向量文件回不来）。现在这个差别在界面上完全看不见，人点了裸库还以为恢复了整套。</li>
+      <li><b>"体积"列 + "选中内容"行</b>：把"要准备多大空间"写在按之前，不写在报错里。
+        数字口径 = <code>manifest.json</code> 里的逐成员字节数（无清单 ⇒ 现 <code>stat</code>）；
+        单位换算只在显示层做，字节原值挂 tooltip。</li>
+      <li><b>要跟着改的既有断言</b>：<code>tests/integration/test_ui_layout.py:97</code>
+        <code>test_选中备份文件之后恢复标签页也不许顶宽</code> 现在靠 monkeypatch
+        <code>QFileDialog.getOpenFileName</code> 走 <code>page._select_backup()</code>。
+        入口一换，<b>这条要改成走"选中一行 + 填长路径标签"的同一条判据</b>
+        （最低宽度 ≤ 可用宽、中段省略、tooltip 回读三件都不许丢），不是删掉。</li>
+      <li><b>1024 档降级</b>：五列表超过可用宽 ⇒ 按 D-040 既定口径<b>整表横向滚动</b>；
+        名称列走 Stretch、其余定宽一律进 <code>set_table_columns</code>
+        （漏在口径外的列停在 Qt 默认值，守卫就看不见它们）。"选中内容"那行照 <code>_elided</code>
+        中段省略。<b>不新增第三种降级形状。</b></li>
+      <li><b>成本</b>：一个新后端方法 + 一张表 + 一批断言。<code>describe_backup()</code> 读清单文件、
+        不碰 <code>catalog.db</code>，所以刷新列表不增加开库开销。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="yi">
+  <h2>§3 乙 · 动作留在「备份」页，「恢复」页缩成备用入口</h2>
+  <article class="option">
+    <h3>乙：在备份页的表下面加一条就地展开的恢复面板；恢复页只服务"外部位置来的包"</h3>
+    <div class="tag">改动面：<code>_make_backup_tab()</code> 加按钮 + 面板，<code>_make_restore_tab()</code>
+      保留但语义变窄。<b>同一个后端方法 <code>describe_backup()</code> 仍然要写。</b></div>
+    <pre class="box">乙　「备份」标签页，1280 档
+
+┌ S6 · 备份与恢复 ───────────────────────────────────────────────────────────┐
+│ [ 备份 ] [ 恢复 ] [ 迁移历史 ]                                              │
+├────────────────────────────────────────────────────────────────────────────┤
+│ 备份当前数据库。使用 sqlite3.Connection.backup()，WAL 模式安全拷贝。         │
+│ 当前库：&lt;中段省略&gt;\data\catalog.db（结构版本 8）                            │
+│ [ 创建备份 ] [ 备份到… ] [ 刷新列表 ]                                        │
+│ ┌ 已有备份 ──────────────────────────────────────────────────────────────┐ │
+│ │ backup-20261031-…-v8                v8    2026-10-31 …Z                │ │
+│ │ backup-20261025-…-v8                v8    2026-10-25 13:59Z            │ │ ← 选中行
+│ └────────────────────────────────────────────────────────────────────────┘ │
+│ ┌ 恢复选中项（就地展开，不是模态框）───────────────────────────────────────┐│
+│ │ 要恢复的内容：catalog.db 12.3 GB ＋ vectors.npy 1.0 GB                    ││
+│ │ 恢复到（新数据根）：[______________________]  [ 选目录 ]                  ││
+│ │ 落点：&lt;目标根&gt;\data\catalog.db ＋ …                                       ││
+│ │ [ 确认恢复 ]  [ 收起 ]                                                    ││
+│ └──────────────────────────────────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────────────────┘</pre>
+    <ul>
+      <li><b>差别所在</b>：动线少一次切标签页（"看列表"与"选它"在同一屏），代价是
+        <b>恢复的说明文案与结果回读也搬进备份页</b> —— 那一页从"只管产出"变成同时管产出与消费。</li>
+      <li>「恢复」页还得留着（外部包 / 裸 <code>.db</code>），于是<b>同一个动作有两个入口</b>：
+        备份页的「恢复选中项」与恢复页的「恢复到新目录…」。
+        AGENTS.md「每加一个新入口，先全站搜是否已有同功能入口」在这一案上要正面回答。</li>
+      <li>就地展开的面板在窄档要收得回去（收起按钮 / 未选中时整块隐藏），
+        这块空态要照 <b>D-066「全站空态收成一条规则」</b>走，不自己发明。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="bing">
+  <h2>§4 丙 · 只把"选文件"换成"下拉选已有备份"</h2>
+  <article class="option">
+    <h3>丙：一行改动 —— 恢复页顶部换成一个下拉框 ＋「浏览…」兜底</h3>
+    <div class="tag">改动面：只有 <code>_make_restore_tab()</code> 里那颗按钮和那句标签；
+      <b>不需要</b>新后端方法（下拉条目直接吃 <code>list_backups()</code>）。</div>
+    <pre class="box">丙　「恢复」标签页，1280 档
+
+┌ S6 · 备份与恢复 ───────────────────────────────────────────────────────────┐
+│ [ 备份 ] [ 恢复 ] [ 迁移历史 ]                                              │
+├────────────────────────────────────────────────────────────────────────────┤
+│ 从备份恢复。恢复必须写到新目录，不覆盖当前库。                              │
+│ 要恢复的备份：[ backup-20261025-…-v8            ▼ ]   [ 浏览其他位置… ]     │
+│ 未选择备份            ← 选中之后填「已选：包，catalog.db ＋ vectors.npy」    │
+│ [ 恢复到新目录… ]                                                           │
+│ （结果行照旧）                                                              │
+└────────────────────────────────────────────────────────────────────────────┘</pre>
+    <ul>
+      <li><b>最便宜</b>，而且把"只能选文件、必须钻进包"这个具体毛病直接消掉了。</li>
+      <li>缺点：下拉框里<b>只有名字</b>，看不到类型与体积；本机 45 天内已经攒了 2 样大文件，
+        攒到十几个以后读不出哪个新、哪个里面有向量文件 ——
+        也就是<b>本轮 I123 ① 那类"看着成功、缺一半"的毛病重新变得看不见</b>。</li>
+      <li>窄档 <code>QComboBox</code> 的弹出列表按最长条目算宽，会把最低宽度顶上去
+        （<code>test_ui_layout</code> 那条判据正好管这个）——要额外配 <code>setSizeAdjustPolicy</code>
+        与中段省略：属于额外的坑，不是额外的功能。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="compare">
+  <h2>§5 三案对照</h2>
+  <table>
+    <tr><th>问</th><th>甲 表选包</th><th>乙 动作在备份页</th><th>丙 下拉</th></tr>
+    <tr><td>还要不要钻进包里点 <code>catalog.db</code></td><td>不要</td><td>不要</td>
+      <td>不要（「浏览…」兜底那条仍然要）</td></tr>
+    <tr><td>按之前能看见"有没有向量文件 / 多大"吗</td>
+      <td><b>能</b>（类型列 + 体积列 + 选中内容行）</td>
+      <td><b>能</b>（确认面板里摊开）</td>
+      <td>选中之后才看得见</td></tr>
+    <tr><td>新后端方法</td><td><code>describe_backup()</code></td><td>同左</td><td>无</td></tr>
+    <tr><td>新增入口数</td><td>0（换掉旧入口）</td><td><b>+1</b>（两屏都能恢复）</td><td>0</td></tr>
+    <tr><td>要改的既有断言</td><td><code>test_ui_layout.py:97</code> 改走新动线</td>
+      <td>同左 ＋ 就地面板的展开/收起断言</td><td><code>test_ui_layout.py:97</code> 改走新动线</td></tr>
+    <tr><td>1024 地板档</td><td>表横滚（D-040 既定）</td><td>表横滚 + 面板收放</td>
+      <td>下拉弹出宽度要单独治</td></tr>
+    <tr><td>相对现状的改动量</td><td>中</td><td>中偏大</td><td>小</td></tr>
+    <tr><td>一句话取舍</td><td>把"选哪个包"做成看得见内容的决定</td>
+      <td>少切一次页，代价是一个动作两个入口</td>
+      <td>最省，但"备了个缺半边东西的包"仍然看不出来</td></tr>
+  </table>
+</section>
+
+<section id="q">
+  <h2>§6 编号决策项（等勾选）</h2>
+  <div class="why">勾法照旧：给编号 + 选项，例如「Q1 甲，Q2 甲，Q3 乙，Q4 甲」。<b>没勾完不写界面代码。</b></div>
+  <table>
+    <tr><th>编号</th><th>问</th><th>选项</th><th>我的推荐与理由</th></tr>
+    <tr><td><b>Q1</b></td><td>选包这个动作落在哪一屏、用什么控件</td>
+      <td>甲 恢复页那张表（含类型 / 体积列 + 选中内容行）<br>
+          乙 备份页表下就地面板 + 恢复页留作备用入口<br>
+          丙 恢复页一个下拉</td>
+      <td><b>甲</b>。本轮冒的坑正是"备份缺一半而界面写着成功"（I123 ①），修法应当让缺的那半
+        <b>在按之前看得见</b>；丙 把这个信息藏回选中之后，乙 要付"同一个动作两个入口"的代价。</td></tr>
+    <tr><td><b>Q2</b></td><td>要不要在按之前判断"目标盘空间够不够"，不足就挡下按钮</td>
+      <td>甲 只显示包体积，<b>不做</b>空间判断（剩余空间人自己看）<br>
+          乙 显示体积 + 目标盘剩余 + 不足时挡下按钮<br>
+          丙 只显示体积，另在恢复失败的报错原文里带上所需字节数</td>
+      <td><b>甲</b>。"够不够"要新口径（网络盘、盘符不存在、目标根在另一台机器时读数不可信），
+        挡错方向比不挡更坏。丙 依赖"先失败再解释"，与本案"按之前能看见"的方向相反。</td></tr>
+    <tr><td><b>Q3</b></td><td>备份在<b>别的位置</b>（移动硬盘 / 另一台机器拷来）时怎么选</td>
+      <td>甲 保留<b>一条</b>「浏览其他位置…」：对话框按"包目录或裸库文件"两种过滤器走，
+          旧格式裸 <code>.db</code> 仍然能选<br>
+          乙 只留"选目录（包）"一个入口，旧格式裸库不再给界面入口（后端兼容照旧，文档手工指路）<br>
+          丙 两个对话框按顺序问（先问目录再问文件）</td>
+      <td><b>甲</b>。旧格式必须还能恢复 —— 本机 <code>data\backups\</code> 现在就躺着一批
+        2026-10-31 之前的产物，台账 I80 的兼容口径没变。丙 是把人往两次点击里赶。</td></tr>
+    <tr><td><b>Q4</b></td><td>列表口径要不要把<b>不是 S6 产的</b>快照也列出来
+      （本机 <code>pre-migration-0008-….db</code> 11.97 GB 就在同一目录里，表上<b>完全看不见</b>）</td>
+      <td>甲 <b>不改</b>：表只列 S6 产物（<code>backup-*</code> 目录与 <code>catalog-*.db</code>），
+          非本程序产的快照照 §三 做法 A 手工处理，文档记一句"这些文件在表上看不见"<br>
+          乙 另加一块"其他快照"只读展示（不能选中）<br>
+          丙 加进同一张表，标"非本程序产物 · 无清单"，能选中恢复</td>
+      <td><b>甲</b>。它们没有清单，选中之后"里面有什么"答不出来 —— 正是甲案要消灭的那类不可见；
+        列出来又不动，比不列更误导。要传达的只有"那 12 GB 不是界面产的、也别以为它进了保留策略"，
+        一句文档就够。<b>同类问题一次声明规则</b>：列表口径 = 本程序认得的产物，不按"目录里恰好有什么"算。</td></tr>
+  </table>
+</section>
+
+<section id="never">
+  <h2>§7 绝对不做（防蔓延）</h2>
+  <ul>
+    <li>不改「创建备份 / 备份到… / 刷新列表」三颗按钮的语义与位置（I121 ④ 的吸收行照旧）。</li>
+    <li>不新增第四个标签页，不做"备份计划 / 自动保留"（那是 §二 的另一条，本轮不做）。</li>
+    <li>不在界面里做恢复前 <code>integrity_check</code> 的进度条 —— 服务层同步跑、跑完只报结果；
+      <b>恢复大库要多少秒没测过，所以本页不写任何耗时数字</b>。</li>
+    <li>不做"覆盖当前库"的选项（恢复必须写新数据根 —— 这条是 <code>docs/DATABASE.md</code> 六规定的
+      恢复流程，也是本轮 <b>ISSUES I123</b> ② 的落点口径）。</li>
+    <li>不改恢复落点布局（<code>&lt;根&gt;\data\catalog.db</code> 那套由 <code>AppPaths</code> 唯一算）。</li>
+    <li>本页不带配色、图标、真实文案 —— 视觉由既有主题系统（<code>src/pdfarchiver/ui/theme.py</code>
+      的 QSS 令牌）在实现期管。</li>
+  </ul>
+</section>
+
+</body>
+</html>

@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pdfarchiver.config.paths import AppPaths  # noqa: E402
 from pdfarchiver.fs.identity import identity_key, normalize_path  # noqa: E402
+from pdfarchiver.services.backup_service import snapshot_label, snapshot_paths  # noqa: E402
 from p12_consistency import Row, _brief, _health, _ro, run_checks  # noqa: E402
 
 
@@ -154,22 +155,23 @@ def _break_rootpage(db: Path) -> None:
 def _apply(name: str, sql: str, data_root: Path) -> str:
     """把一条坏法打进副本。需要动文件系统的坏法在这里处理，返回注入说明。"""
     corpus = data_root.parent / "corpus"
+    # 受害者的候选集读产品的 `snapshot_paths()`：注入探针挑的必须是体检真会打开的那些文件，
+    # 两边各写一套枚举的话，「包里的库」这种形状会在探针里根本毁不到（**ISSUES I123** ①甲）。
+    backups = AppPaths.resolve(data_root).backups_dir
+    snaps = snapshot_paths(backups)
     if sql == "__corrupt_backup__":
-        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                     key=lambda p: (p.stat().st_mtime_ns, p.name))
+        victim = max(snaps, key=lambda p: (p.stat().st_mtime_ns, p.name))
         victim.write_bytes(b"this is not a sqlite database at all" * 40)
-        return f"（把最新快照 {victim.name} 写成非 sqlite 内容）"
+        return f"（把最新快照 {snapshot_label(victim, backups)} 写成非 sqlite 内容）"
     if sql == "__corrupt_newest_internals__":
-        victim = max(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                     key=lambda p: (p.stat().st_mtime_ns, p.name))
+        victim = max(snaps, key=lambda p: (p.stat().st_mtime_ns, p.name))
         _break_rootpage(victim)
-        return f"（把 {victim.name} 的 documents 根页指到 categories，库仍能打开）"
+        return f"（把 {snapshot_label(victim, backups)} 的 documents 根页指到 categories，库仍能打开）"
     if sql == "__corrupt_old_backup__":
-        ordered = sorted(AppPaths.resolve(data_root).backups_dir.glob("*.db"),
-                         key=lambda p: (p.stat().st_mtime_ns, p.name))
-        victim = ordered[-2]  # 最新一份（fixture-snapshot.db）不动，只毁次新
+        victim = sorted(snaps, key=lambda p: (p.stat().st_mtime_ns, p.name))[-2]
+        # 倒数第二新：最新那份（fixture 自己落的 `fixture-snapshot.db`）不动，毁的必须是"旧快照"
         victim.write_bytes(b"this is not a sqlite database at all" * 40)
-        return f"（把旧快照 {victim.name} 写成非 sqlite 内容，最新一份不动）"
+        return (f"（把旧快照 {snapshot_label(victim, backups)} 写成非 sqlite 内容，最新一份不动）")
     if sql == "__add_file_on_disk__":
         (corpus / "漏索引新文件.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         return "（盘上新增一份 PDF，库里没有）"
@@ -195,11 +197,17 @@ def _by_code(rows: list[Row]) -> dict[str, list[Row]]:
 def _c11_scope_case(root: Path) -> tuple[bool, str]:
     """I98 乙的口径边界 + `--c11-deep` 的反向证明：旧快照「能打开但内部损坏」在默认口径下
     保持绿（成本封顶的代价，必须明写），而 `--c11-deep` 必须把同一份旧快照抓红 ——
-    两个方向都验，这个开关才不是摆设。"""
+    两个方向都验，这个开关才不是摆设。
+
+    那份"旧快照"故意造成 **S6 的目录包形状**（**ISSUES I123** ①甲 之后产物就是包）：
+    它同时反向证明 `snapshot_paths()` 认得包里的 `catalog.db` —— 若枚举退回只 glob 顶层
+    `*.db`，这里 `snap_count` 就对不上，而且 `--c11-deep` 会抓不到那份损坏的包（绿），本条即红。
+    """
     data_root = _fixture(root)
     backups = AppPaths.resolve(data_root).backups_dir
-    newest = max(backups.glob("*.db"), key=lambda p: (p.stat().st_mtime_ns, p.name))
-    old = backups / "older-snapshot.db"
+    newest = max(snapshot_paths(backups), key=lambda p: (p.stat().st_mtime_ns, p.name))
+    old = backups / "backup-20260101-000000-v9" / "catalog.db"
+    old.parent.mkdir(parents=True, exist_ok=True)
     old.write_bytes(newest.read_bytes())
     _break_rootpage(old)
     # 必须放在 _break_rootpage 之后：写库会把 mtime 刷成现在，否则它会被当成「最新一份」
@@ -207,7 +215,7 @@ def _c11_scope_case(root: Path) -> tuple[bool, str]:
     os.utime(old, (stamp, stamp))
     conn = _ro(old)
     try:
-        damaged, _ = _health(conn, old.name)
+        damaged, _ = _health(conn, snapshot_label(old, backups))
     finally:
         conn.close()
     # 走 run_checks 而不是直接调 c11_backups：验的是 CLI 那条共用路径（argparse → run_checks → C11）
@@ -216,14 +224,16 @@ def _c11_scope_case(root: Path) -> tuple[bool, str]:
     deep_rows = _by_code(run_checks(base, data_root, walk=False, alive_check=False, c11_deep=True))
     row, deep = rows["C11"][0], deep_rows["C11"][0]
     disclosed = "仅开库读版本" in row.measured and "I98" in row.measured
-    snap_count = len(list(backups.glob("*.db")))
+    snap_count = len(snapshot_paths(backups))
     deep_named = (deep.label == "全部快照整库体检（--c11-deep）"
                   and f"整库体检 {snap_count} 份" in deep.measured)
-    ok = row.ok and damaged is False and disclosed and not deep.ok and deep_named
+    packaged = old.parent.name in deep.measured
+    ok = row.ok and damaged is False and disclosed and not deep.ok and deep_named and packaged
     return ok, (f"旧快照 integrity_check={'红' if damaged is False else '绿（注入没生效）'}"
                 f"｜默认 C11={'绿' if row.ok else '红'}｜明写={disclosed}"
                 f"｜--c11-deep={'红（抓到了）' if not deep.ok else '绿（没抓到）'}"
-                f"｜deep 读数={'对' if deep_named else '不对'}")
+                f"｜deep 读数={'对' if deep_named else '不对'}"
+                f"｜包里的库被点名={packaged}")
 
 
 def inject_mode(out: Path | None) -> int:

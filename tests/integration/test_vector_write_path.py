@@ -397,7 +397,7 @@ def test_追加不重写整份向量文件(ctx, tmp_path) -> None:
     vec = np.zeros(VectorStore.DIM, dtype=np.float32)
     vec[0] = 1.0
     store.add_batch([(doc, n + 1, vec) for n in range(3)])
-    path = ctx.paths.data_dir / "vectors.npy"
+    path = ctx.paths.vectors_file
     size_before = path.stat().st_size
     assert store.count() == 3
 
@@ -422,7 +422,7 @@ def test_扩容搬旧行且翻倍(ctx, tmp_path) -> None:
     # 第 1025 行才触发扩容 —— 必须是在**已有 1024 行**的前提下扩，才照得到"搬旧行"。
     store.add_batch([(doc, DEFAULT_CAPACITY + 1, vec)])
 
-    path = ctx.paths.data_dir / "vectors.npy"
+    path = ctx.paths.vectors_file
     capacity = int(np.load(path, mmap_mode="r").shape[0])
     assert capacity == DEFAULT_CAPACITY * 2, f"容量应翻倍，实际 {capacity}"
     kept = store.get_vectors()
