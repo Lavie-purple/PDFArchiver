@@ -8,14 +8,19 @@
 from __future__ import annotations
 
 import logging
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                                QTableWidget, QTableWidgetItem, QGroupBox,
-                                QTabWidget, QFileDialog, QMessageBox, QTextEdit)
+from pathlib import Path
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+                                QPushButton, QTableWidget, QTableWidgetItem,
+                                QTabWidget, QFileDialog, QMessageBox)
+
+from pdfarchiver.config.paths import AppPaths
+from pdfarchiver.services import backup_service
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.status_service import format_ts
 from pdfarchiver.ui.action_row import ActionRow
+from pdfarchiver.ui.format import format_bytes
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 
 log = logging.getLogger("pdfarchiver.ui.backup")
@@ -120,27 +125,76 @@ class BackupPage(QWidget):
         return widget
 
     def _make_restore_tab(self) -> QWidget:
-        """恢复标签页。"""
+        """恢复标签页：选包 = 在表里点一行，按之前就把"包里有什么、多大"摊开。
+
+        这张表与「备份」页那张是**同一来源**（`list_backups()`，一次读、两处填）。原先这一页只能
+        选**文件**，人得钻进 `backup-…\\` 目录里点那颗 `catalog.db` —— 而新备份包里还有
+        `vectors.npy`，只回半个库的那条路必须从入口上就堵掉（**ISSUES I123** ①）。
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        info = QLabel("从备份恢复。恢复必须写到新目录，不覆盖当前库。")
+        info = QLabel("从备份恢复。恢复写到新数据根，绝不覆盖当前库。")
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        btn_row = QHBoxLayout()
-        self.btn_select_backup = QPushButton("选择备份文件")
-        self.btn_select_backup.clicked.connect(self._select_backup)
-        btn_row.addWidget(self.btn_select_backup)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        self._selected: Path | None = None
+        self._selected_external = False
+        self._described: dict | None = None
+        self._backups: list[dict] = []
 
-        self.lbl_selected = QLabel("未选择备份文件")
-        self.lbl_selected.setWordWrap(True)
-        layout.addWidget(self.lbl_selected)
+        backup_title = QLabel("已有备份：")
+        backup_title.setObjectName("sectionTitle")
+        layout.addWidget(backup_title)
 
-        self.btn_restore = QPushButton("恢复到新目录...")
+        self.restore_table = QTableWidget()
+        self.restore_table.setColumnCount(5)
+        self.restore_table.setHorizontalHeaderLabels(
+            ["文件名", "类型", "版本", "修改时间", "体积"])
+        # 定宽按「这一列格式能产出的最宽读数 + 内边距 23」：类型「裸库」26 / 版本「v8」（列头 26）/
+        # 修改时间 `2026-10-16 16:08:30Z` 140 / 体积最宽 `999.99 GB` 63。文件名吸收剩余宽度
+        # （按视口运行时判，I121 ①甲）；装不下时全表横滚 —— D-040 的地板档降级，不另造形状。
+        set_table_columns(self.restore_table,
+                          {1: 26 + CELL_PADDING_WIDTH, 2: 100,
+                           3: 140 + CELL_PADDING_WIDTH, 4: 63 + CELL_PADDING_WIDTH},
+                          stretch_col=0)
+        self.restore_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.restore_table.setAlternatingRowColors(True)
+        self.restore_table.itemSelectionChanged.connect(self._on_pick)
+        layout.addWidget(self.restore_table, 1)
+
+        browse_row = QHBoxLayout()
+        self.btn_browse_other = QPushButton("浏览其他位置…")
+        self.btn_browse_other.clicked.connect(self._browse_other)
+        browse_row.addWidget(self.btn_browse_other)
+        browse_row.addStretch()
+        layout.addLayout(browse_row)
+
+        self.lbl_pick = QLabel("未选择备份")
+        self.lbl_pick.setWordWrap(True)
+        layout.addWidget(self.lbl_pick)
+
+        self.lbl_contents = QLabel("")
+        self.lbl_contents.setWordWrap(True)
+        layout.addWidget(self.lbl_contents)
+
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("目标根："))
+        self.ed_target = QLineEdit()
+        self.ed_target.setPlaceholderText("一个空目录，恢复之后把它填给 --data-dir")
+        self.ed_target.textChanged.connect(self._on_target_changed)
+        target_row.addWidget(self.ed_target, 1)
+        self.btn_pick_target = QPushButton("选目录…")
+        self.btn_pick_target.clicked.connect(self._pick_target)
+        target_row.addWidget(self.btn_pick_target)
+        layout.addLayout(target_row)
+
+        self.lbl_dest = QLabel("落点：（选中备份之后显示）")
+        self.lbl_dest.setWordWrap(True)
+        layout.addWidget(self.lbl_dest)
+
+        self.btn_restore = QPushButton("恢复到新目录…")
         self.btn_restore.setObjectName("searchBtn")
         self.btn_restore.clicked.connect(self._restore_to_new_dir)
         self.btn_restore.setEnabled(False)
@@ -150,7 +204,6 @@ class BackupPage(QWidget):
         self.lbl_restore_result.setWordWrap(True)
         layout.addWidget(self.lbl_restore_result)
 
-        layout.addStretch()
         return widget
 
     def _make_migration_tab(self) -> QWidget:
@@ -193,14 +246,190 @@ class BackupPage(QWidget):
         self.action_row.sync()
 
     def _reload_backups(self) -> None:
-        """刷新备份列表。"""
+        """刷新备份 —— **两张表都从这里填**，同一个来源 `list_backups()`。
+
+        恢复页那张表比备份页多两列（类型 / 体积），两列都来自 `describe_backup()`：只读清单与
+        `stat`、不碰 `catalog.db`，所以刷新不增加开库开销。刷新过程中 `blockSignals`，
+        否则 `setRowCount` 会先清空选中、把「选中内容」那几行刷成空态再填回来。
+        """
         backups = self.ctx.backup.list_backups()
+        self._backups = backups
+
         self.backup_table.setRowCount(len(backups))
+        self.restore_table.blockSignals(True)
+        self.restore_table.setRowCount(len(backups))
         for i, b in enumerate(backups):
             self.backup_table.setItem(i, 0, QTableWidgetItem(b["path"].name))
             self.backup_table.setItem(i, 1, QTableWidgetItem(f"v{b['version']}"))
-            mtime = format_ts(b["mtime"])
-            self.backup_table.setItem(i, 2, QTableWidgetItem(mtime))
+            self.backup_table.setItem(i, 2, QTableWidgetItem(format_ts(b["mtime"])))
+
+            name_item = QTableWidgetItem(b["path"].name)
+            # 名字列可截断（ELIDABLE_COLUMNS），截了必须能悬停回读全文
+            name_item.setToolTip(b["path"].name)
+            self.restore_table.setItem(i, 0, name_item)
+            self.restore_table.setItem(
+                i, 1, QTableWidgetItem("包" if b["kind"] == "dir" else "裸库"))
+            self.restore_table.setItem(i, 2, QTableWidgetItem(f"v{b['version']}"))
+            self.restore_table.setItem(i, 3, QTableWidgetItem(format_ts(b["mtime"])))
+            self.restore_table.setItem(i, 4, self._size_item(b["path"]))
+        # 选中的那一行在刷新之后要还在（否则每按一次「刷新列表」都得重选一遍）；
+        # 外部位置选来的包不在表里，刷新不动它。
+        row = next((i for i, b in enumerate(backups)
+                    if b["path"] == self._selected), None)
+        if not self._selected_external:
+            if row is None:
+                self._selected = None
+            else:
+                self.restore_table.selectRow(row)
+        self.restore_table.blockSignals(False)
+        self._refresh_selection_texts()
+
+    def _size_item(self, path: Path) -> QTableWidgetItem:
+        """体积列：给人看的是 `format_bytes` 的口径，字节原值挂 tooltip。
+
+        读不出来（清单坏了 / 文件半路没了）就写 `-`、把原因挂 tooltip —— 这一格不许因为
+        一个坏包把整张表刷不出来，也不许假装它是 0 字节。
+        """
+        try:
+            info = backup_service.BackupService.describe_backup(path)
+        except (OSError, ValueError) as exc:
+            item = QTableWidgetItem("-")
+            item.setToolTip(str(exc))
+            return item
+        item = QTableWidgetItem(format_bytes(info["total_bytes"]))
+        item.setToolTip(" ＋ ".join(f"{m['name']} {m['bytes']:,} B"
+                                   for m in info["members"]))
+        return item
+
+    def _on_pick(self) -> None:
+        """表里选中的那一行 ⇒ 要恢复的那个包。"""
+        rows = self.restore_table.selectionModel().selectedRows()
+        entry = self._backups[rows[0].row()] if rows and rows[0].row() < len(self._backups) else None
+        self._selected = entry["path"] if entry is not None else None
+        self._selected_external = False
+        self._refresh_selection_texts()
+
+    def _refresh_selection_texts(self) -> None:
+        """把选中项摊开：选了哪个、里面有什么、恢复之后落在哪。"""
+        if self._selected is None:
+            self._described = None
+            self.lbl_pick.setText("未选择备份")
+            self.lbl_pick.setToolTip("")
+            self.lbl_contents.setText("")
+            self.lbl_contents.setToolTip("")
+        else:
+            full = str(self._selected)
+            self.lbl_pick.setText(f"已选择：{_elided(full, self.lbl_pick)}")
+            self.lbl_pick.setToolTip(full)
+            self._refresh_contents()
+        self._refresh_dest()
+        self.btn_restore.setEnabled(
+            self._selected is not None and bool(self.ed_target.text().strip()))
+
+    def _refresh_contents(self) -> None:
+        """「选中内容」那一行 —— 缺的那一半必须在**按之前**看得见。"""
+        try:
+            described = backup_service.BackupService.describe_backup(self._selected)
+        except (OSError, ValueError) as exc:
+            self._described = None
+            # 报错原文里带着一条绝对路径，它会把这句标签顶宽 —— 中段省略 + 悬停回读全文
+            # （选了一个不存在的文件、或外部拷来的包清单坏了，都是这条兜底在做）。
+            detail = str(exc)
+            self.lbl_contents.setText(f"读不出这个备份里有什么：{_elided(detail, self.lbl_contents)}")
+            self.lbl_contents.setToolTip(detail)
+            return
+        self._described = described
+        if not described["members"]:
+            self.lbl_contents.setText("选中内容：（这个包里没有可恢复的东西）")
+            self.lbl_contents.setToolTip("")
+            return
+        if described["kind"] == "file":
+            note = "旧格式裸库：只有库，向量文件回不来"
+        elif described["has_manifest"]:
+            note = "清单在场 ⇒ 恢复时逐个按这份清单核对字节数"
+        else:
+            note = "没有清单的老包 ⇒ 有什么恢复什么"
+        self.lbl_contents.setText(
+            "选中内容：" + " ＋ ".join(f"{m['name']} {format_bytes(m['bytes'])}"
+                                      for m in described["members"]) + f"（{note}）")
+        self.lbl_contents.setToolTip(
+            " ＋ ".join(f"{m['name']} {m['bytes']:,} B" for m in described["members"]))
+
+    def _refresh_dest(self) -> None:
+        """「落点」那一行：路径由 `AppPaths` 唯一算，与恢复时摆放的是同一份映射。"""
+        target = self.ed_target.text().strip()
+        if self._selected is None or not target:
+            self.lbl_dest.setText("落点：（" + ("选中备份" if self._selected is None
+                                              else "选目标根") + "之后显示）")
+            self.lbl_dest.setToolTip("")
+            return
+        destinations = backup_service.BackupService.member_destinations(AppPaths.resolve(target))
+        names = ([m["name"] for m in self._described["members"]]
+                 if self._described else [backup_service.DB_MEMBER])
+        full = " ＋ ".join(str(destinations[name]) for name in names if name in destinations)
+        self.lbl_dest.setText(f"落点：{_elided(full, self.lbl_dest)}")
+        self.lbl_dest.setToolTip(full)
+
+    def _on_target_changed(self) -> None:
+        self._refresh_dest()
+        self.btn_restore.setEnabled(
+            self._selected is not None and bool(self.ed_target.text().strip()))
+
+    def _pick_target(self) -> None:
+        target = QFileDialog.getExistingDirectory(self, "选择恢复目标目录")
+        if target:
+            self.ed_target.setText(target)
+
+    def _browse_other(self) -> None:
+        """备份在别的位置（移动硬盘 / 另一台机器拷来）时的入口。
+
+        对话框收两种形状：包里的 `manifest.json`（点它就等于点中了那个包）与旧格式裸 `.db`。
+        「点包里的 `catalog.db`」也走同一条路 —— 服务层 `as_package()` 把它归一化成整包，
+        所以三种点法恢复回来的东西一样多。
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择备份包或库文件", str(self.ctx.paths.backups_dir),
+            f"备份包 ({backup_service.MANIFEST_NAME});;数据库文件 (*.db);;所有文件 (*)",
+            options=QFileDialog.Option.DontUseNativeDialog)
+        if not path:
+            return
+        chosen = backup_service.as_package(Path(path))
+        row = next((i for i, b in enumerate(self._backups) if b["path"] == chosen), None)
+        if row is not None:
+            self.restore_table.selectRow(row)      # 与表里那一行合一，不制造两个选中态
+            return
+        self.restore_table.blockSignals(True)
+        self.restore_table.clearSelection()
+        self.restore_table.blockSignals(False)
+        self._selected = chosen
+        self._selected_external = True
+        self._refresh_selection_texts()
+
+    def _restore_to_new_dir(self) -> None:
+        """恢复到新目录。目标根先选好再按 —— 这次不再由按钮弹目录对话框。"""
+        if self._selected is None:
+            return
+        target = self.ed_target.text().strip()
+        if not target:
+            return
+        try:
+            new_db = self.ctx.backup.restore_to_new_dir(self._selected, target)
+            shown = _elided(str(new_db), self.lbl_restore_result)
+            self.lbl_restore_result.setText(
+                f"恢复成功：{shown}\n"
+                f"注意：当前应用仍在使用旧库。要使用新库，请重启应用并指定新数据目录。")
+            self.lbl_restore_result.setToolTip(str(new_db))
+            QMessageBox.information(
+                self, "恢复成功",
+                f"数据库已恢复到：\n{new_db}\n\n"
+                f"当前应用仍在使用旧库。要使用新库，请重启应用并指定新数据目录。")
+        except Exception as exc:
+            # 原因里十有八九带着一条绝对路径（「目标库已存在：C:\…」），塞进这句标签会把它
+            # 顶宽 —— 全文给弹窗与悬停，标签只留一句定长的话。
+            detail = str(exc)
+            self.lbl_restore_result.setText("恢复失败：目标根没有写入任何东西（悬停看原因）。")
+            self.lbl_restore_result.setToolTip(detail)
+            QMessageBox.critical(self, "恢复失败", f"恢复时出错：\n{detail}")
 
     def _reload_migrations(self) -> None:
         """刷新迁移历史。"""
@@ -231,36 +460,3 @@ class BackupPage(QWidget):
             self._reload_backups()
         except Exception as exc:
             QMessageBox.critical(self, "备份失败", f"创建备份时出错：\n{exc}")
-
-    def _select_backup(self) -> None:
-        """选择备份文件。"""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择备份文件", str(self.ctx.paths.backups_dir),
-            "数据库文件 (*.db)")
-        if not path:
-            return
-        self._selected_backup = path
-        self.lbl_selected.setText(f"已选择：{_elided(path, self.lbl_selected)}")
-        self.lbl_selected.setToolTip(path)
-        self.btn_restore.setEnabled(True)
-
-    def _restore_to_new_dir(self) -> None:
-        """恢复到新目录。"""
-        if not hasattr(self, "_selected_backup"):
-            return
-        target = QFileDialog.getExistingDirectory(self, "选择恢复目标目录")
-        if not target:
-            return
-        try:
-            new_db = self.ctx.backup.restore_to_new_dir(self._selected_backup, target)
-            shown = _elided(str(new_db), self.lbl_restore_result)
-            self.lbl_restore_result.setText(
-                f"恢复成功：{shown}\n"
-                f"注意：当前应用仍在使用旧库。要使用新库，请重启应用并指定新数据目录。")
-            self.lbl_restore_result.setToolTip(str(new_db))
-            QMessageBox.information(
-                self, "恢复成功",
-                f"数据库已恢复到：\n{new_db}\n\n"
-                f"当前应用仍在使用旧库。要使用新库，请重启应用并指定新数据目录。")
-        except Exception as exc:
-            QMessageBox.critical(self, "恢复失败", f"恢复时出错：\n{exc}")

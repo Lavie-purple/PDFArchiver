@@ -38,6 +38,11 @@ DB_MEMBER = "catalog.db"
 VECTORS_MEMBER = "vectors.npy"
 SETTINGS_MEMBER = "settings.json"
 
+# 一个包里"算备份内容"的那几样，顺序就是恢复时摆放的顺序。
+# 边文件（`catalog.db-wal` / `-shm`）不在这里：它们不是备份内容，恢复也不搬它们 ——
+# 而 2026-10-31 现读，真库里那个没有清单的老包里就躺着这两只（32,768 B / 0 B）。
+RESTORABLE_MEMBERS = (DB_MEMBER, VECTORS_MEMBER, SETTINGS_MEMBER)
+
 
 def snapshot_paths(backups_dir: Path) -> list[Path]:
     """哪些文件算「库快照」的唯一口径 —— S7 体检的 C11 与 p12 探针都读这一个函数。
@@ -147,6 +152,51 @@ class BackupService:
         backups.sort(key=lambda b: b["mtime"], reverse=True)
         return backups
 
+    @staticmethod
+    def describe_backup(backup_path: str | Path) -> dict:
+        """把一个备份"里面到底有什么、各多少字节"摊开给界面看 —— 只读清单与 `stat`，**绝不开库**。
+
+        返回 `{"kind": "dir"|"file", "has_manifest": bool,
+        "members": [{"name": str, "bytes": int}], "total_bytes": int}`。
+
+        成员集合与 `_plan_members()` 要往目标根里放的那几样**同一条口径**（清单为准，
+        无清单的旧包认 `RESTORABLE_MEMBERS` 里在场的那几样）。这条不是洁癖：本轮冒的坑
+        （**ISSUES I123** ①）正是"备份缺一半而界面写着成功"，如果展示读一套、恢复读另一套，
+        就等于把同一个毛病从产出侧搬到了消费侧。
+
+        体积取的是**成员自己的字节数之和**，不是包目录的表观占用：包里那两只边文件不算成员，
+        而 `manifest.json` 本身几百字节 —— 报"包多大"会把不该准备的空间算进去。
+        """
+        path = as_package(Path(backup_path))
+        if not path.is_dir():
+            size = path.stat().st_size
+            return {"kind": "file", "has_manifest": False,
+                    "members": [{"name": DB_MEMBER, "bytes": size}], "total_bytes": size}
+
+        manifest = _read_manifest(path)
+        members: list[dict] = []
+        if manifest is None:
+            # 没有清单：有什么算什么（与 `_plan_members` 的无清单分支同一句判据）
+            for name in RESTORABLE_MEMBERS:
+                member = path / name
+                if member.is_file():
+                    members.append({"name": name, "bytes": member.stat().st_size})
+        else:
+            recorded = {item.get("name"): item.get("bytes") for item in manifest["members"]
+                        if isinstance(item, dict)}
+            for name in RESTORABLE_MEMBERS:
+                if name not in recorded:
+                    # 盘上多出来的东西不算成员：清单没写它，恢复就不搬它 ——
+                    # "界面上看得见、恢复回来却没有"正是本轮要消灭的那一类不可见。
+                    continue
+                member = path / name
+                want = recorded[name]
+                if not isinstance(want, int):
+                    want = member.stat().st_size if member.is_file() else 0
+                members.append({"name": name, "bytes": want})
+        return {"kind": "dir", "has_manifest": manifest is not None, "members": members,
+                "total_bytes": sum(m["bytes"] for m in members)}
+
     def restore_to_new_dir(self, backup_path: str | Path,
                            target_root: str | Path) -> Path:
         """把一个备份恢复到**新的数据根目录**（不覆盖当前库）。返回恢复出来的 `catalog.db`。
@@ -157,14 +207,12 @@ class BackupService:
         - 不带清单的目录：认 `catalog.db`，`vectors.npy` / `settings.json` 在场才恢复
         - 旧格式（单个 `.db` 文件）：只恢复库 —— 但**如果它旁边就有 `manifest.json`**，
           说明它是被人从包里单独点进来的，按整包走上面第一档
+          （同一条归一化在 `as_package`，`describe_backup()` 也走它 ——
+          展示与恢复不许对"这算哪个包"有两种答案）
 
         任一步失败都要把已经写进目标根的东西删干净 —— 半个库比没有库更坏。
         """
-        backup_path = Path(backup_path)
-        if backup_path.is_file() and (backup_path.parent / MANIFEST_NAME).exists():
-            # 界面那个对话框只能选文件，人会把包里的 `catalog.db` 单独点进来 ——
-            # 按整包恢复，不许只回半个库（向量文件还在包里躺着）。
-            backup_path = backup_path.parent
+        backup_path = as_package(Path(backup_path))
         paths = AppPaths.resolve(target_root)
         new_db = paths.catalog_db
         if new_db.exists():
@@ -198,11 +246,20 @@ class BackupService:
         return new_db
 
     @staticmethod
+    def member_destinations(paths: AppPaths) -> dict[str, Path]:
+        """成员名 → 恢复之后它落在目标根的哪个路径。
+
+        界面上那行「落点：<目标根>\\data\\catalog.db ＋ …」与 `_plan_members()` 共用这一份：
+        界面上写一套、恢复时摆另一套，就是本轮 **ISSUES I123** ② 那个"一半对一半错"的复刻。
+        """
+        return {DB_MEMBER: paths.catalog_db,
+                VECTORS_MEMBER: paths.vectors_file,
+                SETTINGS_MEMBER: paths.settings_file}
+
+    @staticmethod
     def _plan_members(backup_path: Path, paths: AppPaths) -> list[tuple[str, Path, int | None]]:
         """这个备份包该往目标根里放哪几样，各自落在哪个路径（清单在场就以清单为准）。"""
-        destinations = {DB_MEMBER: paths.catalog_db,
-                        VECTORS_MEMBER: paths.vectors_file,
-                        SETTINGS_MEMBER: paths.settings_file}
+        destinations = BackupService.member_destinations(paths)
         if not backup_path.is_dir():
             return [(DB_MEMBER, destinations[DB_MEMBER], None)]
 
@@ -210,13 +267,13 @@ class BackupService:
         if manifest is None:
             # 没有清单的老备份包：有什么恢复什么，但库必须在场
             return [(name, destinations[name], None)
-                    for name in (DB_MEMBER, VECTORS_MEMBER, SETTINGS_MEMBER)
+                    for name in RESTORABLE_MEMBERS
                     if (backup_path / name).exists()]
 
         entries = {item.get("name"): item.get("bytes") for item in manifest["members"]
                    if isinstance(item, dict) and item.get("name") in destinations}
         return [(name, destinations[name], entries.get(name)) for name in
-                (DB_MEMBER, VECTORS_MEMBER, SETTINGS_MEMBER) if name in entries]
+                RESTORABLE_MEMBERS if name in entries]
 
     @staticmethod
     def _member_source(backup_path: Path, name: str) -> Path:
@@ -276,6 +333,20 @@ class BackupService:
                 "applied": m.order <= current,
             })
         return result
+
+
+def as_package(backup_path: Path) -> Path:
+    """人从包里单独点进来的那颗 `catalog.db` ⇒ 归一化成它所属的**包**。
+
+    恢复必须按整包走，不许只回半个库（向量文件还在包里躺着）—— 这是 **ISSUES I123** ①
+    那类"看着成功、缺一半"的最后一条路。展示体积的那条路（`describe_backup()`）与
+    界面那边的「浏览其他位置…」（点包里的 `manifest.json` 也算选中了那个包）走的是
+    **同一个函数**：如果各写一遍，界面报"只有 catalog.db 11.2 GB"而恢复搬回来两样，
+    差别就落在没人能从屏幕上看出来的地方。
+    """
+    if backup_path.is_file() and (backup_path.parent / MANIFEST_NAME).exists():
+        return backup_path.parent
+    return backup_path
 
 
 def _copy_member(backup_dir: Path, src: Path, name: str) -> dict:

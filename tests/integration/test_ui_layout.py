@@ -94,10 +94,14 @@ def test_每屏在地板宽度下都装得下且不吃侧栏(window, ctx, page_i
         f"（应当还是 {NAV_WIDTH}px）—— I52 的坏法重现")
 
 
-def test_选中备份文件之后恢复标签页也不许顶宽(window, ctx, qapp, monkeypatch) -> None:
+def test_选中备份之后恢复标签页也不许顶宽(window, ctx, qapp, monkeypatch) -> None:
     """上一条逐标签页量的是**静态**内容；`QTabWidget` 只把当前标签页算进
-    minimumSizeHint，所以"点了按钮之后才填进去的长路径"它看不见（实测把
-    `lbl_selected` 换成裸路径，上一条照样绿）。这条走真的那条路：选一个深路径的备份。
+    minimumSizeHint，所以"点了/选了之后才填进去的长路径"它看不见（实测把
+    `lbl_pick` 换成裸路径，上一条照样绿）。这条把**三条填路径的路**都走一遍。
+
+    轮五十 起恢复页改成"在表里点一行"（甲案），「选择备份文件」那颗按钮退役，
+    所以动线跟着换 —— 但**判据一件都不许少**：最低宽度 ≤ 可用宽、路径中段省略、
+    完整值悬停可回读。
     """
     from PySide6.QtWidgets import QFileDialog, QMessageBox
 
@@ -106,26 +110,41 @@ def test_选中备份文件之后恢复标签页也不许顶宽(window, ctx, qap
     monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
 
     deep = str(LONG_DB_PATH)
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (deep, "")))
     window._select_by_page_id("backup")
     page = window._pages["backup"]
     tabs = page.findChildren(QtWidgets.QTabWidget)[0]
     tabs.setCurrentIndex(1)
     qapp.processEvents()
 
-    page._select_backup()
+    budget = AVAILABLE_WIDTH
+
+    # ① 「浏览其他位置…」：外部的包 / 旧格式裸库都从这一个对话框进来，选的是一条文件路径
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (deep, "")))
+    page._browse_other()
     qapp.processEvents()
 
-    budget = AVAILABLE_WIDTH
     assert tabs.minimumSizeHint().width() <= budget, (
-        f"填进真实路径后，恢复标签页最低宽度 {tabs.minimumSizeHint().width()}px，"
+        f"填进外部位置的真实路径后，恢复标签页最低宽度 {tabs.minimumSizeHint().width()}px，"
         f"超过侧栏之外的可用 {budget}px")
-    assert "…" in page.lbl_selected.text(), f"路径没中段省略：{page.lbl_selected.text()!r}"
-    assert page.lbl_selected.toolTip() == deep, "完整路径要能在悬停里回读"
+    assert "…" in page.lbl_pick.text(), f"路径没中段省略：{page.lbl_pick.text()!r}"
+    assert page.lbl_pick.toolTip() == deep, "完整路径要能在悬停里回读"
 
-    # 同一标签页上还有第三条会填路径的标签（恢复结果），坏法一模一样，顺手一起钉住
-    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
-                        staticmethod(lambda *a, **k: deep))
+    # ② 表里选一行 + 一条深的目标根：落点那一行是把两条绝对路径拼起来的，最容易顶宽
+    ctx.backup.create_backup()
+    page._reload_backups()
+    page.restore_table.selectRow(0)
+    qapp.processEvents()
+    page.ed_target.setText(deep)
+    qapp.processEvents()
+
+    assert page.btn_restore.isEnabled(), "选了一行、也填了目标根，恢复按钮还是按不动"
+    assert tabs.minimumSizeHint().width() <= budget, (
+        f"填进目标根的真实路径后，恢复标签页最低宽度 {tabs.minimumSizeHint().width()}px，"
+        f"超过侧栏之外的可用 {budget}px")
+    assert "…" in page.lbl_dest.text(), f"落点没中段省略：{page.lbl_dest.text()!r}"
+    assert deep in page.lbl_dest.toolTip(), "落点的完整路径要能在悬停里回读"
+
+    # ③ 恢复结果那一行同样填路径，坏法一模一样
     monkeypatch.setattr(ctx.backup, "restore_to_new_dir", lambda *a, **k: Path(deep))
     page._restore_to_new_dir()
     qapp.processEvents()
