@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
@@ -247,8 +248,9 @@ def test_1024档左栏收起宽档回来(window, ctx, qapp) -> None:
     assert page._history_pane.isVisible(), "回到 1280 档历史提问没回来"
 
 
-def test_检索失败红字带原文不留旧证据(window, ctx, qapp, monkeypatch) -> None:
-    """**ISSUES I84** ③ 的 S9 版：异常穿出 Qt 槽 = 屏幕上什么都不发生。接住，红字 + 原文。"""
+def test_检索失败一句上屏原文进日志不留旧证据(window, ctx, qapp, monkeypatch, caplog) -> None:
+    """**ISSUES I84** ③ 的 S9 版，落点按轮五十一 **Q3 乙**：异常穿出 Qt 槽 = 屏幕上什么都不发生；
+    接住，红字上屏，但屏上是那一句人话，后端原文（带路径）逐字进日志。"""
     class Boom(FakeSemantic):
         def search(self, query: str, top_k: int = 10):
             raise FileNotFoundError("模型目录不存在：data/models/embedding")
@@ -257,13 +259,16 @@ def test_检索失败红字带原文不留旧证据(window, ctx, qapp, monkeypat
                                              ctx.documents, ctx.texts))
     page = _goto_ask(window, qapp)
     page.ask_input.setText("保留期限")
-    page._ask()
+    with caplog.at_level(logging.WARNING, logger="pdfarchiver"):
+        page._ask()
     _settle(qapp)
 
-    assert "模型目录不存在" in page.answer_label.text(), \
-        f"失败原因原文没上屏：{page.answer_label.text()!r}"
+    text = page.answer_label.text()
+    assert "语义模型不在本机" in text, f"屏上要出的是那一句实话：{text!r}"
+    assert "模型目录不存在" not in text, f"后端原文（带路径）进界面了：{text!r}"
     assert page.answer_label.objectName() == "danger", "失败读数没有走红字"
     assert page._cards == [], "失败后还挂着上一问的证据卡"
+    assert "模型目录不存在" in caplog.text, "藏路径不能把后端原文一起藏掉"
 
 
 def test_耗时与向量读数在提问后上屏(window, ctx, qapp, monkeypatch) -> None:

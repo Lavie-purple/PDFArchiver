@@ -11,9 +11,10 @@ AGENTS.md 那条「单文件超 800 行就拆」已经变成"下一次写入就�
 认的是 `page.right_panel` / `page.hit_list` —— 换访问路径等于让断言跟着实现改。混入让控件仍然挂在
 页面对象上，归属只挪了文件。
 
-混入方（`ui/pages/library_page.py` 的 `LibraryPage`）须提供三样：
+混入方（`ui/pages/library_page.py` 的 `LibraryPage`）须提供四样：
 `self.ctx`（AppContext）、`self.doc_table`（中栏那张表，点命中回来选行）、
-`self.open_in_reader`（`(doc_id, page_no)` 信号，跳到 S2 的出口）。
+`self.open_in_reader`（`(doc_id, page_no)` 信号，跳到 S2 的出口）、
+`self._set_status`（状态栏那一行的唯一出口，「为当前文档建向量」的回回执到这里）。
 
 搜索编排（`_do_search` / `_do_keyword_search` / `_do_semantic_search`）**留在页面里**：
 一次查询要同时写中栏表、状态栏与这一栏三处状态，拆开就是两边各拿一半。
@@ -24,6 +25,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.ui.library_rows import DOC_ID_COLUMN, detail_lines
+from pdfarchiver.ui.semantic_state import absent_or_original, apply_state
 from pdfarchiver.ui.tier import RIGHT_COLUMN_WIDTH, FloatablePanel
 
 
@@ -121,6 +123,19 @@ class LibraryHitsMixin:
         self.ai_classify_btn.setToolTip("按文件名与所在目录名推荐分类（不读文档正文）")
         self.ai_classify_btn.clicked.connect(self._on_ai_classify_clicked)
         self.right_panel.body.addWidget(self.ai_classify_btn)
+
+        # 「为当前文档建向量」（轮五十一 Q2 甲·丁-2）：就地点名**这一份**，走
+        # `ctx.vector.request_vectors` 那条唯一入口 —— 它只排队、不碰模型，真活由 worker 领；
+        # 但它是语义入口之一，所以模型不在本机时跟着谓词一起灰（Q1 乙）。不设自动触发。
+        self.vector_btn = QtWidgets.QPushButton("为当前文档建向量")
+        self.vector_btn.setObjectName("searchBtn")
+        self.vector_btn.setEnabled(False)
+        self.vector_btn.setToolTip("把这一份的正文排进向量队列，等索引 worker 建向量（不会自动开工）")
+        self.vector_btn.clicked.connect(self._on_vector_requested)
+        self.right_panel.body.addWidget(self.vector_btn)
+
+        apply_state(self.ai_classify_btn, ready=self.ctx.semantic_ready)
+        apply_state(self.vector_btn, ready=self.ctx.semantic_ready)
 
         self.ai_result_label = QtWidgets.QLabel("")
         self.ai_result_label.setWordWrap(True)
@@ -316,17 +331,36 @@ class LibraryHitsMixin:
             suggestions = self.ctx.ai_classify.suggest_for_doc(self._selected_doc_id)
         except Exception as exc:
             set_text_role(self.ai_result_label, "danger")
-            self.ai_result_label.setText(f"AI 分类不可用：{exc}")
-            self.ai_classify_btn.setEnabled(True)
+            # 轮五十一 Q3 乙：模型缺席只上一句人话，后端原文逐字进日志；其余失败照旧回原文。
+            self.ai_result_label.setText(absent_or_original(exc, prefix="AI 分类不可用："))
+            # 收回去时不能写 `True`：那等于界面自己判定"模型在了"，把 Q1 乙那一个谓词顶掉。
+            self.ai_classify_btn.setEnabled(self.ctx.semantic_ready)
             return
         if not suggestions:
-            # **ISSUES I84** ②：原先这句写「请先执行语义索引」，而产品里**没有**这个动作
-            # （`VectorStore.add*` 零产品调用方、`vector` 从不入队 —— **ISSUES I63** 丙/丁），
-            # 把人引向一个不存在的按钮比说错更费时间。只报后端此刻真的知道的那两件事。
+            # **ISSUES I84** ②：原先这句写「请先执行语义索引」，指向的是当时产品里**不存在**的动作。
+            # 那个动作自轮五十一 丁-2 起真的有了（就是下面那颗「为当前文档建向量」），
+            # 但这里仍只报后端此刻真的知道的那两件事 —— 按钮就在同一栏里，不在这儿二次指路。
             self.ai_result_label.setText("暂无向量数据：向量库里还没有向量，或相似度低于阈值")
         else:
             lines = ["AI 推荐分类："]
             for s in suggestions:
                 lines.append(f"  · {s.category_name}（相似度 {s.score:.2f}）")
             self.ai_result_label.setText("\n".join(lines))
-        self.ai_classify_btn.setEnabled(True)
+        self.ai_classify_btn.setEnabled(self.ctx.semantic_ready)
+
+    def _on_vector_requested(self) -> None:
+        """「为当前文档建向量」（轮五十一 Q2 甲·丁-2）：只点名**当前这一份**，只排队。
+
+        回执一律取后端 `VectorRequest.describe()`，界面不重拼（**ISSUES I60** 同一条纪律）；
+        新增 0 条时染红 —— 「按了但没进队列」必须在屏幕上看得见，与 OCR 那颗同一口径。
+        排队失败不走 `absent_or_original`：`request_vectors` 只碰队列、不碰模型，
+        它抛什么都该照原文上屏。
+        """
+        if self._selected_doc_id is None:
+            return
+        try:
+            request = self.ctx.vector.request_vectors([self._selected_doc_id])
+        except Exception as exc:  # noqa: BLE001 - 边界：排队失败必须看得见
+            self._set_status(f"向量排队失败：{exc}", danger=True)
+            return
+        self._set_status(request.describe(), danger=request.enqueued == 0)

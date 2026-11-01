@@ -495,10 +495,16 @@ class ArchiveService:
 
         if not src.exists():
             raise FileNotFoundError(f"源文件不存在：{src}")
+        if dst.exists():
+            # 「目标已有就跳过、绝不覆盖」在 `plan()` 里判过一次（**D-042** 甲），这里判的是**执行时**：
+            # 批次从预览到真正搬，中间隔着队列积压，那段时间里目标位可能被任何人放了一份文件。
+            # 只信 plan() 的那一次判断，`shutil.move`/`copy2` 会把别人那份直接盖掉 —— 而这是
+            # 撤销也拿不回来的那种（**ISSUES I124**）。归档与撤销两条向都从这一个函数走（`:415`）。
+            raise FileExistsError(f"目标位置已经有文件，不覆盖：{dst}")
         src_sha = self._sha256(src)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        # plan() 会跳过目标已存在的项，所以这里正常是 False；真有人在这两步之间把文件
-        # 放到目标位上时，那份不是我们造的，回滚不许删它。
+        # 上面那条 `dst.exists()` 已经挡住"队列积压期间目标被占"；这一行兜的是**检查与搬运之间**
+        # 那一瞬 —— 真在那一瞬被放了文件，那份不是我们造的，回滚不许删它。
         dst_existed = dst.exists()
 
         # G19：跨盘移动绝不先删源

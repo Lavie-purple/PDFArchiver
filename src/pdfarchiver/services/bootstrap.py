@@ -116,6 +116,10 @@ class AppContext:
     （AGENTS.md），现在只有测试与门禁通过它排队。装配无条件进行、引擎惰性加载，
     没装可选层的应用照旧能扫描与全文检索。
 
+    `semantic_ready` 是**建窗时的一次快照**（值来自嵌入层「模型文件在不在场」，不加载 session）：
+    界面按它把语义入口定亮/定灰，不重算、不轮询、运行中不改判 —— 放了模型要重启才生效，
+    这一条口径只有一个出口（轮五十一 Q1 乙／Q4 乙）。
+
     `watch` / `queue` 在 `start_background()` 之前是 None —— 阶段 1 的界面测试
     和"只看库"的调用方不该被起线程这件事拖住，也不该在没人要扫描时占着两个 worker。
     """
@@ -154,6 +158,7 @@ class AppContext:
     events: EventBuffer
     bootstrap_seconds: float
     schema_version: int
+    semantic_ready: bool
     watch: WatchManager | None = None
     queue: WorkQueue | None = None
     _closed: bool = field(default=False, repr=False)
@@ -351,4 +356,5 @@ def bootstrap(explicit_data_dir: str | Path | None = None,
                       ocr=ocr, vector=vector, archive=archive,
                       dedup=dedup, backup=backup, collection=collection, export=export,
                       patrol=patrol, events=events, db_check=db_check,
-                      bootstrap_seconds=elapsed, schema_version=schema_version)
+                      bootstrap_seconds=elapsed, schema_version=schema_version,
+                      semantic_ready=embedding.model_ready())

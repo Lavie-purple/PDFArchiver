@@ -25,8 +25,34 @@ from pdfarchiver.services.bootstrap import AppContext, bootstrap  # noqa: E402
 
 @pytest.fixture
 def data_root(tmp_path: Path) -> Path:
-    """一个干净的数据根目录（还不存在，由 bootstrap 自己建）。"""
+    """一个干净的数据根目录（还不存在，由 bootstrap 自己建）。
+
+    顺带的后果（轮五十一抓到的）：临时目录里**不会有语义模型**，所以整套测试默认跑在
+    "模型不在场"那一档。这正好是开发机看不见的状态 —— 但也意味着凡是断言"入口能用"的
+    用例都必须自己造在场，见 `ctx_ready` / `window_ready`。
+    """
     return tmp_path / "appdata"
+
+
+def plant_model_files(data_root: Path) -> Path:
+    """把"语义模型在本机"造出来，返回模型目录。**必须在 bootstrap 之前调用。**
+
+    为什么是 0 字节：`model_ready()` 的判据就是那两条 `exists()`（与 `_ensure_session`
+    同源），它不读内容；真模型 22.8MB，塞进每个用例的 tmp 目录只为点一次按钮，代价不成
+    比例。要真推理的用例走的是另一条路（`test_embedding_service.py` 自己指向
+    `.probe_work/models/` 那份），这里不搬。
+
+    路径不许在这里自己拼第二遍：取 `EmbeddingService` 的类常量，与产品那一份同一个口径。
+    """
+    from pdfarchiver.config.paths import AppPaths
+    from pdfarchiver.semantic.embedding import EmbeddingService
+
+    model_dir = AppPaths.resolve(data_root).models_dir / EmbeddingService.MODEL_NAME
+    for relative in (EmbeddingService.MODEL_FILE, EmbeddingService.TOKENIZER_FILE):
+        leaf = model_dir / relative
+        leaf.parent.mkdir(parents=True, exist_ok=True)
+        leaf.write_bytes(b"")
+    return model_dir
 
 
 def settle(qapp, rounds: int = 6) -> None:
@@ -103,6 +129,33 @@ def ctx(data_root: Path):
         yield context
     finally:
         context.shutdown()
+
+
+@pytest.fixture
+def ctx_ready(data_root: Path):
+    """与 `ctx` 同一件事，唯一差别：先造出模型文件再装配 ⇒ `semantic_ready` 为真。
+
+    存在的理由是 Q1 乙「界面只在建窗时问一次」：装配之后再放文件不会让已建好的上下文变绿，
+    所以"在场"这一档只能从 bootstrap 之前分叉，没有别的缝。
+    """
+    plant_model_files(data_root)
+    context = bootstrap(data_root)
+    try:
+        yield context
+    finally:
+        context.shutdown()
+
+
+@pytest.fixture
+def window_ready(qapp, ctx_ready):  # 与 `window` 同构，只是上下文换成"模型在场"那一档
+    """放在 conftest 而不是某个测试文件里：在场档的用例横跨 S1 与 S9 两屏，抄两份就会漂。"""
+    from pdfarchiver.ui.main_window import MainWindow
+
+    w = MainWindow(ctx_ready, cold_start_seconds=0.42)
+    w.show()
+    yield w
+    w.close()
+    ctx_ready.shutdown()
 
 
 @pytest.fixture

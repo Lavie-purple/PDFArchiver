@@ -65,6 +65,7 @@ from pdfarchiver.ui.library_hits import LibraryHitsMixin, set_text_role
 from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
                                          write_document_rows)
 from pdfarchiver.ui.ocr_batch_panel import OcrBatchPanel
+from pdfarchiver.ui.semantic_state import absent_or_original, apply_state
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
 from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 
@@ -123,6 +124,8 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         # 语义搜索切换
         self.semantic_toggle = QtWidgets.QCheckBox("语义搜索")
         self.semantic_toggle.setToolTip("使用 AI 向量匹配，而非关键词匹配")
+        # 模型不在本机 = 按不动 + 一句话说清"现在做不了"和"放好要重启"（轮五十一 Q1 乙／Q4 乙）。
+        apply_state(self.semantic_toggle, ready=ctx.semantic_ready)
         search_lay.addWidget(self.semantic_toggle)
 
         self.search_btn = QtWidgets.QPushButton("搜索")
@@ -485,13 +488,14 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         except Exception as exc:
             # **ISSUES I84** ③：模型不在场时服务层抛 `FileNotFoundError`（原文逐字在那条台账里），
             # 而这里原先没有 `except` ⇒ 异常穿出 Qt 槽，屏幕上**什么都不发生**（表格停在上一状态），
-            # 原文只进 `crash.log`。落点与 AI 分类那条同一口径：染红 + 后端原文，界面不重述原因。
+            # 原文只进 `crash.log`。落点与 AI 分类那条同一口径（轮五十一 Q3 乙取代旧的「原文上屏」）：
+            # 模型缺席只上一句人话、原文逐字进日志；其余失败照旧回后端原文。
             # 表也要清空：状态栏那一行是「表里这些行是什么」的唯一口径（**ISSUES I60**），
             # 留着上一批行配一句失败 = 两个答案。
             self._current_docs = []
             self._populate_table([])
             self._clear_hits()
-            self._set_status(f"语义搜索失败：{exc}", danger=True)
+            self._set_status(absent_or_original(exc, prefix="语义搜索失败："), danger=True)
             return
 
         if not results:
@@ -566,6 +570,7 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         if row < 0:
             self.detail_view.clear()
             self.ai_classify_btn.setEnabled(False)
+            self.vector_btn.setEnabled(False)
             self.ocr_btn.setEnabled(False)
             self.ai_result_label.setText("")
             self._selected_doc_id = None
@@ -576,7 +581,9 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
             return
         doc_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
         self._selected_doc_id = doc_id
-        self.ai_classify_btn.setEnabled(True)
+        # 选中一份 ≠ 能用语义：亮回去只认装配时那一个谓词，不在这里替模型说话（轮五十一 Q1 乙）。
+        self.ai_classify_btn.setEnabled(self.ctx.semantic_ready)
+        self.vector_btn.setEnabled(self.ctx.semantic_ready)
         self.ocr_btn.setEnabled(True)
         self.ai_result_label.setText("")
         # 轮四十二 ①：命中列表没有可用选中时，跳转按钮退到"打开这份文档"。
@@ -631,7 +638,8 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         份数与跳过理由只有后端一个出口（`OcrRequest.describe()` / `OcrPlan.describe()` 与 `SKIP_LABELS`），
         界面不许自己数第六类理由（**ISSUES I67** 销账判定②／**ISSUES I60** 同一条纪律）。
         新增 0 条时染红：「按了但没进队列」必须在屏幕上看得见（销账判定①③）。
-        排队失败的落点与语义搜索那条同一口径（**ISSUES I84** ③）：染红 + 后端原文，界面不重述原因。
+        排队失败仍按 **ISSUES I84** ③ 的原始口径：染红 + 后端原文，界面不重述原因
+        （语义那三处自轮五十一 Q3 乙起改成「一句上屏、原文逐字进日志」，OCR 这条不在其内）。
         """
         named = self._selected_doc_ids()
         if len(named) > 1:

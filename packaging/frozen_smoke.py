@@ -149,17 +149,65 @@ def console_encoding() -> str:
     return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
 
 
-def close_gracefully(proc: subprocess.Popen[str]) -> tuple[bool, float]:
-    """先走 WM_CLOSE（等价于用户点 ×），拿不到优雅退出才强杀。"""
+def close_gracefully(proc: subprocess.Popen[str]) -> tuple[bool, float, int]:
+    """先走 WM_CLOSE（等价于用户点 ×），拿不到优雅退出才强杀。
+
+    返回 `(优雅退出, 耗时, 收到 × 的顶层窗数)` —— 窗数必须一起交出去：**「关不掉」这件事
+    有两种成因，只看 bool 分不开**（窗口根本没找到 = 0，和找到了但没关成 = ≥1）。
+    G20 那场红就红在这个分不开上（**ISSUES I127**）。
+
+    **轮五十一 I127 甲**：`taskkill /PID` 只发一条 WM_CLOSE，而干净目录首启时首启引导是
+    **应用级模态窗**，`QWidget::close()` 在 `QApplication::activeModalWidget()` 非空时**直接
+    拒绝关闭**（Qt 自己的守卫，不是 Windows 的），所以那条 × 打到哪一扇都是白打 —— 于是走
+    30s 超时 + 强杀分支，`graceful=False`。改法：进程内自己 EnumWindows 找齐这个 pid 的可见
+    顶层窗，**带 owner 的先发**（模态对话框挂主窗作 owner）：队列按投递顺序消费，先让模态窗
+    退出 `exec()`，随后主窗那条到达时 `activeModalWidget` 已空，才关得动。
+    判定串 `ready and graceful and proc.returncode == 0` **不动**，改的只是关窗顺序。
+    """
     t0 = time.perf_counter()
-    subprocess.run(["taskkill", "/PID", str(proc.pid)], capture_output=True, text=True,
-                   encoding=console_encoding(), errors="replace")
+    windows = _post_wm_close_to_toplevels(proc.pid)
     try:
-        return proc.wait(timeout=30) == 0, round(time.perf_counter() - t0, 2)
+        return proc.wait(timeout=30) == 0, round(time.perf_counter() - t0, 2), windows
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=10)
-        return False, round(time.perf_counter() - t0, 2)
+        return False, round(time.perf_counter() - t0, 2), windows
+
+
+def _post_wm_close_to_toplevels(pid: int) -> int:
+    """给这个 pid 的每个可见顶层窗各发一条 WM_CLOSE，**带 owner 的先发**。
+
+    只用 Windows 原生 API（ctypes + user32），不引新依赖。排序键取 `-has_owner`：
+    带 owner 的（模态对话框）排前面先投，主窗后投 —— 顺序反了主窗那条会被 Qt 的
+    「有活动模态窗就不许关」挡掉，整扇窗一扇都关不上。
+    返回发出的条数，让上层能判断"到底有几扇窗等着被关"。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    WM_CLOSE = 0x0010
+    GW_OWNER = 4
+    found: list[tuple[int, int]] = []  # (has_owner:0/1, hwnd)
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        win_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(win_pid))
+        if win_pid.value != pid:
+            return True
+        owner = user32.GetWindow(hwnd, GW_OWNER)
+        found.append((1 if owner else 0, int(hwnd)))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_callback), 0)
+    found.sort(key=lambda w: (-w[0], w[1]))
+    for _, hwnd in found:
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+    return len(found)
 
 
 def force_kill_tree(proc: subprocess.Popen[str]) -> tuple[bool, str]:
@@ -328,13 +376,14 @@ def phase_first_launch(exe: Path, data_dir: Path, run_dir: Path) -> list[Row]:
     sampler = Sampler(proc).start()
     ready, ready_seconds = wait_for_window_ready(data_dir, marker, FIRST_READY_TIMEOUT)
     reading = sampler.stop()
-    graceful, close_seconds = close_gracefully(proc)
+    graceful, close_seconds, windows = close_gracefully(proc)
     events = state_events(data_dir, marker)
     names = [e["event"] for e in events]
 
     rows.append(Row("G20 冻结产物在真桌面（非 offscreen）起得来、点 × 关得掉",
                     ready and graceful and proc.returncode == 0,
                     f"退出码 {proc.returncode}｜优雅关闭={graceful}（{close_seconds}s）｜"
+                    f"点给 {windows} 扇顶层窗｜"
                     f"等窗口 {ready_seconds}s（window.ready {'到' if ready else '未到'}）｜{reading}"))
 
     tree = {"data/catalog.db": (data_dir / "data" / "catalog.db").is_file(),

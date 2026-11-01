@@ -669,3 +669,69 @@ class TestI104RollbackWhenSourceLocked:
         assert "dst_verified" in events and "src_removed" not in events, \
             f"删源失败却写了 src_removed，journal 与磁盘对不上：{events}"
         assert "item_rollback" in events, f"回滚没留下痕迹：{events}"
+
+
+class TestExecuteTimeConflictRefused:
+    """**ISSUES I124**：「目标已有就跳过、绝不覆盖」（**D-042** 甲）必须在**执行时**再判一次。
+
+    `plan()` 判的是"预览那一刻"，批次却停在 `previewed` 等 worker 领 —— 队列积压、界面挂着
+    没点执行、或者人在另一个窗口往目标目录放了东西，这段时间里目标位完全可以凭空多出一份
+    文件。原先 `_execute_item` 只重查了 `src.exists()` 却没重查 `dst.exists()`，
+    `shutil.move` / `copy2` 会把那份**别人的**文件直接盖掉，而 D-042 甲 的默认处置写的是跳过。
+
+    这一族判的是同一件事的两个方向：归档与撤销共用 `_execute_item`（`:415` 一次领
+    `("archive", "undo")`），所以一处改、两向都要有断言 —— 只测正向的话，撤销方向盖掉
+    原位新文件这条路照样通着。
+    """
+
+    FOREIGN = b"queue backlog put a real file here, not ours"
+
+    def test_排队期间目标被占_该项失败且不盖别人的文件(self, env):
+        doc_id = _seed(env, "报销B.pdf", category="财务")
+        op = env["svc"].submit([doc_id], str(env["dst_dir"]), DEFAULT_TEMPLATE)
+        item = env["ops"].list_items(op.id)[0]
+        assert item.state == "pending", "用例前提：预览时目标位是空的，所以这项本来要搬"
+
+        # 预览之后、执行之前 —— 队列积压那段时间里目标位被人放了文件
+        dst = Path(item.dst_path)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(self.FOREIGN)
+
+        final = _run(env, op.id)
+        assert final.status == "failed", "目标被占却把整批算成成功 = 伪装成功"
+        after = env["ops"].list_items(op.id)[0]
+        assert after.state == "failed"
+        assert "目标位置已经有文件" in (after.error or ""), \
+            f"报错没点名是哪一条规则拦的：{after.error!r}"
+        assert dst.read_bytes() == self.FOREIGN, "把别人的文件盖掉了"
+        assert (env["src_dir"] / "报销B.pdf").exists(), "拒绝覆盖时源文件必须还在原位"
+
+    def test_撤销方向同一条规则(self, env):
+        """撤销的"目标"就是文件的原位置 —— 原位这期间长出新文件时同样不许盖。"""
+        doc_id = _seed(env, "周报C.pdf", category="财务")
+        op = env["svc"].submit([doc_id], str(env["dst_dir"]), DEFAULT_TEMPLATE)
+        moved_item = env["ops"].list_items(op.id)[0]
+        archived = Path(moved_item.dst_path)
+        original = Path(moved_item.src_path)
+
+        assert _run(env, op.id).status == "done"
+        assert not original.exists() and archived.exists(), "用例前提：正向已经搬成"
+
+        undo_op, excluded, reasons = env["svc"].submit_undo(op.id)
+        assert excluded == 0, f"撤销计划本不该排除任何项：{reasons}"
+        undo_item = env["ops"].list_items(undo_op.id)[0]
+        assert Path(undo_item.src_path) == archived and Path(undo_item.dst_path) == original, \
+            "反向那一项的两端该正好是正向的倒影（库里的路径串两种分隔符写法都出现过，比 `Path` 才稳）"
+
+        # 反向批次已经排队，此时原位置上出现一份不是我们的文件
+        original.write_bytes(self.FOREIGN)
+
+        _run(env, undo_op.id)
+        after = env["ops"].list_items(undo_op.id)[0]
+        assert after.state == "failed"
+        assert "目标位置已经有文件" in (after.error or ""), \
+            f"撤销方向没走同一条拒绝：{after.error!r}"
+        assert original.read_bytes() == self.FOREIGN, "撤销把人放在原位的新文件盖掉了"
+        assert archived.exists(), "拒绝撤回时归档位置那份必须还在 —— 撤不回也不能凭空少一份"
+        assert env["ops"].get_operation(op.id).status != "undone", \
+            "撤销一项没成，原批次不许标成已撤销"

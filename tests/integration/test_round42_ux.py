@@ -251,8 +251,11 @@ def test_空分类在状态栏指真实的写入口(window, qapp) -> None:
 # —— ⑨⑩⑪ 其它屏空态指路 ————————————————————————————————————————————————
 
 def test_S9_空态提示在场且区分向量未建(window, qapp) -> None:
-    """⑨：答案区空着时给一句"怎么用"；向量没建时多说半句"等索引完成会自动建"
-    —— 指路只能指真实存在的入口（向量没有手动建的按钮，是队列自动跑的）。"""
+    """⑨：答案区空着时给一句"怎么用"；向量没建时多说半句"要点名才会建"。
+
+    本条只钉"空态在场 + 两档文案可区分"；那句指路的**真假**由
+    `test_model_absent_entries.py::test_S9空态那句不再承诺自动建立` 钉（轮五十一 丁-2 之前
+    这里写的是"等索引完成会自动建"，而产品里没有那条自动路径）。"""
     page = _page_at(window, qapp, "ask")
     assert page.empty_hint.isVisible() and page.empty_hint.text(), "空态提示该在场"
     assert "提问" in page.empty_hint.text()

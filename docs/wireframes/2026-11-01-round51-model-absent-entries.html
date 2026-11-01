@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>轮五十一线框 · 模型不在场时那三个入口 + 向量由谁建 · 2026-11-01</title>
+<style>
+  :root { --ink:#111; --mid:#666; --faint:#b0b0b0; --hair:#dcdcdc; --wash:#f4f4f4; --bg:#fff; }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 1160px; margin: 40px auto 80px; padding: 0 28px; line-height: 1.65; font-size: 14px; }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 24px; }
+  header h1 { margin: 0 0 6px; font-size: 25px; letter-spacing: 1px; }
+  header .sub { color: var(--mid); font-size: 13px; }
+  nav.toc { border: 1px solid var(--ink); padding: 10px 14px; margin: 18px 0 32px; font-size: 13px;
+            display: flex; flex-wrap: wrap; gap: 6px 24px; }
+  nav.toc a { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--mid); }
+  section { margin-top: 46px; }
+  section > h2 { font-size: 20px; border-left: 4px solid var(--ink); padding-left: 10px; margin: 0 0 6px; }
+  section > .why { color: var(--mid); font-size: 13px; padding-left: 14px;
+                   border-left: 3px solid var(--faint); margin: 8px 0 20px; }
+  section > .why b { color: var(--ink); }
+  article.option { border: 1px solid var(--ink); padding: 16px 18px 14px; margin: 0 0 22px; }
+  article.option h3 { margin: 0 0 4px; font-size: 16px; }
+  article.option .tag { font-size: 12px; color: var(--mid); }
+  pre.box { border: 1px solid var(--hair); background: var(--wash); padding: 10px 12px;
+            overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 12px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 4px; font-size: 13px; }
+  th, td { border: 1px solid var(--hair); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--wash); font-weight: 600; }
+  ul { margin: 8px 0 4px; padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  .rec { border-color: var(--ink); border-width: 2px; }
+  .rec h3::after { content: "  ← 推荐"; font-size: 12px; color: var(--mid); font-weight: 400; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .no { color: var(--mid); }
+</style>
+</head>
+<body>
+<header>
+  <h1>轮五十一线框 · 模型不在场时那三个入口 · 外加一条新账（向量由谁建）</h1>
+  <div class="sub">
+    黑白线框，<b>禁配色 / 禁图标 / 禁真实文案</b> —— 框里的中文只表示"这里放什么种类的东西"；
+    凡出现成句的中文，都写在「措辞候选」表里并标<b>未定</b>，不写进实现。<br>
+    按 <b>1280</b> 档画，另给 <b>1024</b> 档（D-039 地板）的降级说明。<br>
+    闸门：AGENTS.md「界面线框未经我逐屏确认前，禁止写界面代码」。<b>本页零界面代码改动</b>，勾完才落地。<br>
+    起因：<b>ISSUES I84</b> 乙（语义搜索勾选框在模型缺席时该不该置灰）。读码时发现它不是孤例 ——
+    同一只模型挂着<b>三个</b>入口，按「同类问题不许逐个打补丁」一次摆开。
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#facts">§0 先摆事实（现读，无一条是估的）</a>
+  <a href="#two">§1 为什么这是两件事</a>
+  <a href="#jia">§2 甲 · 什么都不改（现状基准）</a>
+  <a href="#yi">§3 乙 · 三处入口按「模型在场」置灰（推荐）</a>
+  <a href="#bing">§4 丙 · 不置灰，顶部一处状态条</a>
+  <a href="#ding">§5 丁 · 乙 + 把「建向量」做成显式入口（回应 §0 最后三条）</a>
+  <a href="#compare">§6 四案对照</a>
+  <a href="#q">§7 编号决策项（等勾选）</a>
+  <a href="#never">§8 绝对不做（防蔓延）</a>
+</nav>
+
+<section id="facts">
+  <h2>§0 先摆事实（2026-11-01 现读）</h2>
+  <div class="why">取数方式：直接读产品源文件 + 真数据根 <code>stat</code> + 本轮恢复探针的日志。
+    <b>没测过的写在最后一行，不编。</b></div>
+  <table>
+    <tr><th>事实</th><th>出处（可 grep）</th></tr>
+    <tr><td>模型在场与否，产品里<b>只有一个地方知道</b>：<code>_ensure_session()</code> 里两条
+      <code>if not …exists()</code>（缺模型抛一条 <code>FileNotFoundError</code>，缺分词器抛另一条，
+      两条都带「请先下载 … 到 …」＋绝对路径）。<b>公开的「模型在不在」谓词不存在</b> ——
+      这个类的公开面只有 <code>embed</code> / <code>embed_single</code> / <code>close</code></td>
+      <td><code>src/pdfarchiver/semantic/embedding.py:40-57</code>、<code>:92 / :113 / :117</code></td></tr>
+    <tr><td><b>同一只模型挂着三个入口</b>（装配层只造一份 <code>EmbeddingService</code>，三家共用）：
+      ① S2「语义搜索」勾选框 → <code>ctx.semantic_search.search()</code>；
+      ② S2「AI 推荐分类」按钮 → <code>embed_single()</code>；
+      ③ S9 提问页「提问」→ <code>qa.ask()</code> → <code>semantic.search()</code></td>
+      <td><code>services/bootstrap.py:288</code>（<code>embedding = EmbeddingService(…)</code>）、
+        <code>:295</code>、<code>:299</code>、<code>:305</code>；
+        <code>ui/pages/library_page.py:124-126 / :484</code>；
+        <code>ui/library_hits.py:118-123</code> + <code>ui/pages/library_page.py:579</code>（选中行才启用）；
+        <code>semantic/classify_service.py:102</code>；<code>semantic/qa_service.py:77</code></td></tr>
+    <tr><td>三处现在<b>都接住了</b>模型缺席的异常，不会崩，但<b>报错发生在动作之后</b>，
+      且把两段中文＋<code>C:\Users\…\models\bge-small-zh-v1.5\onnx\model_int8.onnx</code>
+      这种绝对路径原样吐进界面</td>
+      <td><code>library_page.py:477-524</code>（<code>_do_semantic_search</code> 的
+        <code>except Exception</code> → <code>_set_status(…, danger=True)</code>）；
+        <code>ask_page.py:_ask()</code> 的 <code>except Exception</code> →
+        <code>set_text_role(self.answer_label, "danger")</code></td></tr>
+    <tr><td><b>本机模型在场</b>，所以「置灰」这一态在开发机上默认看不见；要证伪必须临时改名。
+      三档都得量：模型在场（本机现状）／模型不在场（改名）／干净目录首启</td>
+      <td>真数据根 <code>%LOCALAPPDATA%\PdfArchiver\models\</code> 的 <code>ls</code> 读数</td></tr>
+    <tr><td>模型目录里<b>没有 LICENSE 文件</b> —— 「放模型」这件事在产品里没有终点</td>
+      <td>D-037 未了项；本轮 <code>ls</code> 现读</td></tr>
+    <tr><td><b>产品里没有任何一条用户走得通的路径会排「建向量」的任务。</b>本轮 <code>grep</code> 现读：
+      <code>src/pdfarchiver</code> 下入队调用共 <b>十处</b>（<code>archive</code>×2、<code>ocr</code>×1、
+      <code>patrol</code>×2、<code>scan_service</code>×3、<code>vector</code>×1、<code>dedup</code>×1）——
+      <b>那一处 vector 入队是存在的</b>，但它整个躲在 <code>request_vectors()</code> 里（见下一行），界面没人调得到。
+      队列 <code>KINDS</code> 里 <code>"vector"</code> 是合法的、<code>bootstrap</code> 里处理器也注册了 ——
+      <b>缺的不是生产端代码，是"谁按得下去"</b></td>
+      <td><code>grep -rnE "enqueue\\(|enqueue_many\\(" src/pdfarchiver</code>（十三处命中：除去 <code>jobs.py:59</code>
+        与 <code>:85</code> 两个定义、<code>ocr_batch_panel.py:161</code> 那个同名槽函数，
+        <b>真正的入队调用是十处</b>，含 <code>services/vector_service.py:155</code>）；
+        <code>db/repositories/jobs.py:26</code>；<code>services/bootstrap.py:172</code></td></tr>
+    <tr><td><code>request_vectors()</code>（<code>vector_service.py:18</code> 的注释自己写着「<code>request_vectors(doc_ids)</code> 是唯一入口」）的调用方
+      <b>只有 <code>scripts/rescan_roots.py:169</code>（命令行维护脚本，带 <code>--apply</code> 才写）与测试文件</b>；<code>ctx.vector</code> 在 <code>ui/</code> 下<b>零引用</b>；
+      <code>index_service.py</code> 里 "vector" 出现 <b>0 次</b></td>
+      <td><code>grep -rn "request_vectors" src tests scripts</code>；<code>grep -rni vector src/pdfarchiver/services/index_service.py</code></td></tr>
+    <tr><td>界面上已经有一句<b>替后端许了愿</b>的文案：S9 空态在「向量 未建」时写「索引完成后会自动建立」。
+      按上两条，索引不会建 —— 这句是 <b>ISSUES I31</b> 同族（文案替后端说后端没说过的话）</td>
+      <td><code>ui/pages/ask_page.py:178-190</code> <code>_update_empty_hint()</code></td></tr>
+    <tr><td><b>真库现读，缺口已经在数字上</b>：<code>text_pages</code> 1,977,962 行（有字 1,977,956｜0 字 6），
+      <code>vector_meta</code> 1,969,289 行 ⇒ 没有向量的页 <b>8,673 行／985 份</b>，其中<b>有正文可建的
+      8,667 行／984 份</b>（合计 944,252 字，单页最大 4,707 字）；<code>vector_meta</code> 里指向不存在正文页的行
+      = <b>0</b>（反向对账，所以这不是 <b>ISSUES I111</b> ⑥ 那种死行形状）</td>
+      <td>只读实测 <code>.probe_work/u51_vector_gap.log</code>（<code>?mode=ro&amp;immutable=1</code>，未写一行）；
+        同一个基数在 <code>.probe_work/u51_restore_e2e.log</code> 的 211.0s／451.2s／1622.8s 三段各读到一次，完全一致</td></tr>
+    <tr><td class="no">没测过的：三处入口在真机首启（无模型）下的实际截图；
+      勾选框置灰后用户会不会以为是坏了 —— 这两条都不构成上面任何一条结论的前提</td>
+      <td class="no">—</td></tr>
+  </table>
+</section>
+
+<section id="two">
+  <h2>§1 为什么这是两件事，不能捆在一起勾</h2>
+  <div class="why">
+    <b>第一件事（I84 乙）：入口的形状。</b>模型不在场时，那三个该能点的入口长什么样 ——
+    纯界面问题，改法在下面甲/乙/丙三案里选。<br>
+    <b>第二件事（新账，暂记 I125）：向量由谁建。</b>这是<b>后端有没有一条路径</b>的问题 ——
+    把界面改得再漂亮，8,667 页有正文的也不会自己长出向量；反过来，只补一条入队路径，不动界面也能收工
+    （S9 那句假承诺改写成实话即可）。<br>
+    分开的实际后果：<b>乙 落地不需要 I125 一起定案</b>；I125 若定成「产品就该由人点名」，
+    那才需要第四个入口，于是才有丁。两件事各自有编号项（§7 的 Q1 与 Q2），可以只勾一条。
+  </div>
+</section>
+
+<section id="jia">
+  <h2>§2 甲 · 什么都不改（把现状钉成基准）</h2>
+  <div class="why">甲不是「放着不管」，是<b>把现状写成断言</b>：三处入口照旧可点，
+    模型缺席时把后端原文显示出来。好处是零新口径；代价见本节末。</div>
+  <article class="option">
+    <h3>三处入口的现状（一次画全，便于和乙对照）</h3>
+    <div class="tag">1280 档 · S2 检索区 + S2 右栏 + S9 提问页</div>
+<pre class="box">┌ S2 ──────────────────────────────────────────────────────────────────┐
+│ ┌ 检索内容（可输入）───────────────────────────┐ ┌ 勾选 ┐ ┌ 按钮 ┐ ┌ 按钮 ┐ │
+│ └──────────────────────────────────────────────┘ └──────┘ └──────┘ └──────┘ │
+│ ← 勾选框不区分模型在场与否，永远可勾                                          │
+├ S2 右栏（有结果才出现）──────────────────────────────────────────────────────┤
+│ ┌ 按钮：对当前行做推荐 ┐                                                    │
+│ └──────────────────────┘  ← 只在选中行时启用，与模型无关                      │
+├ S9 ──────────────────────────────────────────────────────────────────┤
+│ 标签 ┌ 输入（可输入）──────────────────────────────┐ ┌ 按钮 ┐  读数      │
+│      └──────────────────────────────────────────────┘ └──────┘ 「已建/未建」│
+│ ┌ 空态引导（整段占位文案）────────────────────────────────────────────┐ │
+│ │  …「未建」那一档写着一句后端没做的事（§0 第 8 条）                   │ │
+│ └────────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────┘
+
+点下去之后（三处同构）：
+  后端 FileNotFoundError（两段中文 + 绝对路径）
+    → 界面 except Exception → 一行红字/红底段落，原文照录</pre>
+    <ul>
+      <li><b>好处</b>：不新增口径、不动装配、不新增控件；报错是<b>真原文</b>，
+        对能自己放模型的人来说那句「请先下载 … 到 …」就是可执行的指引。</li>
+      <li><b>代价</b>：三个入口都能点出一条带绝对路径的长红字；「语义搜索」勾选框在
+        根本没有向量的库上勾了也只是换一条红字；S9 那句假承诺继续留着。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="yi">
+  <h2>§3 乙 · 三处入口按「模型在场」置灰，指路只写一处</h2>
+  <div class="why">形状：把 <code>_ensure_session()</code> 里那两条 <code>exists()</code> 升成
+    <b>这只类唯一的公开谓词</b>（暂名 <code>model_ready()</code>），三处入口都只问它 ——
+    <b>判定一处、消费三处</b>，与 <b>ISSUES I123</b> 的 <code>snapshot_paths()</code> 同一种收敛。
+    界面<b>只在建窗时问一次</b>：放模型要重启才生效，不做热探测（理由见本节末「为什么不轮询」）。</div>
+
+  <article class="option rec">
+    <h3>S2 检索区：两态并排（差异只有勾选框本身）</h3>
+    <div class="tag">1280 档 · 上=模型在场（本机现状，与甲完全相同）／下=不在场</div>
+<pre class="box">在场（现状不变，零回归风险）
+┌ ┌ 输入（可输入）──────────────────────────┐ ┌ ☑ 勾选 ┐ ┌ 按钮 ┐ ┌ 按钮 ┐ ┐
+  └─────────────────────────────────────────┘ └────────┘ └──────┘ └──────┘ └
+
+不在场（勾选框置灰，输入框与两个按钮一条不动）
+┌ ┌ 输入（可输入）──────────────────────────┐ ┌ ☒ 勾选 ┐ ┌ 按钮 ┐ ┌ 按钮 ┐ ┐
+  └─────────────────────────────────────────┘ └─ ─ ─ ─ ─┘ └──────┘ └──────┘ └
+                                          ↑ 鼠标停留处出「为什么不能用」一句
+  关键词那条通道（勾选框不勾时走的）照常 —— 置灰不该顺手废掉全文搜索</pre>
+  </article>
+
+  <article class="option rec">
+    <h3>S2 右栏 / S9 提问页：同一句判定，各自的形状</h3>
+<pre class="box">S2 右栏（按钮本来就有「没选中行 ⇒ 禁用」这一层）
+┌ 按钮：对当前行做推荐 ┐   禁用态的三层成因，tooltip 只说当前那一层：
+└─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     ① 没有当前行（现状已有）
+                            ② 模型不在场（本屏新增，优先级高于 ①）
+
+S9 提问页
+  标签 ┌ 输入（可输入）────────────────┐ ┌ 按钮 ┐  读数
+       └──────────────────────────────┘ └─ ─ ─┘  └ 「已建/未建」← 现读，不动
+  读数那一格已经把这屏的状态说完了：置灰「提问」+ 让那一格继续说实话
+  （不新增第五个控件，也不做第二个"状态"）
+
+绝对路径一律不上屏：那两段中文留在日志里，界面只说「语义模型不在本机」这一类。</pre>
+  </article>
+
+  <article class="option rec">
+    <h3>落地时须同时有的断言与坏法（先把话说明白，勾了才做）</h3>
+    <ul>
+      <li>断言：谓词一处（三处入口的置灰全部由它驱动，改名模型目录后三处一起变）；
+        在场时三处<b>行为与甲逐字节同</b>（防回归）；关键词通道不受影响。</li>
+      <li>坏法（每条单独注入、单独变红）：① 谓词在 UI 里重算一遍（口径第二份）；
+        ② 只改一处入口（另两处漏）；③ 置灰顺手把输入框也废了；
+        ④ 建窗后不重问 ⇒ 但也没写「需重启」；⑤ 绝对路径进界面。</li>
+      <li>三档实测：模型在场／改名后不在场／干净目录首启 —— 中间那档必须靠临时改名造出来，
+        改完逐字节还原。</li>
+    </ul>
+  </article>
+
+  <div class="why"><b>为什么不轮询、不热探测</b>：谓词若每次搜索都跑，就退回「点了才知道」；
+    若定时器跑，就多出一个后台口径。模型是<b>放文件</b>进来的，不是服务，重启本来就是它的生效方式。
+    <b>代价（如实）</b>：放好模型不重启，勾选框还灰着 —— 这一条必须写进指路文案，
+    不然置灰本身成了新的「替后端说后端没说过的话」。</div>
+</section>
+
+<section id="bing">
+  <h2>§4 丙 · 入口一律不改，顶部一处常驻状态条</h2>
+  <div class="why">形状：三个入口保持可点（等于甲），把「模型在不在」升成<b>窗口级的一处显示</b>，
+    只有一句话的位置，不区分是哪个入口。</div>
+  <article class="option">
+    <h3>状态条挂在哪（两个位置，差异是"占不占高度"）</h3>
+<pre class="box">丙-1 挂在标题轨（轮四十五 乙 那道 48px 轨）右侧 —— 不新增行高
+┌ 轨：导航标题 ············································ [状态：语义能力 开/关] ┐
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+
+丙-2 挂在状态栏（底部那行）—— 与已有的「上次读到」等同排
+┌ 状态栏：… ·············································· [状态：语义能力 开/关] ┐
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘</pre>
+    <ul>
+      <li><b>好处</b>：一处显示覆盖三个入口，界面不出现「有的灰有的亮」；
+        改的是显示不是可用性，回归面最小。</li>
+      <li><b>代价</b>：人还是会在模型缺席时点出那条带路径的红字 —— 丙治的是"不知道"，
+        不治"点了难受"；而且全站已经有一堆常驻读数，多一条要指明它与 S9
+        那格「向量 已建/未建」的关系（两个口径读同一件事 = <b>禁止多口径</b>）。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="ding">
+  <h2>§5 丁 · 乙 的形状 + 把「建向量」做成显式入口（回应 §0 第 6–9 条）</h2>
+  <div class="why">丁<b>只在 I125 定成「由人点名」时才需要</b>。若定成别的（见 Q2 的乙/丙），
+    丁整节作废，乙 单独落地。这里画的是<b>一个入口的最小形状</b>，不预设它落在哪一屏。</div>
+  <article class="option">
+    <h3>两种落法（差异是"谁来点名、点多少"）</h3>
+<pre class="box">丁-1 批量档：S7（监测与索引）加一行动作，对整个库补差集
+┌ S7 ────────────────────────────────────────────────────────┐
+│ …既有各行…                                                   │
+│ ┌ 行：语义向量   读数「1,969,289 / 1,977,962 页」 ┌ 按钮 ┐ ┐ │
+│ └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘ │
+│   按钮点了排入队，进度进已有的任务队列与操作日志，不新开面板      │
+
+丁-2 就地档：S2 选中行的右栏，与「AI 推荐分类」并排
+┌ 按钮：对当前行做推荐 ┐
+└──────────────────────┘
+┌ 按钮：为当前文档建向量 ┐  ← 点名范围 = 一份，走 request_vectors([doc_id])
+└────────────────────────┘</pre>
+    <ul>
+      <li>丁-1 的量级读数必须按<b>实测</b>写：全量嵌入实测 72.77 页/秒（<b>ISSUES I112</b>）
+        ⇒ <b>有正文可建的 8,667 页</b> ≈ <b>119 秒</b>；这句是可以直接印在行里的依据，不是猜的。</li>
+      <li>丁-2 与 <code>request_vectors</code> 现成的语义完全对齐（「只有点名的才建」是原设计），
+        但<b>每加一个新入口要先全站搜同功能入口</b> —— 搜过，现在<b>一个都没有</b>，
+        所以这条不构成重复入口。</li>
+      <li>两档共同点：<b>都不许自动跑</b>；都不新增进度面板（复用队列与操作日志）；
+        S9 那句空态文案随之改成实话（「有正文没向量的页数：N；建不建由你点名」）。</li>
+    </ul>
+  </article>
+</section>
+
+<section id="compare">
+  <h2>§6 四案对照</h2>
+  <table>
+    <tr><th>维度</th><th>甲 不改</th><th>乙 三处置灰（推荐）</th><th>丙 顶部状态条</th><th>丁 乙+建向量入口</th></tr>
+    <tr><td>点下去会不会吐绝对路径红字</td><td>会（三处）</td><td>不会（三处灰）</td><td>会</td><td>不会</td></tr>
+    <tr><td>口径份数</td><td>1（只在 <code>_ensure_session</code>）</td>
+      <td>1 处谓词 + 3 处消费</td><td>1 处谓词 + 1 处显示</td>
+      <td>1 处谓词 + 3 处消费 + 1 处入队</td></tr>
+    <tr><td>新增控件</td><td>0</td><td>0（只改可用性）</td><td>1 条常驻读数（与 S9 那格撞口径）</td><td>0 或 1（丁-2 多一颗按钮）</td></tr>
+    <tr><td>动的层</td><td>—</td><td>界面 + <code>EmbeddingService</code> 一个谓词</td><td>界面</td><td>界面 + 一条产品内入队路径</td></tr>
+    <tr><td>解决 I125（8,667 页有正文却没向量）</td><td class="no">不解决</td><td class="no">不解决</td><td class="no">不解决</td><td>解决</td></tr>
+    <tr><td>回归面</td><td>最小</td><td>小（在场时行为需与甲<b>完全同</b>，已列断言）</td>
+      <td>最小</td><td>最大（多一条写路径，但它本来就该有测试）</td></tr>
+    <tr><td>放模型后要不要重启</td><td>不存在这问题</td><td>要，文案须明写</td><td>要，状态条同理</td><td>同 乙</td></tr>
+  </table>
+</section>
+
+<section id="q">
+  <h2>§7 编号决策项（等勾选）</h2>
+  <table>
+    <tr><th>号</th><th>问题</th><th>选项</th><th>推荐</th></tr>
+    <tr><td><b>Q1</b><br>入口形状</td>
+      <td>模型不在场时，那三个入口各长什么样？</td>
+      <td><b>甲</b> 不改（把现状钉成断言）<br><b>乙</b> 三处按一处谓词置灰 + 指路，重启才生效（§3）<br>
+        <b>丙-1</b> 标题轨一条状态 / <b>丙-2</b> 状态栏一条状态，入口都可点<br>
+        <b>乙+丙</b> 置灰，同时状态条给"为什么"</td>
+      <td><b>乙</b>。理由：三处入口都能点出一条带绝对路径的红字是同一件事，乙 一次治三处；
+        丙 只加一条读数，而那条读数与 S9 现成的「向量 已建/未建」是同一件事的两个口径。</td></tr>
+    <tr><td><b>Q2</b><br>向量由谁建<br>（新账 I125）</td>
+      <td>产品要不要有一条真会排「建向量」任务的路径？</td>
+      <td><b>甲</b> 要，做成显式入口：<b>丁-1</b> S7 整库补差集 / <b>丁-2</b> 右栏按当前文档点名<br>
+        <b>乙</b> 索引链路自动补（把 <code>vector</code> 接在 <code>index</code> 之后，无人点名）<br>
+        <b>丙</b> 不建路径，只把 S9 那句假承诺改成实话 + 挂账明写"向量由外部工具/手工建立"</td>
+      <td><b>甲·丁-2</b>（若 Q1 选了乙/丁，界面已就位，加一颗按钮）。理由：<code>request_vectors</code>
+        的注释和 <b>I63</b> 丙 的定案都写着「只跑用户点名的」，乙 等于推翻既有定案，会把 GPU 时间烧在
+        没人要的文档上；丙 留着 8,673 页的缺口和一句实话空态，功能上仍然是半条路。</td></tr>
+    <tr><td><b>Q3</b><br>红字里的路径</td>
+      <td>模型缺席时界面该说多细？</td>
+      <td><b>甲</b> 原文照录（含绝对路径，现状）<br>
+        <b>乙</b> 界面一句「语义模型不在本机」，完整原文进日志</td>
+      <td><b>乙</b>，与 <b>ISSUES I31</b> 同一条规矩：界面不替人读路径。
+        注意这与 R-003 的「逐字报错原文不遮罩」不冲突 —— 那条说的是日志与产物，不是界面。</td></tr>
+    <tr><td><b>Q4</b><br>指路文案</td>
+      <td>置灰后 tooltip 说什么（措辞见下方候选，未定）？</td>
+      <td><b>甲</b> 只说"模型不在本机"（不说怎么补）<br>
+        <b>乙</b> 说清"放模型后需重启才生效"<br>
+        <b>丙</b> 不写 tooltip，改为不可点 + 空态那行讲</td>
+      <td><b>乙</b>。理由：乙 的代价就是"放了不重启还灰着"，不把这句写出来，置灰本身就成了新的假承诺。</td></tr>
+  </table>
+  <div class="why"><b>措辞候选</b>（<b>未定</b>，勾 Q4 时一并改；这里只表示"这句要表达哪两层意思"）：
+    第一层 = 这件事现在做不了；第二层 = 怎么做才能做（含"要重启"）。
+    候选不写具体机型路径，不写「请下载」这类把责任推给动作的句子。</div>
+</section>
+
+<section id="never">
+  <h2>§8 绝对不做（防蔓延）</h2>
+  <ul>
+    <li><b>不做模型下载器 / 不碰 D-037</b>：本轮只谈"不在场时界面怎么说"，下载与 LICENSE 是另一条账。</li>
+    <li><b>不做热探测、不轮询、不定时器</b>：谓词只在建窗时问一次；重启是模型生效的方式。</li>
+    <li><b>不加第四个"状态"读数</b>：S9 那格「向量 已建/未建」是现成口径，丙 若入选必须先说明与它的关系。</li>
+    <li><b>不自动建向量</b>（除非 Q2 勾 乙 明写推翻 I63 丙）：不新增扫描式后台写路径。</li>
+    <li><b>不动关键词搜索那条通道</b>：置灰只针对需要模型的三处；全文/FTS 照常。</li>
+    <li><b>不新增面板</b>：进度复用已有任务队列与操作日志。</li>
+    <li><b>不写界面代码</b>：Q1–Q4 勾完之前，本页是唯一产物。</li>
+  </ul>
+</section>
+</body>
+</html>

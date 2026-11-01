@@ -6,6 +6,51 @@
 
 ---
 
+## 轮五十一（2026-11-01）—— 模型不在本机时三个入口一起灰，判据是**构建期快照**而不是每次现探（B1→B2→B3）；「为当前文档建向量」补上唯一入口 ⇒ I125 销账；归档执行那一刻目标位被抢不再盖掉 ⇒ I124 销账；G20「× 到底打给谁」补牙 ⇒ I127 销账（**D-073**）
+
+用户原话：**「均按推荐」→「开工」→「继续监控，出结果就执行修改」** = 线框 `docs/wireframes/2026-11-01-round51-model-absent-entries.html`
+的 **Q1 乙／Q2 甲·丁-2／Q3 乙／Q4 乙**，外加上一轮「等你」清单里七项 **A–G** 全按推荐档执行。
+**屏数仍 9／导航仍 8 项，没有新屏**（三处入口都在既有屏里）。台账 **I84／I124／I125／I127 → CLOSED**，同时**新开两条 OPEN**；
+`gates/final.py::ledger_check` 现跑 **128 行｜I1–I128 连续｜CLOSED 99｜MITIGATED 23｜OPEN 2｜WONTFIX 4**；
+结构不合格仍是历史伤 **I35** 那 1 行，`LEDGER_SHAPE_CAP 1` 未抬。
+
+- **B1 乙 · 谓词只算一次**：`EmbeddingService._model_paths()` 收成**唯一路径口径**，`model_ready()` = 两个模型文件都在场（`semantic/embedding.py`）；
+  `bootstrap()` 把它**快照**成 `AppContext.semantic_ready`（构建期一次，不在 UI 里轮询、不热探）。不热探的理由：`ui` 不许 import
+  `pdfarchiver.semantic`（架构守卫），而热探会多出「缺模型 → 半路拷进模型 → 同一场会话里状态自己变绿」这条没人测过的半开路径。**代价明写：补上模型必须重启。**
+- **B2 · 三个入口同一个布尔**：S1 语义搜索勾选框（`ui/pages/library_page.py:128`）、S1「AI 推荐分类」＋新增「为当前文档建向量」（`ui/library_hits.py`）、
+  S9 提问按钮（`ui/pages/ask_page.py:101`）统统由 `ui/semantic_state.py::apply_state()` 一处驱动 —— 新增 52 行，四句文案（短说／原因／置灰提示／tooltip）只此一份；
+  S9 输入框**故意不禁**（能打字、只是发不出去，禁掉反而像坏了）。
+- **Q4 乙 · 指路那句两层都说到**：失败文案统一走 `absent_or_original(exc, prefix=…)` —— **只**把「模型不在本机」这一族翻成给用户看的话，别的一律照抄后端原文，路径只进日志。
+- **Q3 乙 · 置灰不许顺手废掉关键词通道**：三处入口灰掉时，关键词检索、FTS 全文搜索、库内问答的**非语义**路径照常可用；断言把「灰了入口」与「关键词还搜得到」拆成两条，坏法只删一条也红。
+- **丁-2 · I125 CLOSED（「建向量」这条任务此前没有任何产品入口）**：S1 命中列表加「为当前文档建向量」，走 `ctx.vector.request_vectors([doc_id])`，
+  回执 `enqueued == 0` 一律染红（不假装排队）；S9 空态「索引完成后会自动建立」改成实话。真库现读 8,667 页有正文没向量 ⇒ 这一条是那批文档的唯一入口。
+- **I124 CLOSED（D-042 甲的补完）**：`services/archive_service.py:498-503` 在**执行那一刻**再判一次目标位，已有文件就 `FileExistsError`，不再只在预览时判一次；
+  2 条断言（预览→队列积压期间有人塞文件→执行 / 撤销方向同规则）＋ **3 档坏法全红**。
+- **I127 CLOSED（G20 甲）**：关闭按**先属主后子窗**发 `WM_CLOSE`（`packaging/frozen_smoke.py::_post_wm_close_to_toplevels`，`sort(key=(-owner, hwnd))`），
+  `OnboardingWizard.exec()` 先返回、主窗那条消息才落。实测 **30.05s 超时强杀 → 0.42s 优雅关闭**，`点给 2 扇顶层窗` 进读数行；判据一个字没松（仍是 `ready and graceful and rc == 0`）。
+- **I84 CLOSED**：模型缺席时语义搜索勾选框置灰 —— 模型缺席这一族的界面侧最后一块（文案与空态在更早的 I84 甲 已改）。
+- **I111 ④**：`SemanticSearchService.close()`／`VectorStore.close()` 两个**全站零调用方**的空壳直通口删掉（留着只会让人以为有生命周期管理），
+  `EmbeddingService.close()` 保留（它真有会话资源要放）；模块头写明真刷新走 I111 甲/乙 的共用实例，不靠 close。
+- **A · 真根恢复端到端**（补上一轮只验「建包」没验「恢复」）：`backup-20261031-160044-v8` 恢复到新根 **565.1 s｜12.29 GiB**，`PRAGMA integrity_check = ok`（**487.2 s**），
+  12 个计数键**逐键差 = 无**（documents 16,759／text_pages 1,977,962／vector_meta 1,969,289／text_chars 1,942,144,016），裸 SQL **140/140** 一致，
+  FTS 服务自报 `took_ms=87`，语义样本页 **rank 1**（cosine 0.8966）；收尾删产物释放 12.29 GiB。**总耗时 1,629.7 s，`VERDICT: GREEN`**。
+- **B · 保留只读核对**：`data\backups` 现场 **5 项合计 37,157,990,789 B = 34.61 GiB**（旧包 11,995,664,384 B 无清单／新包 13,194,871,173 B／迁移快照 11,967,422,464 B ＋ 两个边文件），
+  **一个都没删**，自动保留策略仍未做；要删旧包那条命令写进 `docs/BACKUP-RESTORE.md` 等勾选。
+- **C · I69 丁 处置改判**：代码事实读出来「两个 `irreversible` 数今天都恒为 0」＋「预览与执行之间那条缝」⇒ 不做「覆盖前自动备份」，改判成 I124 那条**执行时闸门**。
+- **F · I39（翻页延迟）**：504 次翻页实测 ⇒ 中位 **29.8 ms**｜P95 **144.5 ms**｜最慢 672.3 ms（负载场 CPU 49.9%／已用 86.8%）。**400ms 不改**，
+  统计量从「没写」钉成 **P95 ≤ 400 ms**（中位／P95／每帧三种读法的数都摆出来，改口径的人看得见代价）；**不做常驻门禁**，代价与三条重开触发写进 `docs/UI-WIREFRAMES.md`。
+- **G · I77 乙 定案不做**：重开触发 (a) 已核 = P95 144.5 ms < 400 ms 未命中；真虚拟化要动全站列宽口径与 25 处 `.item(r,c)` 断言。
+  **I11 只交输入表**：20 行空表进 `docs/SEMANTIC-EVAL.md`，18/20 仍是唯一口径，两次模拟（11/20、2/20）都判红、如实记。
+- **新开两条 OPEN（都只读、一行代码没改）**：**I126** —— 恢复只护住 `catalog.db`，包内 `vectors.npy`／`settings.json` 落到已有同名文件会**静默覆盖**，
+  落到同名**目录**时清理「残留」会把那个目录连内容一起 `rmtree`；临时根探针两案都复现（别人的 160 字节 `vectors.npy` 被盖掉／`config\settings.json` 目录里的 `我的账密.txt` 一起没了）。
+  **I128** —— 真库 p12 三项红：C2 **3/16,759** 行 `path_key ≠ identity_key(path)`（全是 pytest garbage 残迹）、C3·D 的 `D:\` 有 **3 份** PDF 在盘上库里没有、
+  C9 队列 **1 条 `running` 残尸**（done 12,012／failed 4,813／running 1）。两条都要**写真库**才修，等勾选。
+- **断言 18 ＋ 2、坏法 9 档**：新增 `tests/integration/test_model_absent_entries.py`（**18 条**：三入口同布尔／关键词通道不许废／屏上不许出现路径／S9 空态改实话／建向量回执同源）
+  ＋ `test_archive_disk_safety.py` 加 2 条；坏法 **9 档全红、共 11 条断言变红**，聚焦复跑 `45 passed in 15.85s`。三档实测：**在场**（夹具种模型）／**改名造不在场**／**干净目录首启**。
+- **回归与门禁**：全量 `1000 passed / 0 failed / 0 error / 1 skipped in 273.0s`（上一轮 979 passed ＋ 1 failed，本轮 ＋20 条 = 18 ＋ 2，G1 那条红转绿、基线 1.5s 一字未抬）；
+  `tests/guards` **3.1 s**；链末行 `VERDICT: ALL GREEN`。`package` 段因 `frozen_smoke.py` 改过必须复跑：第一版 **RED（1 条未过）**，
+  修后 build **136.4 s** ＋ smoke **148.8 s** 全绿。`scripts/precheck.py` **合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN**。**12 段整链按收束条款没跑**（真根 C2/C9 现红，见 I128）。
+
 ## 轮五十（2026-10-31 → 11-01 跨日）—— ②乙 落地：S6 恢复页改成「在表里点一行选包」，展示体积与恢复摆放**共用同一份成员名单**；①甲 那条「真根没落过盘」用一次真备份补上（**D-072**）
 
 用户勾选原话：**「均根据你的推荐来」** = 线框 `docs/wireframes/2026-10-31-round49-s6-restore-entry.html` §6 的 **Q1 甲／Q2 甲／Q3 甲／Q4 甲**。

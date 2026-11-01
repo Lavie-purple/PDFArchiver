@@ -11,8 +11,10 @@
    文案只有后端一个 owner）。界面只做"把字段摆到控件上"。
 2. **抽取式的诚实标记**：「这里是原文摘录，不是生成的话」常驻 —— 甲案没有生成，
    这一句就是它的身份证；换成乙案时这句要跟着改。
-3. **失败必须可见**：模型不在场时 `EmbeddingService` 抛 `FileNotFoundError`，
-   穿出 Qt 槽等于屏幕上什么都不发生（**ISSUES I84** ③ 的教训）—— 这里接住，红字 + 原文。
+3. **失败必须可见**：模型不在本机时语义层抛 `FileNotFoundError`，
+   穿出 Qt 槽等于屏幕上什么都不发生（**ISSUES I84** ③ 的教训）—— 这里接住。
+   轮五十一 Q3 乙起，这一处的落法是「一句人话上屏、后端原文逐字进日志」（`ui/semantic_state.py`）；
+   按钮另有一层：模型不在本机时它按不动，指路那句在 `DISABLE_TIP`（Q1 乙／Q4 乙）。
 
 检索与统计都在界面线程同步跑（与 S1 语义通道同一条纪律）：真库一次提问 2–4s，
 页面**惰性构建**，`stats()` 的 25ms（温）/1.1s（冷，**ISSUES I111** ⑥ 实测）只在
@@ -29,6 +31,7 @@ from PySide6 import QtCore, QtWidgets
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.empty_state import make_hint, sync_hint
 from pdfarchiver.ui.library_hits import set_text_role
+from pdfarchiver.ui.semantic_state import absent_or_original, apply_state
 
 # 证据对象是 `semantic.qa_service.Evidence`，但 **ui 不 import semantic**（docs/ARCHITECTURE
 # 二 的自上而下纪律，架构守卫在钉）：跟 S1 用语义命中一样的鸭子类型 —— 只读它带过来的字段。
@@ -92,6 +95,10 @@ class AskPage(QtWidgets.QWidget):
         self.ask_btn = QtWidgets.QPushButton("提问")
         self.ask_btn.clicked.connect(self._ask)
         top.addWidget(self.ask_btn)
+        # 提问整条链路要先把问句嵌成向量，所以它是语义入口之一：模型不在本机时按不动，
+        # 一句指话说清"现在做不了"和"放好要重启"（轮五十一 Q1 乙／Q4 乙）。
+        # 输入框不收 —— 模型在不在，话都可以先写（与 S1 的搜索框同一条判据）。
+        apply_state(self.ask_btn, ready=ctx.semantic_ready)
         self.scope_hint = QtWidgets.QLabel()
         self.scope_hint.setObjectName("muted")
         top.addWidget(self.scope_hint)
@@ -178,16 +185,19 @@ class AskPage(QtWidgets.QWidget):
     def _update_empty_hint(self, vectors: int) -> None:
         """⑨ 空态引导的两档文案：向量在场讲用法，缺席讲为什么提问不会有结果。
 
-        向量由索引链路自动建立（job 队列的 `vector` 处理器），不设第二个入口 ——
-        所以「未建」指路只能指「等索引完成」，指别处就是假出路。
+        「未建」那句必须是实话：向量**只有用户点名才会建**（`ctx.vector.request_vectors` 是唯一
+        入口，产品里没有"索引完成后自动建向量"这条路径 —— **ISSUES I84** ② 的第四个实例）。
+        轮五十一 丁-2 之后指路有了真存在的按钮，所以这里敢指「文档库 → 选中一份 →
+        「为当前文档建向量」」；在那之前它指的是「等索引完成」，等于把人往一个不存在的动作上引。
         """
         base = ("在上方输入关于这批文档的问题，点「提问」：答案从库里的正文原文中摘录，"
                 "并附证据卡，双击证据卡直接打开那一页。")
         if vectors:
             self.empty_hint.setText(base)
         else:
-            self.empty_hint.setText(base + "当前「向量 未建」：索引完成后会自动建立，"
-                                     "建好之前提问检索不到内容。")
+            self.empty_hint.setText(
+                base + "当前「向量 未建」：向量要在「文档库」里选中一份、点「为当前文档建向量」"
+                       "点名才会建，没人点名的库检索不到内容。")
 
     def reload(self) -> None:
         """「视图 → 刷新状态」入口：重读范围与向量读数。"""
@@ -202,10 +212,11 @@ class AskPage(QtWidgets.QWidget):
         self.empty_hint.setVisible(False)
         try:
             answer = self.ctx.qa.ask(query)
-        except Exception as exc:  # noqa: BLE001 - 边界：模型/向量库抛什么都得让用户看见原文
+        except Exception as exc:  # noqa: BLE001 - 边界：模型/向量库抛什么都得有东西上屏
             self._clear_cards()
             set_text_role(self.answer_label, "danger")
-            self.answer_label.setText(f"检索失败：{exc}")
+            # 轮五十一 Q3 乙：模型不在本机只上一句人话、后端原文逐字进日志；其余失败照旧回原文。
+            self.answer_label.setText(absent_or_original(exc, prefix="检索失败："))
             return
         if answer.evidences:
             set_text_role(self.answer_label, "")   # 常态字色：答案有内容时不是提示语

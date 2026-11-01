@@ -17,8 +17,9 @@
 
 1. **不长期持有映射**：每次读写现开现关。Windows 上实测两种后果 —— 同进程另有一只映射时
    `os.replace` 报 `PermissionError [WinError 5]`，自己没关映射时报 `[WinError 32]`
-   （`.probe_work/u27_memmap_probe.log` 第 2、5 段）；而 `SemanticSearchService.close()` 全站
-   零调用方（**ISSUES I111** ④），"靠 close 释放"是空头承诺。
+   （`.probe_work/u27_memmap_probe.log` 第 2、5 段）；而曾经那只 `SemanticSearchService.close()`
+   全站零调用方（**ISSUES I111** ④，轮五十一 已连同本类的 `close()` 一起删），"靠 close 释放"
+   是空头承诺。
 2. **以 `vector_meta` 为准**：`used` 每次都从库里现读 `MAX(vector_idx)+1`，不缓存在实例上 ——
    另一进程（门禁、命令行工具）写进去的向量，这只实例下一次操作就看得见（**ISSUES I111** ①）。
 3. **扩容只翻倍**：先写 `vectors.npy.grow` 再 `os.replace`，中途崩掉留下的还是原来那个完好文件。
@@ -384,7 +385,3 @@ class VectorStore:
             return np.array(mapped[:used], dtype=self.DTYPE)
         finally:
             self._release(mapped)
-
-    def close(self) -> None:
-        """保留给既有调用方（`SemanticSearchService.close`）：本类不再长期持有映射，
-        每次读写现开现关，没有可释放的东西（见模块头规矩 1）。"""

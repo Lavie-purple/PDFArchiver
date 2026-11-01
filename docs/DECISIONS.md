@@ -876,3 +876,49 @@ lzma preset 1 → 7,638,111,344 B（**0.6302、2,382.3 s ≈ 4.9 MiB/s**）；`v
 §八 那句「仍然没有：在备份列表里选中一行直接恢复」删除）/ `docs/UI-SCREENS.md`（S6 一行补第 10 张表与三档实测）/
 台账 **ISSUES I123 → CLOSED**。**屏数仍 9、导航仍 8 项，没有新屏。**
 **验证读数**：见 `docs/VERIFICATION-RUNLOGS.md` §4.61。
+
+## D-073 · 轮五十一：模型缺席时三入口统一置灰（判据 = **构建期快照** `AppContext.semantic_ready`），补上「为当前文档建向量」唯一入口，归档**执行那一刻**再判一次目标位，G20 的「× 打给谁」改属主优先（2026-11-01，用户「均按推荐」= 线框 `docs/wireframes/2026-11-01-round51-model-absent-entries.html` 的 Q1 乙／Q2 甲·丁-2／Q3 乙／Q4 乙，＋ 上一轮「等你」A–G 七项全按推荐档）
+
+**判据只算一次（Q1 乙）**：`EmbeddingService._model_paths()` 收成**唯一路径口径**，`model_ready()` = 两个模型文件都在场；
+`bootstrap()` 把它快照进 `AppContext.semantic_ready`，UI 侧只读这个布尔。**不每次现探**的理由有两条，都不是口味问题：
+① `ui` 不许 import `pdfarchiver.semantic`（架构守卫），现探就只能让 UI 自己拼模型路径 —— 那正是「核心概念两个口径」；
+② 热探会造出一条没人测过的半开路径（缺模型 → 半路把模型拷进来 → 同一场会话里状态自己变绿 → 已经置灰的入口不会自己亮）。
+**代价明写**：**补上模型必须重启**。「模型在场」那一档由夹具种 0 字节占位文件覆盖（`tests/conftest.py::plant_model_files`），
+不依赖本机真模型 —— 好读数因此是**生产可达**的（`model_ready()` 只看存在性，不看字节内容）。
+
+**一处驱动三处入口（B2 ／ Q2 甲·丁-2 ／ Q3 乙 ／ Q4 乙）**：新增 `ui/semantic_state.py`（52 行）是**唯一**的文案与置灰落点 ——
+短说、原因、置灰提示、tooltip 四句只此一份；S1 语义搜索勾选框、S1「AI 推荐分类」与新增「为当前文档建向量」、S9 提问按钮由同一个布尔驱动。
+S9 输入框**故意不禁**（能打字、只是发不出去；禁掉反而让人以为整块坏了）。失败文案统一 `absent_or_original()`：**只**翻「模型不在本机」这一族，
+其余照抄后端原文，路径只进日志（屏上 grep 不到模型目录）。置灰**不连带**废掉关键词通道（关键词 / FTS / 库内问答的非语义路径照常）。
+
+**I125 销账（此前「建向量」在产品里没有任何入口）**：S1 命中列表加「为当前文档建向量」，走 `ctx.vector.request_vectors([doc_id])`，
+回执 `enqueued == 0` 一律染红 —— 界面不许替后端承诺排队。真库现读 8,667 页有正文没向量，这条入口是那批文档唯一的补救路径。
+
+**I124 销账（D-042 甲 的补完）**：`services/archive_service.py:498-503` 在**执行那一刻**再判一次目标位，已有文件就 `FileExistsError`。
+此前只在预览时判一次，队列积压那段时间里目标位被任何人放了一份文件，`shutil.move`／`copy2` 就会把别人那份盖掉、撤销也拿不回来。
+预览时那条 `dst_existed` 保留 —— 它管的是「检查与搬移之间」的另一个瞬间，两个瞬间都要判。
+
+**I127 销账（G20 甲）**：关闭按**先属主后子窗**发 `WM_CLOSE`（`packaging/frozen_smoke.py::_post_wm_close_to_toplevels`，`sort(key=(-owner, hwnd))`）——
+首启引导是应用级模态窗，`QWidget::close()` 在 `activeModalWidget()` 非空时直接拒绝，所以顺序反了那条消息就白打，门禁只能走 30s 超时强杀。
+实测 **30.05 s 超时强杀 → 0.42 s 优雅关闭**，读数行多一格 `点给 2 扇顶层窗`；**判据一个字没松**（仍是 `ready and graceful and rc == 0`）。
+
+**两条只读发现入账、都等勾选**：**I126** —— 恢复只护住 `catalog.db`，包内 `vectors.npy`／`settings.json` 落到已有同名文件会静默覆盖；
+落到同名**目录**时清理「残留」会把那个目录连内容一起 `rmtree`（临时根探针两案都复现，真根一行没动）。**I128** —— 真库 p12 三项红
+（C2 3/16,759 行 path_key 不同口径／C3·D 3 份 PDF 漏索引／C9 1 条 running 残尸），三者都要**写真库**才修。
+
+**后果**（行数一律 `wc -l` 现跑，改前 = `git show HEAD:` 现跑，2026-11-01 收尾时刻；
+`git diff --stat` = 20 files changed, **464 insertions(+), 70 deletions(-)**，不含两份新增源文件、也不含本文件与 RUNLOGS 的增量）：
+新增 `ui/semantic_state.py`（**52**）/ `tests/integration/test_model_absent_entries.py`（**359 行、18 条**）/
+`tests/conftest.py`（**266 → 319**，`plant_model_files` ＋ `ctx_ready` / `window_ready` 两个夹具）/
+`ui/library_hits.py`（**332 → 366**，「为当前文档建向量」＋ 置灰复活不再写死 `True`）/
+`ui/pages/library_page.py`（**686 → 694**）/ `ui/pages/ask_page.py`（**256 → 267**）/
+`semantic/embedding.py`（**120 → 131**，`_model_paths()` 与 `model_ready()`）/
+`services/bootstrap.py`（**354 → 360**，`AppContext.semantic_ready`）/
+`services/archive_service.py`（**582 → 588**，执行时闸门）/
+`packaging/frozen_smoke.py`（**683 → 732**，属主优先 WM_CLOSE ＋ 关窗计数）/
+`semantic/search_service.py`（**65 → 61**）与 `semantic/vector_store.py`（**390 → 387**，两个零调用方的 `close()` 直通口删除）/
+`semantic/qa_service.py`（**102 → 104**，失败文案走 `absent_or_original`）/
+`tests/integration/test_archive_disk_safety.py`（**671 → 737**，＋2 条）/
+`tests/integration/test_ask_page.py`（**281 → 286**）/ `tests/integration/test_round42_ux.py`（**286**，S9 空态措辞）/
+台账 **ISSUES I84／I124／I125／I127 → CLOSED**，新开 **I126／I128**。**屏数仍 9、导航仍 8 项，没有新屏。**
+**验证读数**：见 `docs/VERIFICATION-RUNLOGS.md` §4.62。

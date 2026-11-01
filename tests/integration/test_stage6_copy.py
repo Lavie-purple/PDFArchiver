@@ -17,11 +17,18 @@
 就必须保证下一次成功把红收回去（否则"可见的失败"变成"常驻的失败"）。
 状态栏那句去掉「或模型不可用」也算一条：③ 之后模型缺失是**抛错**，不再是"无结果"的一种原因。
 
+**轮五十一 Q3 乙 追记（2026-11-01）**：③ 那一条的落点被改写 —— 后端原文自带一个绝对路径，
+普通用户读不懂它、远程诊断又必须留着它，于是屏上换成一句「语义模型不在本机，完整原因已写进
+日志」，原文逐字改进日志（判据仍要求失败可见 + 表与命中面板清空，一条不减）。①② 两条改用
+`window_ready` 夹具：模型不在场时那三个入口的 tooltip 统一换成指路那一句，句里没有「文件名」。
+三处入口的置灰与那句红字逐处另钉在 `test_model_absent_entries.py`。
+
 夹具三条规矩照常（offscreen、独立数据根、真 sqlite3 —— **D-012**）；
 库里的文档全是现造的假名字，真实语料一条不进测试（**ISSUES I64**）。
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pdfarchiver.db.models import Document
@@ -57,22 +64,26 @@ def _raise_missing(query: str, top_k: int = 50):
     raise FileNotFoundError(_MODEL_MISSING)
 
 
-def test_AI推荐分类的tooltip只说后端真读的那两样(window, qapp) -> None:
-    """①：tooltip 的名词必须与 `classify_service` 的取数处一一对读，不是措辞偏好。"""
-    page = _library(window, qapp)
+def test_AI推荐分类的tooltip只说后端真读的那两样(window_ready, qapp) -> None:
+    """①：tooltip 的名词必须与 `classify_service` 的取数处一一对读，不是措辞偏好。
+
+    夹具是 `window_ready` 而不是 `window`（轮五十一 Q1 乙）：模型不在场时那几个入口的 tooltip
+    统一换成指路那一句，句子里没有「文件名」—— 用默认夹具跑就成了一条假红。
+    """
+    page = _library(window_ready, qapp)
     tip = page.ai_classify_btn.toolTip()
     assert "文件名" in tip and "目录" in tip, f"tooltip 要写后端实际读的两样（名字与上级目录名）：{tip!r}"
     assert "文档内容" not in tip, f"后端一个字的正文都没读，tooltip 不许承诺它：{tip!r}"
 
 
-def test_空态文案不许指向产品里不存在的动作(window, qapp, ctx, monkeypatch) -> None:
+def test_空态文案不许指向产品里不存在的动作(window_ready, qapp, ctx_ready, monkeypatch) -> None:
     """②：界面上任何一句「请先做 X」，X 必须在产品里真有一个入口 —— 全站一次扫，不是只改这一屏。"""
-    _seed_doc(ctx)
-    page = _library(window, qapp)
+    _seed_doc(ctx_ready)
+    page = _library(window_ready, qapp)
     page.doc_table.selectRow(0)
     _settle(qapp)
     assert page._selected_doc_id is not None, "没选中行就点按钮，等于没走过那条分支"
-    monkeypatch.setattr(ctx.ai_classify, "suggest_for_doc", lambda doc_id: [])
+    monkeypatch.setattr(ctx_ready.ai_classify, "suggest_for_doc", lambda doc_id: [])
     page.ai_classify_btn.click()
     text = page.ai_result_label.text()
     assert "暂无向量数据" in text, f"空态要当场说清是空态：{text!r}"
@@ -83,18 +94,27 @@ def test_空态文案不许指向产品里不存在的动作(window, qapp, ctx, 
     assert not hits, f"产品里还留着指向不存在动作的文案：{hits}"
 
 
-def test_模型缺失时语义搜索把后端原文染红上屏(window, qapp, ctx, monkeypatch) -> None:
-    """③：失败必须**可见**，且可见的是后端原文，不是界面重述的一句猜测。"""
+def test_模型缺失时语义搜索一句上屏原文进日志(window, qapp, ctx, monkeypatch, caplog) -> None:
+    """③ 的落点，被轮五十一 **Q3 乙** 改写：失败必须**可见**，但可见的是那一句人话，
+    后端原文逐字进日志 —— 原文自带 `C:\\Users\\…\\model_int8.onnx`，普通用户读不懂、
+    开发机远程诊断又必须有它，两个需求不是只能二选一。
+
+    夹具换回 `window`（不在场档）：这一条验的就是缺席时的落点。三处入口同一个出口，
+    逐处另钉在 `test_model_absent_entries.py`。
+    """
     page = _library(window, qapp)
     _seed_doc(ctx)
     monkeypatch.setattr(ctx.semantic_search, "search", _raise_missing)
-    page._do_semantic_search(_QUERY)
-    assert _MODEL_MISSING in page.status_label.text(), \
-        f"报错原文必须逐字上屏，而不是只进 crash.log：{page.status_label.text()!r}"
+    with caplog.at_level(logging.WARNING, logger="pdfarchiver"):
+        page._do_semantic_search(_QUERY)
+    text = page.status_label.text()
+    assert "语义模型不在本机" in text, f"屏上要出的是那一句实话：{text!r}"
+    assert _MODEL_MISSING not in text, f"绝对路径进界面了：{text!r}"
     assert page.status_label.objectName() == "danger", \
         f"失败态要与常态可区分（与 AI 分类那条同一口径）：{page.status_label.objectName()!r}"
     assert page.doc_table.rowCount() == 0, "状态栏是「表里这些行是什么」的唯一口径，失败后不许留着上一批行"
     assert page.hit_list.count() == 0, "右栏命中面板同理：失败之后不许还挂着上一批命中"
+    assert _MODEL_MISSING.splitlines()[0] in caplog.text, "藏路径不能把后端原文一起藏掉"
 
 
 def test_一次失败之后紧接着的成功不许留着红(window, qapp, ctx, monkeypatch) -> None:

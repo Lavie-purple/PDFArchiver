@@ -37,13 +37,24 @@ class EmbeddingService:
         self._session: ort.InferenceSession | None = None
         self._tokenizer: Tokenizer | None = None
 
+    def _model_paths(self) -> tuple[Path, Path]:
+        """模型的两个落点：(权重, 分词器)。路径口径只有这一处（**ISSUES I37**）。"""
+        model_dir = self._paths.models_dir / self.MODEL_NAME
+        return model_dir / self.MODEL_FILE, model_dir / self.TOKENIZER_FILE
+
+    def model_ready(self) -> bool:
+        """「语义能力可用」的唯一谓词（轮五十一 Q1 乙）：只判文件在场，不建 session。
+
+        界面要在建窗那一刻就把入口的亮/灰定下来，而 ONNX session 要到第一次真嵌入才该加载；
+        界面也不许自己重算这条 —— 架构守卫禁 `ui` 进 `semantic`，谓词只能从这里出口。
+        """
+        return all(path.exists() for path in self._model_paths())
+
     def _ensure_session(self) -> ort.InferenceSession:
         if self._session is not None:
             return self._session
 
-        model_dir = self._paths.models_dir / self.MODEL_NAME
-        model_path = model_dir / self.MODEL_FILE
-        tokenizer_path = model_dir / self.TOKENIZER_FILE
+        model_path, tokenizer_path = self._model_paths()
 
         if not model_path.exists():
             raise FileNotFoundError(

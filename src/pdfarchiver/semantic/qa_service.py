@@ -69,9 +69,11 @@ class QaService:
         """（向量条数, 覆盖文档份数）—— S9 顶栏「范围」与「向量 已建/未建」的读数口。"""
         return self._semantic.stats()
 
+
     def ask(self, query: str) -> Answer:
-        """就全库提一问，返回抽取式答案。检索异常（模型不在场等）原样抛出，
-        由界面按 **ISSUES I84** ③ 的口径落成红字 + 原文。"""
+        """向全库提一问，返回抽取式答案。检索异常（模型不在场等）原样抛出，
+        由界面接住（**ISSUES I84** ③）：轮五十一 Q3 乙起，模型缺席那一条在屏上只留一句人话、
+        本方法抛出的原文逐字进日志；其余异常仍照原文上屏。"""
         text = query.strip()
         t0 = time.perf_counter()
         results = self._semantic.search(text, top_k=TOP_SEGMENTS)

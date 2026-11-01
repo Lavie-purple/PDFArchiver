@@ -1038,3 +1038,87 @@ Python 文本模式读写 ⇒ 读时 `\r\n`→`\n`、写时 `\n`→`\r\n`，把*
 ④ zlib 那档的解压回程仍未量（不影响 D-071 的定案，否掉的是整包压缩而选出的 codec 是 lzma）；⑤ **一条观察项，本轮不改也不开新账**：
 `create_backup()` 的包名只到**秒** ⇒ 同一秒点两次「创建备份」会目录撞名并抛 `FileExistsError`，`ui/pages/backup_page.py:449` 那个 `except` 把异常原文写进红框，不静默覆盖；而 `services/backup_service.py:99` 那句 `backup_dir.mkdir()` 在 try **之外** ⇒ 撞名那一刻还没写任何成员，在场那份旧包不会被 `_discard` 带走。
 **不再追的**：D-062 四项（用户「这些都不做」）、24h soak、`STRETCH_MIN_WIDTH`、I121 追记 ⑥、**I11** 等用户本人 20 条查询。
+
+### 4.62 · 轮五十一（**模型缺席时三入口同布尔** + **「建向量」补唯一入口** + **归档执行时闸门** + **G20 属主优先关窗**，**D-073**，**ISSUES I84／I124／I125／I127 → CLOSED、I126／I128 新开**，2026-11-01 00:54:47 → 13:31:34 埋点取数，墙钟 **12h36m46s**；至提交另记）
+
+**A · 起因与闸门**：线框 `docs/wireframes/2026-11-01-round51-model-absent-entries.html`（**348 行**）交出去之后用户连发三句 ——
+**「均按推荐」**（`2026-10-31T19:29:24.919Z` = 本地 **03:29:24**）、**「开工」**（`19:33:58.242Z`）、**「继续监控，出结果就执行修改」**（`19:57:32.595Z`），
+合起来就是 **Q1 乙／Q2 甲·丁-2／Q3 乙／Q4 乙** 的勾选凭据，外加上一轮「等你」清单的 **A–G 七项**按推荐档执行。
+取数口径：会话日志 `0e0ce31f-14ba-464a-9e03-aa9b374b35a0.jsonl` 第 **138,028** 行是轮五十一第一条人类消息（**「已经闭合收敛了吗」**，
+`2026-10-31T16:54:47.649Z` = 本地 **00:54:47**），到取数时刻（本节写入前最后一次事件 `2026-11-01T05:31:34.124Z` = 本地 **13:31:34**）之间
+**11 条**人类消息（第 3 条「等我的内容 均跟进你的建议来」、第 4/10/11 条「继续执行未完成的（部分）」、第 8 条「执行完成就收敛了吗」＋那段 10 问评审）。
+**活跃 6.26 h**（相邻事件间隔 ≤30 min 求和），唯一一段超 30 min 空档 **6h21m09s**（本地 06:58:13 → 13:19:22，已扣）；
+墙钟 12h36m46s 里近一半是这段空档。**屏数仍 9／导航仍 8 项，没有新屏**。
+
+**B · 七件「等你」的读数（A–G 逐条）**：
+- **A · 真根恢复端到端**（补上一轮「只验了建包、没验恢复」那半）：`backup-20261031-160044-v8` → 新根，`restore_to_new_dir` **565.1 s｜12.29 GiB**；
+  `PRAGMA integrity_check = ok` **487.2 s**；**12 个计数键逐键差 = 无**（`documents 16759`／`text_pages 1977962`／`vector_meta 1969289`／`text_chars 1942144016` 等）；
+  裸 SQL **140/140** 一致；FTS 服务自报 `took_ms=87`、墙钟 **88 ms**（5 行命中）；语义样本页 **rank 1**（cosine **0.8966**）；
+  收尾删产物**释放 12.29 GiB**；**总耗时 1,629.7 s｜`VERDICT: GREEN`**（`.probe_work/u51_restore_e2e.log`，写只落在 `H:` 的 `.probe_work` 临时根）。
+- **B · 保留只读核对**（`.probe_work/u51_backups_now.txt`）：`data\backups` 现场 **5 项＝37,157,990,789 B（34.61 GiB）** ——
+  `backup-20261025-045656-v8` **11,995,664,384 B**（`catalog.db` + `-shm` + `-wal`，**无清单**）／`backup-20261031-160044-v8` **13,194,871,173 B**（含清单与 `vectors.npy`）／
+  `pre-migration-0008-20261020T122144.db` **11,967,422,464 B** ＋ `-shm` 32,768 ＋ `-wal` 0。**一个都没删**；删旧包那条命令已写进 `docs/BACKUP-RESTORE.md` 等勾选，
+  自动保留策略仍是手工。
+- **C · I69 丁 改判**：代码现读两张事实 —— ① 两个 `irreversible` 数今天**都恒为 0**（`plan()` 把「目标位已有文件」判成跳过），② 预览与执行之间有一条缝。
+  ⇒ 不做「覆盖前自动备份」，改判成**执行时闸门**（落到 **I124**）。
+- **D · I84 乙**：语义搜索勾选框在模型缺席时置灰 —— **I84 CLOSED**（文案与空态那半在更早的甲 已改）。
+- **E · I111 ④**：`SemanticSearchService.close()`（`search_service.py` **65 → 61**）与 `VectorStore.close()`（`vector_store.py` **390 → 387**）两个
+  **全站零调用方**的空壳直通口删除，模块头写明真刷新走共用实例（I111 甲/乙）；`EmbeddingService.close()` 保留。**I111 仍 MITIGATED**（行内还有未闭的分项，不因删两个空壳就整行销账）。
+- **F · I39 翻页延迟**（`.probe_work/u51_page_flip.good.log`）：**504 次**翻页 × 两档窗宽（视口 **807 px／2,335 px**）⇒ 全部样本
+  **中位 29.8 ms｜P95 144.5 ms｜最慢 672.3 ms**；最贵一档（2560「适应宽度」）**中位 72.2｜P95 164.6**；1024「定倍 1.0」最慢 **414.4 ms**。
+  场是**负载场**（CPU 49.9%／可用 2.1 GiB／已用 86.8%／进程 351），负载只往慢侧推 ⇒ GREEN 不是机况买来的。
+  **400 ms 不改**，统计量从「没写」钉成 **P95 ≤ 400 ms**；**不做常驻门禁**（要真库语料 + GUI 夹具进链），代价与三条重开触发放进 `docs/UI-WIREFRAMES.md`。
+- **G · I77 乙 定案「不做」＋ I11 只交输入表**：I77 重开触发 (a) 已核 = P95 **144.5 ms < 400 ms** ⇒ 未命中，(b)(c) 也未命中 ⇒ 维持不做，代价明写（滚动仍不虚拟化）。
+  I11 交 **20 行空表**进 `docs/SEMANTIC-EVAL.md`，18/20 仍是唯一口径；两次模拟（**11/20**、**2/20**）都判红、如实记，不拿它们当验收。
+
+**C · B1→B2→B3 的落法与断言**：谓词一处（`embedding._model_paths()/model_ready()` → `AppContext.semantic_ready` 构建期快照），
+文案与置灰一处（新增 `ui/semantic_state.py`，**52 行**，四句只此一份），三个入口同布尔（S1 勾选框 / S1「AI 推荐分类」＋「为当前文档建向量」 / S9 提问按钮），
+S9 输入框**不禁**。新增 `tests/integration/test_model_absent_entries.py`（**359 行／18 条**）+ `tests/conftest.py`（**266 → 319**，`plant_model_files` 与两个就绪夹具）。
+**坏法 9 档全红、共 11 条断言变红**（`.probe_work/u51_bad_summary.txt` 逐档点名：bad1 → `test_界面不自算谓词_ui里不许出现第二个模型路径口径`；
+bad2 → `test_不在场时三个入口一起灰由同一个布尔驱动` ＋ `test_指路那句两层都说到_Q4乙`；bad3 → `test_置灰不许顺手废掉关键词通道`；
+bad4 → `test_指路那句两层都说到_Q4乙`；bad5 → `test_语义搜索失败只上一句原文进日志`；badd1a → `test_点名建向量走真入队回执与后端同源`；
+badd1b → `test_不在场时建向量点不动且建窗后队列一条都没有`；badd1c → `test_没有可搜正文那份如实染红不假装排队`；
+badscan → `test_那句不在本机只覆盖模型缺席_semantic层别处不许抛同类型异常` ＋ `test_S9空态那句不再承诺自动建立`），**未验 0**。
+聚焦复跑 `45 passed in 15.85s`（`.probe_work/u51_b23_pytest6.log`；前一次同批 `45 passed in 15.60s`）。**三档实测**：在场（夹具种 0 字节占位文件）／
+改名造不在场／干净目录首启（G20 那一场）。
+
+**D · 真根取证（只读，一行没写）**：
+- **I126 的两条坏法**（`.probe_work/u51_restore_overwrite_proof.log`，临时根，收尾已删）：甲 —— 目标根 `data\vectors.npy` 已有**别人那份 160 字节**文件（内容标 `IMPORTANT-NOT-OURS`）⇒
+  `restore_to_new_dir` **返回成功、无异常**，事后回读「还是原来那份别人的内容 = **False**」⇒ 被**静默盖掉**；
+  乙 —— 目标根 `config\settings.json` 是个**目录**、里面有人的 `我的账密.txt` ⇒ 抛 `ValueError: 恢复失败：settings.json 恢复出来是 0 字节…已删除残留文件。`，
+  事后「那个目录还在 = False｜那份人的文件还在 = False」⇒ 清理「残留」把**同名目录连内容一起 `rmtree`**。**I126 → OPEN**（甲／乙／丙 三案等勾选）。
+- **I128 的三项红**（`.probe_work/u51_p12_reds.txt`，真根 `?mode=ro&immutable=1`）：C2 **3/16,759** 行 `path_key ≠ identity_key(path)`（全是 `pytest-of-lavie\garbage-*` 残迹，
+  其中一条是 `\\?\C:/…` 扩展前缀形态）；C3·D `D:\` 子树：盘上 PDF **103**｜主记录 **100**｜排除 **36**｜非 PDF **829,178**｜读不动 **4**（`PermissionError [WinError 5]`，含 `D:\System Volume Information`）｜
+  **盘上有、库里没有 3 份**（微信 `filestorage\file\2026-10` 下新落的三本，文件名不入册，见 `.probe_work/u51_p12_reds.txt`）；
+  C9 队列 **`running 1`**（`{'done':12012,'failed':4813,'running':1}`）。三者都要**写真库**才修 ⇒ **I128 → OPEN**。
+
+**E · G20 甲 与 package 段**：先跑坏的那一版留下读数（`.probe_work/u51_g20_red.txt`）：`退出码 1｜优雅关闭=False（30.05s）` —— 正是 I127 描述的那条强杀分支。
+改成**属主优先**发 WM_CLOSE 后（`.probe_work/u51_g20_firstonly.log`）：`退出码 0｜优雅关闭=True（0.42s）｜点给 2 扇顶层窗｜等窗口 4.46s｜峰值 RSS 123.6MiB｜峰值句柄 807｜峰值线程 13｜采样 9 次`，
+首启事件序列 `['startup.begin','migration.applied','startup.done','window.ready','background.started','shutdown']`，`cold_start_seconds=2.861`，`VERDICT: ALL GREEN`。
+`frozen_smoke.py` 改过 ⇒ package 段必须复跑：第一版 **RED（1 条未过）**（`.probe_work/u51_pkg_g20a.log`：build `ALL GREEN｜160.9s`、smoke `总耗时 182.8s` → `VERDICT: RED`），
+修后（`.probe_work/u51_pkg_g20b.log`）build `ALL GREEN｜耗时 136.4s`、smoke `总耗时 148.8s｜ALL GREEN`，链末行 `VERDICT: ALL GREEN`。
+
+**F · 台账**：`gates/final.py::ledger_check` 现跑 **128 行｜I1–I128 连续｜CLOSED 99｜MITIGATED 23｜OPEN 2｜WONTFIX 4**；
+结构不合格仍 **1** 行（上限 1）= 历史伤 **I35**（3 格、行尾未闭合），`LEDGER_SHAPE_CAP 1` 未抬。
+另一条守卫读数要盯：**台账里失效的测试名现数 7 处、上限 7** —— **已经贴着上限**，下一轮再留一个过期名字就红；规矩不变（就地追注继任者，别抬上限）。
+
+**G · 全量回归与场后负载**（`.probe_work/u51_final_reg_guards.log`）：`1000 passed / 0 failed / 0 error / 1 skipped in 273.0s`（**regression 段 273.0 s**），
+`guards` 段 **3.1 s**，链末行 `VERDICT: ALL GREEN`（本次跑 2 段，未跑 9 段逐段印了「这一场的全绿不覆盖它」）。
+起跑负载：**CPU 72.6%｜可用内存 3,006 MiB｜最吃内存进程 `DoubaoWork.exe` 572 MiB**。
+**条数对账**：上一轮 `1 failed, 979 passed, 1 skipped` ⇒ 本轮收集数 **＋20** = `test_model_absent_entries.py` **18** ＋ `test_archive_disk_safety.py` **2**；
+上一轮那条红（`test_进程级冷启动实测符合G1约定`，原文 `G1 [约定] ≤1.5s，实测 2.999s`）本轮**转绿**，**基线 1.5 s 一字未抬**、也没有为它重跑到绿。
+
+**H · 收尾预检**（`.probe_work/u51_precheck.log`）：第 1 步 `tests/guards` **59 passed in 14.85s**；第 2 步 `gates/final.py`（`docs-inject` + `guards`）
+**合计判定 9 条｜本次未跑 10 段**；末行 **`合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN`**。
+**文档定稿之后又复跑了一次同一批**（`.probe_work/u51_precheck_final.log`）：`59 passed in 16.98s`、`合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN` ——
+这一次只证一件事：本轮往六份册子里写的引用（D-073／§4.62／CHANGELOG 轮五十一／台账两条新开）没有引入新的过期名字；秒数从 14.85 变 16.98 是负载不是代码。
+
+**I · 文档与代码余量（`wc -l` 现跑，收尾时刻）**：`.py` 侧最紧的是 **`ui/pages/library_page.py` 694 / 自线 700 ⇒ 余 6**（本轮 ＋8 行，下一轮动这一页之前**必须先拆**）、
+`ui/theme.py` **790 / 800 ⇒ 余 10**（本轮没动）；`services/archive_service.py` **588**、`packaging/frozen_smoke.py` **732**、`tests/integration/test_archive_disk_safety.py` **737**（线 800）。
+文档侧：`docs/DECISIONS.md` **924**（线 1,200）、`docs/CHANGELOG.md` **829**、`docs/ISSUES.md` **166**、`docs/BACKUP-RESTORE.md` **437**、`docs/UI-SCREENS.md` **352**、
+**本册 1122**（线 1,200）、`project_stats.md`（gitignore 内、不入库）；分册里最紧仍是 `docs/CHANGELOG-ARCHIVE-2.md` **1161 / 1200 ⇒ 余 39**。
+
+**J · 本轮没跑的／欠的**：① **12 段整链门禁没跑**（收束条款；真根 C2/C9 现红，见 **I128** —— 带 `--data-root` 的 consistency 段即使跑也只会把两条已入账的红再抄一遍，不产生新证据）；
+② **G2 段没跑**（未动检索路径）；③ **soak / consistency 没跑**；④ **I126／I128 都等勾选**（I128 甲要写真库）；⑤ 自动保留策略仍是手工，删旧包那条命令仍未执行；
+⑥ **I126 修好之前，「恢复到新根」只能指向空目录** —— 这条限制写进了台账，但没有写进用户文档，下一轮补。
+
