@@ -424,8 +424,8 @@ class BackupPage(QWidget):
                 f"数据库已恢复到：\n{new_db}\n\n"
                 f"当前应用仍在使用旧库。要使用新库，请重启应用并指定新数据目录。")
         except Exception as exc:
-            # 原因里十有八九带着一条绝对路径（「目标库已存在：C:\…」），塞进这句标签会把它
-            # 顶宽 —— 全文给弹窗与悬停，标签只留一句定长的话。
+            # 原因里十有八九带着一条绝对路径（「目标根里已经有 vectors.npy（文件）：C:\…」），
+            # 塞进这句标签会把它顶宽 —— 全文给弹窗与悬停，标签只留一句定长的话。
             detail = str(exc)
             self.lbl_restore_result.setText("恢复失败：目标根没有写入任何东西（悬停看原因）。")
             self.lbl_restore_result.setToolTip(detail)

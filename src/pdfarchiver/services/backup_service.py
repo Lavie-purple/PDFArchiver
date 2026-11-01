@@ -44,6 +44,26 @@ SETTINGS_MEMBER = "settings.json"
 RESTORABLE_MEMBERS = (DB_MEMBER, VECTORS_MEMBER, SETTINGS_MEMBER)
 
 
+def _refuse_occupied(plan: list[tuple[str, Path, int | None]]) -> None:
+    """落点已被占着就整包拒绝（**ISSUES I126** 甲）。
+
+    `restore_to_new_dir()` 是产品里唯一往「不是自己创建的路径」写东西的地方，而恢复出来的
+    那份是**没有第二份可取**的。2026-11-01 实测两条：目标根里别人那份 `vectors.npy` 被
+    `shutil.copy2` 无声盖掉（界面上报「恢复成功」）；`settings.json` 落点是个同名目录时，
+    `copy2` 把成员写进那个目录、字节比对拿到 0、清理「残留」再 `rmtree` 连目录带里面的
+    文件一起删。所以判据只有一条：**落点存在（含符号链接）就一个字节也不写**。
+
+    目录单独说一句 —— 那不是「同名文件」，是别人整个目录被我们当成落点。
+    """
+    for name, dst, _want in plan:
+        if not (dst.exists() or dst.is_symlink()):
+            continue
+        kind = "目录" if dst.is_dir() else "文件"
+        raise FileExistsError(
+            f"目标根里已经有 {name}（{kind}）：{dst}\n"
+            f"恢复不会覆盖它 —— 请换一个空目录，或先把这份挪走。")
+
+
 def snapshot_paths(backups_dir: Path) -> list[Path]:
     """哪些文件算「库快照」的唯一口径 —— S7 体检的 C11 与 p12 探针都读这一个函数。
 
@@ -108,7 +128,8 @@ class BackupService:
                     members.append(_copy_member(backup_dir, src, name))
             _write_manifest(backup_dir, now, version, members)
         except BaseException:
-            self._discard(backup_dir)
+            # 这个目录是上面刚 `mkdir` 出来的半成品，不是别人的东西 —— 允许整棵删。
+            self._discard(backup_dir, allow_tree=True)
             raise
 
         log.info("备份完成：%s（%d 个成员）", backup_dir, len(members))
@@ -215,18 +236,21 @@ class BackupService:
         backup_path = as_package(Path(backup_path))
         paths = AppPaths.resolve(target_root)
         new_db = paths.catalog_db
-        if new_db.exists():
-            raise FileExistsError(f"目标库已存在：{new_db}")
 
         plan = self._plan_members(backup_path, paths)
         if not any(name == DB_MEMBER for name, _dst, _want in plan):
             raise FileNotFoundError(f"备份里没有 catalog.db：{backup_path}")
+
+        # 目标根是别人的目录：三个落点只要被不是本次恢复的东西占着，就整包拒绝。
+        # 这里是产品里唯一往「不是自己创建的路径」写的地方 —— 覆盖掉的那份没有第二份可取。
+        _refuse_occupied(plan)
 
         written: list[Path] = []
         try:
             for name, dst, want_bytes in plan:
                 src = self._member_source(backup_path, name)
                 dst.parent.mkdir(parents=True, exist_ok=True)
+                _refuse_occupied([(name, dst, want_bytes)])   # 预检到落盘之间也可能被人占了
                 shutil.copy2(str(src), str(dst))
                 written.append(dst)      # 先记账再判定：不然下面这条拒绝就把自己刚写的文件漏在外面
                 got = dst.stat().st_size
@@ -240,7 +264,7 @@ class BackupService:
         except Exception as exc:
             for dst in written:
                 self._discard(dst)
-            raise ValueError(f"恢复失败：{exc}。已删除残留文件。") from exc
+            raise ValueError(f"恢复失败：{exc}。已删除本次恢复写入的文件。") from exc
 
         log.info("恢复到新数据根：%s", new_db)
         return new_db
@@ -291,19 +315,27 @@ class BackupService:
             gc.collect()
 
     @staticmethod
-    def _discard(target: Path) -> None:
+    def _discard(target: Path, *, allow_tree: bool = False) -> None:
         """删掉一个可能还被人开着句柄的产物（库 + 它的 WAL 边文件）。
+
+        默认**只删文件**：`restore_to_new_dir()` 的清理只该动本次恢复自己写出来的东西，
+        目标根里同名目录连同里面的文件不是我们创建的（**ISSUES I126** 乙 —— 原来这里
+        `is_dir()` 就 `rmtree`，把人的目录整个删了）。备份侧那半成品目录是自己刚 `mkdir`
+        的，调用时显式传 `allow_tree=True`。
 
         Windows 上 `Engine` 关连接不等于句柄立刻释放，所以先 `gc` 再重试 5×0.2s；
         实在删不掉只报 warning —— 把原始失败盖住是更坏的结果。
         """
+        if target.is_dir():
+            if not allow_tree:
+                log.warning("不删目录（不是本次恢复创建的）：%s", target)
+                return
+            shutil.rmtree(str(target), ignore_errors=False)
+            return
         gc.collect()
         for _ in range(5):
             try:
-                if target.is_dir():
-                    shutil.rmtree(str(target))
-                else:
-                    target.unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
                 for suffix in ("-wal", "-shm"):
                     target.with_name(target.name + suffix).unlink(missing_ok=True)
                 return

@@ -1120,5 +1120,45 @@ badscan → `test_那句不在本机只覆盖模型缺席_semantic层别处不�
 
 **J · 本轮没跑的／欠的**：① **12 段整链门禁没跑**（收束条款；真根 C2/C9 现红，见 **I128** —— 带 `--data-root` 的 consistency 段即使跑也只会把两条已入账的红再抄一遍，不产生新证据）；
 ② **G2 段没跑**（未动检索路径）；③ **soak / consistency 没跑**；④ **I126／I128 都等勾选**（I128 甲要写真库）；⑤ 自动保留策略仍是手工，删旧包那条命令仍未执行；
-⑥ **I126 修好之前，「恢复到新根」只能指向空目录** —— 这条限制写进了台账，但没有写进用户文档，下一轮补。
+⑥ **I126 修好之前，「恢复到新根」只能指向空目录** —— 这条限制写进了台账，但没有写进用户文档，下一轮补。**本轮已补**（I126 甲 落地，见 §4.63）。
+
+### 4.63 · 轮五十二（**I126 甲 落地：恢复落点被占着就整包拒绝、清理只动本次写的**，**ISSUES I126 → CLOSED**，2026-11-01 13:47:47 → 14:02 埋点取数，墙钟 **≈14m**；至提交另记）
+
+取数口径：会话日志 `0e0ce31f-14ba-464a-9e03-aa9b374b35a0.jsonl` 第 **144,248** 行是轮五十二第一条人类消息
+（**「台账 OPEN 2：I126…、I128…。能否执行完成。」**，UTC `2026-11-01T05:47:47.553Z` = 本地 13:47:47）；末尾事件 UTC `06:01:27Z`。
+窗口内事件 **391** 条，相邻间隔 ≤30min 全计入 ⇒ 活跃 **0.23h**、墙钟 **0.23h**（本轮无挂起段）。
+token 仍旧读不出来（日志 `usage` 恒 0），日志字节 **521,354,545 B** 只当代理、不当 token 用。
+
+**A · 代码改动（`services/backup_service.py`，产品里唯一的恢复函数）**：`restore_to_new_dir()` 在动笔之前对**整包**跑 `_refuse_occupied(plan)`；
+落盘循环内对单个成员再判一次（预检到 `copy2` 之间的竞态）。判据 `dst.exists() or dst.is_symlink()`（同名文件／同名目录／符号链接都算），
+命中文案点名「哪个成员（文件还是目录）＋ 哪条路径」。原来那句只护 `catalog.db` 的 `if new_db.exists(): raise FileExistsError("目标库已存在：…")` 删除 ——
+三个落点从此同一条判据。`written` 只在 `copy2` 之后登记（记「本次真写出去的」）；`_discard(target, *, allow_tree=False)` 默认**只删文件**，
+目录只记 warning 不动；只有 `create_backup()` 失败路径上那个自己刚 `mkdir` 的半成品传 `allow_tree=True`。
+失败文案「已删除残留文件」→「已删除本次恢复写入的文件」；`ui/pages/backup_page.py` 那条注释里引的旧消息名同步改掉。
+
+**B · 断言 4 条**（`tests/integration/test_backup_i126.py`，聚焦复跑 `22 passed in 12.56s` 含 i123／i80／e2e 三个既有文件）：
+① 目标根已有别人那份 **160 B** `data/vectors.npy` ⇒ `FileExistsError`，那份原样还在、目标根**一个字节没写**（`catalog.db`／`config/settings.json` 都不存在）；
+② `config/settings.json` 落点是**同名目录**、里面有 `我的账密.txt` ⇒ 拒绝，目录与里面那份文件都还在；
+③ **目标根存在但为空** ⇒ 照常恢复（反向守卫：挡「一律拒绝」也能让①②变绿）；④ `_discard()` 默认不删目录、`allow_tree=True` 才删。
+
+**C · 坏法两向**（`.probe_work/u52_inject_i126.log`，脚本 `.probe_work/u52_inject_i126.py`）：
+A = `_refuse_occupied()` 立刻 `return`（等价 甲 之前的代码）⇒ **前两条红、另两条绿**：`2 failed, 2 passed`，FAILED 点名那两条；
+B = `if not allow_tree` 改 `if False`（等价旧 `rmtree`）⇒ **只红 `_discard` 那条**：`1 failed, 3 passed`；还原后 `4 passed`。
+两向都证明「红的是被守护的那一条」，不是整片跟着塌。
+
+**D · 全量回归（如实记账，不重跑到绿）**：`1003 passed / 1 failed / 1 skipped in 361.71s`；
+唯一红是 `test_进程级冷启动实测符合G1约定`（原文 `assert 1.939 <= 1.5`），**当刻 CPU 载 62%、可用内存 2 GB**；单跑该条 **`1 passed in 2.39s`**。
+基线 1.5 s **一字未抬**，也没有为它重跑到绿 —— 按「负载场不作数／不换算」记。条数对账：上一轮 `1000 passed ＋ 1 skipped` ⇒ 本轮 **＋4**（`test_backup_i126.py` 四条），
+收集总数 **1005** 与 1003 ＋ 1 failed ＋ 1 skipped 对得上。
+
+**E · 收尾预检**：`scripts/precheck.py` 第 1 步 `tests/guards` **59 passed in 22.14s**；第 2 步 `gates/final.py`（`docs-inject` + `guards`）
+**合计判定 9 条｜本次未跑 10 段**；末行 **`合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN`**。
+
+**F · 台账**：`gates/final.py::ledger_check` 现跑 **128 行｜I1–I128 连续｜CLOSED 100｜MITIGATED 23｜OPEN 1｜WONTFIX 4**；
+结构不合格仍 **1** 行（上限 1）= 历史伤 **I35**，`LEDGER_SHAPE_CAP 1` 未抬。**OPEN 2 → 1**（只剩 **I128**）。
+
+**G · 本轮没跑的／欠的**：① **I128 甲** 没做 —— 三条（C2 三行 `pytest-of-lavie` 残迹／C3·D 三份微信 PDF／C9 一条 `running`）**都要写真库**，
+未获「写库」二字前一行不动；② **I11** 仍 MITIGATED（Recall@10 11/20 < 18/20），缺用户的 **20 条真实查询**；
+③ **12 段整链**按收束条款没跑 —— 带 `--data-root` 的 consistency 段在 I128 的 C2／C9 修好前必然红，跑了只把两条已入账的红抄一遍；
+④ 自动备份保留策略仍是手工，删旧包那条命令仍未执行。
 
