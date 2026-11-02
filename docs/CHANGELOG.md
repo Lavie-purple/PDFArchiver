@@ -6,6 +6,47 @@
 
 ---
 
+## 轮五十三（2026-11-01）—— **I128 甲**：真库三条漂移按「备份 → 单事务删测试残迹 → 产品路径重扫 → 产品 `recover()` 收残尸」清完，**带真根的 consistency 段第一次全绿**；台账 **OPEN 1 → 0**
+
+用户原话：**「先做 I128 写库修复」**（这就是我一直等的那两个字）。**没有改一行产品代码、没有动表结构、没有新屏**（屏数仍 9／导航仍 8 项），
+动的全是真库 `%LOCALAPPDATA%\PdfArchiver\data\catalog.db` 里的数据；台账 `I128` 由 `OPEN` 转 `CLOSED`，`gates/final.py::ledger_check` 现跑
+**128 行｜I1–I128 连续｜CLOSED 101｜MITIGATED 23｜OPEN 0｜WONTFIX 4**（结构不合格仍是历史伤 **I35** 那 1 行，`LEDGER_SHAPE_CAP 1` 未抬）。
+
+- **先备份**：`Connection.backup()` 一致性快照到 `%TEMP%\pdfarchiver-u53-i128-backup\catalog.db`，`page_count` 2,959,252 与源库相等、
+  13 张表计数逐表全等（`documents 16759`／`text_pages 1977962`／`content_fts_docsize 1977962`／`processing_jobs 16826`／`vector_meta 1969289` …）。
+  **`integrity_check` 故意没跑**：`Engine.integrity_check` 的 docstring 记着 2026-10-16 在 6.1 GB 库上阻塞 19 小时+，12 GB 库上只会更久；这条局限写进台账而不是含糊过去。
+- **① C2（3 行测试残迹）**：逐条先确认「`identity_key(path)` 确实不等 + 路径在 `%TEMP%\pytest-of-lavie\` 下 + 父目录 `exists()=False`」，再**一个事务**删三行
+  ⇒ `rowcount=3`；`documents` 16,759 → 16,756，`processing_jobs` 16,826 → 16,823（外键 `ON DELETE CASCADE` 连带三条），
+  `text_pages`／`content_fts_docsize`／`document_metadata`／`vector_meta` 一行没动，六张子表孤儿 0、`PRAGMA foreign_key_check` 0 条。
+- **② C3·D:（3 份盘上有、库里没有的 PDF）**：走产品路径 `scripts/rescan_roots.py --apply --vectors --paths`，**不手工插行**
+  ⇒ doc 16764／16765／16766 新增，页 121/122、94/95、43/43 全部 `text=native fts=done`，向量任务 16828–16830 `done`、`vector_meta` 121/94/43 行。
+- **③ C9（1 条 `running` 残尸）**：**没有另写脚本** —— `rescan_roots` 的 `drain()` 里 `ctx.start_background()` 调的就是产品自己的 `queue.recover()`
+  （日志「后台已启动：worker 1，监听根 6，回收中断 1」），job 16827（`scan`，`attempts` 1 → 2）被收回队列并**真跑完** `done 6/6`，`running` 自然归 0。
+  代价是这条 `scan` 是六根全扫：单 worker 先扫完 `C:\Users\lavie`（165,423 ms）再走 `D:`/`E:`/`F:`/`G:`/`H:`，`drain` 因此等了 **1,256.9s**（`RESCAN: OK`），三条向量任务排在它后面。
+- **验证（这一场的读数）**：`.venv\Scripts\python.exe -u gates/final.py --only consistency --data-root C:/Users/lavie/AppData/Local/PdfArchiver`
+  ⇒ **段耗时 5,086.1s｜VERDICT: ALL GREEN｜本次未跑 10 段**（`.probe_work/u53_consistency.log`；逐条 `.probe_work/p12_real_root.json`）。
+  p12 真根 **19 条｜红 0｜未验 0**：C2「主记录 16759 条｜两项全部一致」、C3·D:「盘上 PDF 103｜该子树主记录 103（已标缺失 0）」、
+  C9「running 0｜分布 done 12016 / failed 4810｜干净」；C1 `integrity_check=ok`（1,124,297 ms）、C11 最新快照整库体检 1,106,983 ms。
+  顺带 **C3·lavie（已标缺失 5,747）与 C3·H:（盘上 1,860 / 库里 1,861、已标缺失 1）也绿** —— 那条 requeued 的 `scan` 把两个 `WONTFIX` 根的漂移一起对平了。
+  `text_pages` 1,977,962 → 1,978,220（+258 = 121+94+43），`documents` 回到 16,759（16,756 + 3）。
+- **RUNLOGS 再切一册（D-059 第 4 条）**：本轮写完 §4.64 活册正好 **1,200** 行（判据是 `> 1_200` 才红，所以没红但零余量），
+  §4.46–§4.55 十块**整轮逐字**搬进 `docs/VERIFICATION-RUNLOGS-ARCHIVE-4.md`（**511 行**），活册留 **699 行**（余 501）；
+  节号序列不改。分册与前三分册同口径 —— **不**登记进 `LEDGER_DOCS`（ARCHIVE-3 也没登记，那里只认活册 + ARCHIVE / ARCHIVE-2）。
+- **全量回归（如实记账，不重跑到绿）**：`pytest tests -q` ⇒ **`1 failed, 1003 passed, 1 skipped in 262.80s`（`PYTEST_EXIT=1`，`.probe_work/u53_regression.log`）**。
+  唯一红是 `test_进程级冷启动实测符合G1约定`，原文 `G1 [约定] ≤1.5s，实测 1.683s`；当刻整机 CPU **37%**、可用 **5.8 GiB**。
+  隔离复跑同一条 **11** 场 = **9 绿 / 2 红**（`.probe_work/u53_g1_isolated.log`），与轮五十二同一形态（那次 `1.939s`@CPU 62%）
+  ⇒ 按 **I25 / I102** 的负载绑定残留记，**1.5s 一字未抬**。本轮 `src/` 与 `tests/` 一行未改，条数与轮五十二**同数**。
+- **收尾**：`scripts/precheck.py` **五场**（两场红都是守卫逮到自己写的裸探针名）—— ① 定稿前 **ALL GREEN**（guards `59 passed in 29.95s`）
+  → ② **判红 1 步**（`test_台账旧文件名不超过上限` 现数 **39 > 37**、`1 failed, 58 passed in 18.58s`）→ ③ 补 `.probe_work/` 前缀复跑绿
+  （`59 passed in 12.81s`，**② 的日志被同名覆写**）→ ④ 改写②③那句措辞时又把那两个名字写成裸名，**同一守卫再红一次**（**39 > 37**、`12.47s`）
+  → ⑤ 再补前缀复跑 **`59 passed in 12.70s`｜合计判定 9 条｜合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN**（④ 的日志同样被同名覆写）；
+  ⑤ 之后又跑了**两场**（⑥ **`59 passed in 14.69s`**、⑦ 提交前最后一场），均 **ALL GREEN**，两场都写进各自的新日志名、**不覆写旧场**；
+  **`PY_STALE_CAP 37` 未抬**（同一形状在 RUNLOGS 分册里 46／41／40／38 > 37 各有点名行，本轮一轮之内红两回）。
+  `ledger_check` `DEFECTS: 0`；`.probe_work/` 删掉 **22** 个本轮一次性、未被任何文档点名的探针中间件，留下 **15** 个全是指名证据。
+  另修两处**陈旧指针**：`README.md` 与 `docs/README.md` 还在说活册从 §4.26／§4.17 起 —— 改成 **§4.56 起** + 四本分册各管的节号段。
+- **仍未完成的两件**：**I11**（Recall@10 11/20 < 18/20，缺用户 20 条真实查询）；**12 段整链没在同一条命令的一场上跑满** ——
+  链内只跑过 `consistency`，`regression`／`guards`／`docs-inject` 是链外补的，另 **8** 段（coldstart／e2e／injection／ui-inject／ocr／soak／package／g2）本轮零读数。
+
 ## 轮五十二（2026-11-01）—— **I126 甲**：恢复到新根不再盖掉别人的文件、也不再 `rmtree` 别人的同名目录（落点被占着 ⇒ 整包拒绝，一个字节不写）；台账 **OPEN 2 → 1**
 
 用户原话：**「台账 OPEN 2：I126…、I128…。两者都要你勾选，I128 甲 还要写真库。…能否执行完成。」**
