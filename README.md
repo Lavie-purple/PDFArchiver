@@ -108,8 +108,10 @@
 - [`docs/OCR.md`](docs/OCR.md) —— 扫描件识别的细节与预算
 
 **给开发者 / 想知道它凭什么可信的人**
-- [`docs/ISSUES.md`](docs/ISSUES.md) —— 已知问题台账，**逐条销账**。状态四类
-  `OPEN` / `MITIGATED` / `CLOSED` / `WONTFIX`，每条的处置格写着卡在哪一步、需要谁配合。
+- [`docs/ISSUES.md`](docs/ISSUES.md) —— 已知问题台账，**逐条销账**。状态五类
+  `OPEN` / `MITIGATED` / `CLOSED` / `WONTFIX` / `LIMIT`（2026-11-03 起的第五类：**已知局限，不计算账** ——
+  换一台机器就不成立的边界，必须写清「重开触发」）。`MITIGATED` 每一条要带「退出判据」，
+  门禁里那把棘轮（账内条数上限）就是为了让这张表**能收敛**而存在的。每条的处置格写着卡在哪一步、需要谁配合。
   **这里不复写条数**：那份表是唯一口径，抄一份数字到 README 就会漂（2026-10-18 发现本处旧数
   停在 71 条而台账已有 88 条，见 **ISSUES I87** 同族）
 - [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)（**§4.56 起**，最近几轮）；§4.17–§4.25 / §4.26–§4.37 / §4.38–§4.45 / §4.46–§4.55 四批整轮逐字在 [`…-ARCHIVE.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE.md) / [`…-ARCHIVE-2.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-2.md) / [`…-ARCHIVE-3.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-3.md) / [`…-ARCHIVE-4.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-4.md)（**节号不变，分册只回答「它在哪一份里」**）

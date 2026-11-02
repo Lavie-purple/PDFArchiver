@@ -82,7 +82,23 @@ FIVE_COLUMNS = ["已实现且已通过测试", "已实现但尚未充分验证",
 PLACEHOLDER_RE = re.compile(r"TBD|TODO|待填|<<[^>]*>>|此处省略")
 
 LEDGER_ROW_RE = re.compile(r"^\| ISSUES I(\d+)\b")
-LEDGER_STATUS_RE = re.compile(r"\*\*(OPEN|MITIGATED|CLOSED|WONTFIX)\*\*")
+#: 第五种状态 **LIMIT**（已知局限）按 2026-11-03 轮五十六 甲+乙 加进来。
+#: 加它之前 `MITIGATED` 只涨不降（20 → 24 → 23，跨十二轮没有一次下降），真实原因不是"问题太多"，
+#: 而是**两种东西混装在同一格里**：① 缺陷在场、下一轮有可能修好；② 换一台机器就不成立的边界
+#: （本机 OCR 速度、页缓存导致的时长跨度、依赖版本、语料量级）。②类没有"修好"那一天，
+#: 于是每跑一场门禁就必然往里添一条，账只会涨不会收 —— 这就是那种仪表自造欠账的形状。
+LEDGER_STATUS_RE = re.compile(r"\*\*(OPEN|MITIGATED|CLOSED|WONTFIX|LIMIT)\*\*")
+#: 棘轮锁（甲 的可断言部分）：`MITIGATED` 行必须在第 6 格写出**当场能判真伪**的退出条件，
+#: `LIMIT` 行必须写出什么条件下它重新变回一条账。判据是字符串在场与否，不是"看起来有没有写"：
+#: 少了这两串字面量，"逐条销账"就退化成一句口号（**ISSUES I35** 那次的教训就是静默失效的判定等于没有判定）。
+MITIGATED_EXIT_MARK = "退出判据："
+LIMIT_REOPEN_MARK = "重开触发："
+#: 现数 6（轮五十六 甲 逐条核实后：23 条 MITIGATED 里 6 条转 CLOSED、10 条转 LIMIT、1 条转 WONTFIX，留 6 条）。
+#: 上限留 2 格余量给下一轮真冒出来的缺陷。**涨了不许抬线**：先去查有没有
+#: 「退出判据已经满足却没改状态」的那几条（本轮逮到两处 —— **ISSUES I109**：台账写着「按钮仍同步」，
+#: 而 `status_page.py:161` 早就在后台线程里跑了；**ISSUES I40**：台账写着「`volume_id` 待删」，
+#: 而 `db/migrations/0006_drop_volume_id.py:17` 早就真删了那一列），抬线等于把这条锁拆掉。
+LEDGER_MITIGATED_CAP = 8
 
 #: 台账表格的格子口径：`| 编号 | 标题 | 状态 | 事实 | 后果 | 销账条件 |` 共 6 格。
 #: 为什么要数格子：2026-10-18 收尾时发现自己上一轮在 I86 那行写进了一个**裸竖线** ——
@@ -117,8 +133,9 @@ def ledger_shape_rows(text: str) -> list[str]:
 
 
 def ledger_check(text: str) -> tuple[list[str], list[str]]:
-    """台账自身的四条口径：每行**有且只有一个**合法状态、编号从 I1 连续、不重号、
-    每行格子结构与表头一致（6 格且以竖线闭合）。返回 (缺陷列表, 读数列表)。
+    """台账自身的六条口径：每行**有且只有一个**合法状态、编号从 I1 连续、不重号、
+    每行格子结构与表头一致（6 格且以竖线闭合）、`MITIGATED` 带「退出判据：」、
+    `LIMIT` 带「重开触发：」，外加 `MITIGATED` 条数不超过上限。返回 (缺陷列表, 读数列表)。
 
     为什么要在门禁里数，而不是只在文档里写一句"收尾逐条销账"：2026-10-16 收尾时发现
     `docs/stage-reports/最终交付报告.md` §六 那条"现数命令"的正则**已经过期成打空**了 ——
@@ -129,6 +146,7 @@ def ledger_check(text: str) -> tuple[list[str], list[str]]:
     nums: list[int] = []
     seen: set[int] = set()
     tally: dict[str, int] = {}
+    mit_ids: list[str] = []
     for line in text.splitlines():
         m = LEDGER_ROW_RE.match(line)
         if not m:
@@ -141,9 +159,22 @@ def ledger_check(text: str) -> tuple[list[str], list[str]]:
         states = LEDGER_STATUS_RE.findall(line)
         if len(states) != 1:
             defects.append(f"I{n} 的状态字段有 {len(states)} 个（要正好 1 个，"
-                           f"且只能是 OPEN/MITIGATED/CLOSED/WONTFIX 加粗之一）")
+                           f"且只能是 OPEN/MITIGATED/CLOSED/WONTFIX/LIMIT 加粗之一）")
         else:
             tally[states[0]] = tally.get(states[0], 0) + 1
+            if states[0] == "MITIGATED":
+                mit_ids.append(f"I{n}")
+            if states[0] in ("MITIGATED", "LIMIT"):
+                mark = MITIGATED_EXIT_MARK if states[0] == "MITIGATED" else LIMIT_REOPEN_MARK
+                tail_cells = ledger_row_cells(line)
+                # 只在形状合格的行为本条负责：形状坏的行（历史伤 I35）连第 6 格都切不出来，
+                # 那是 `ledger_shape_rows` 那一档的事，这里再报一次就是把一个根因数成两条账。
+                if len(tail_cells) - 2 == LEDGER_CELL_COUNT and not tail_cells[-1].strip():
+                    if mark not in tail_cells[LEDGER_CELL_COUNT]:
+                        why = ("这条账没有可当场判真伪的退出条件，于是它只会躺在 MITIGATED 里不降"
+                               if states[0] == "MITIGATED" else
+                               "已知局限必须写清什么条件下重新变回一条账，否则 LIMIT 就成了免罪牌")
+                        defects.append(f"I{n} 是 {states[0]}，但销账格没有「{mark}」—— {why}")
     shape = ledger_shape_rows(text)
     gaps = [n for n in range(1, max(nums) + 1) if n not in seen] if nums else ["空台账"]
     if gaps:
@@ -153,8 +184,15 @@ def ledger_check(text: str) -> tuple[list[str], list[str]]:
                        + "、".join(shape)
                        + f"（每行要正好 {LEDGER_CELL_COUNT} 格且以竖线闭合；"
                          "正文里的竖线必须写成 `\\|`）")
+    if len(mit_ids) > LEDGER_MITIGATED_CAP:
+        defects.append(f"MITIGATED {len(mit_ids)} 条 > 上限 {LEDGER_MITIGATED_CAP}"
+                       f"（{'、'.join(mit_ids)}）：先去查有没有「退出判据已经满足却没改状态」的那几条，"
+                       "别抬这条线 —— 抬线等于把这把棘轮拆掉")
     reading = [f"{len(nums)} 行｜I1–I{max(nums) if nums else 0} 连续",
                "｜".join(f"{k} {v}" for k, v in sorted(tally.items())),
+               f"账内（OPEN+MITIGATED）{tally.get('OPEN', 0) + len(mit_ids)} 条｜"
+               f"MITIGATED {len(mit_ids)}（上限 {LEDGER_MITIGATED_CAP}）｜"
+               f"LIMIT {tally.get('LIMIT', 0)} 条不计算账",
                f"结构不合格 {len(shape)} 行（上限 {LEDGER_SHAPE_CAP}）：{'、'.join(shape) or '无'}"]
     return defects, reading
 
@@ -221,7 +259,8 @@ def gate_docs() -> list[Row]:
     ledger = REPO / "docs/ISSUES.md"
     defects, summary = ledger_check(ledger.read_text(encoding="utf-8", errors="replace")) \
         if ledger.is_file() else (["台账文件不存在"], [])
-    rows.append(Row("已知问题台账逐条有状态、编号连续不重号、格子结构与表头一致", not defects,
+    rows.append(Row("已知问题台账逐条有状态、编号连续不重号、格子结构与表头一致、"
+                    "MITIGATED 带退出判据且不超过上限", not defects,
                     "｜".join(summary) + (f" ── {defects}" if defects else "")))
 
     stale, cap = _ledger_stale_pointers()
@@ -277,9 +316,25 @@ def gate_docs_injection() -> Row:
                        f"{ledger_shape}")
         if not any("结构不合格 2 行" in r for r in read_shape):
             bad.append(f"结构读数没上屏：{read_shape}")
+        # 棘轮锁两条坏法（轮五十六 甲）：MITIGATED 没有退出判据 / LIMIT 没有重开触发。
+        # 两条各自只该报一条，且必须点出自己缺的是哪一串字面量 —— 互相顶替就说明判据是假的。
+        ledger_exit_bad, _ = ledger_check("| ISSUES I1 | a | **MITIGATED** | b | c | 只有残留事实没有判据 |\n"
+                                          "| ISSUES I2 | c | **LIMIT** | d | e | 只写了边界没有触发 |\n")
+        if len(ledger_exit_bad) != 2:
+            bad.append(f"缺退出判据/缺重开触发的坏法抓到 {len(ledger_exit_bad)} 项（应正好 2 项）："
+                       f"{ledger_exit_bad}")
+        if not (any("退出判据：" in d for d in ledger_exit_bad)
+                and any("重开触发：" in d for d in ledger_exit_bad)):
+            bad.append(f"棘轮锁没分清两种档位：{ledger_exit_bad}")
+        ledger_exit_ok, _ = ledger_check("| ISSUES I1 | a | **MITIGATED** | b | c | 退出判据：X 归零且有断言 |\n"
+                                         "| ISSUES I2 | c | **LIMIT** | d | e | 重开触发：换上 GPU |\n")
+        if ledger_exit_ok:
+            bad.append(f"带判据的好台账被误判：{ledger_exit_ok}")
     return Row("交付文档门禁自己有没有牙（坏法注入实测）", not bad,
-               "残缺报告 + TBD 文档 + 坏台账（编号断档 / 非法状态 / 裸竖线与未闭合行）：抓到 "
-               + ("、".join(bad) if bad else "三条坏法全红、好台账不误判"))
+               "残缺报告 + TBD 文档 + 坏台账三组注入（编号断档 / 非法状态 / 裸竖线与未闭合行 / "
+               "缺退出判据与缺重开触发）：抓到 "
+               + ("、".join(bad) if bad
+                  else "报告缺 4 栏与 TBD 均命中，台账 5 项坏法全红，两组好台账零误判"))
 
 
 def segment_guards() -> list[Row]:
