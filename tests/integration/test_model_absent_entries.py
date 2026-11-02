@@ -31,7 +31,7 @@ from pdfarchiver.services.bootstrap import AppContext, bootstrap
 from pdfarchiver.semantic.embedding import EmbeddingService
 from pdfarchiver.semantic.vector_store import VectorStore
 from pdfarchiver.ui.semantic_state import ABSENT_REASON, DISABLE_TIP
-from tests.conftest import plant_model_files, settle as _settle
+from tests.conftest import plant_model_files, run_search as _run_search, settle as _settle
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver"
 _UI = _SRC / "ui"
@@ -197,7 +197,7 @@ def test_置灰不许顺手废掉关键词通道(window, ctx, qapp) -> None:
     page.reload()
     _settle(qapp)
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     assert page.doc_table.rowCount() == 1, f"关键词通道该照常出结果：{page.doc_table.rowCount()} 行"
     assert page.status_label.objectName() != "danger", "正常出了结果却被染红"
@@ -234,7 +234,7 @@ def test_语义搜索失败只上一句原文进日志(window, ctx, qapp, monkey
     page = _library(window, qapp)
     monkeypatch.setattr(ctx.semantic_search, "search", _raise_missing)
     with caplog.at_level(logging.WARNING, logger="pdfarchiver"):
-        page._do_semantic_search(_QUERY)
+        _run_search(page, qapp, _QUERY, semantic=True)
     text = page.status_label.text()
     assert ABSENT_REASON in text, f"没上那一句实话：{text!r}"
     assert _FAKE_ROOT not in text and "model_int8" not in text, f"绝对路径进界面了（坏法⑤）：{text!r}"
@@ -285,7 +285,7 @@ def test_建窗之后模型被移走点击仍只上一句(window_ready, ctx_read
         # 再搜索。反过来写会被「没有当前行」的早退盖住，AI 分类那一处就验不到了。
         page._on_ai_classify_clicked()
         ai_text = page.ai_result_label.text()
-        page._do_semantic_search(_QUERY)
+        _run_search(page, qapp, _QUERY, semantic=True)
     status_text = page.status_label.text()
     assert ABSENT_REASON in status_text, f"过期快照下把后端原文吐上了屏：{status_text!r}"
     assert ABSENT_REASON in ai_text, f"AI 分类这一处吐了原文：{ai_text!r}"

@@ -42,7 +42,7 @@ from pdfarchiver.services.bootstrap import bootstrap
 from pdfarchiver.ui.collection_bar import CONDITIONS, FTS_LABELS
 from pdfarchiver.ui.main_window import MainWindow
 from tests.integration.dialog_doubles import stub_message_boxes, stub_text_prompt
-from tests.conftest import settle as _settle
+from tests.conftest import run_search as _run_search, settle as _settle
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "pdfarchiver"
 
@@ -554,9 +554,7 @@ def test_关键词搜索就在当前那排chips里搜(window, qapp) -> None:
 
     page = _library(window, qapp)
     page.filter_bar.set_field("category_ids", [cat_in])
-    page.search_input.setText("合同")
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, "合同")
     assert set(_doc_ids(page)) == set(inside), f"带着「分类 = 命中卷」搜出了别的分类的文档"
     assert "分类 = 命中卷" in _chip_texts(page.filter_bar), "搜完了，屏幕上那排条件却不在了"
 
@@ -574,10 +572,7 @@ def test_语义搜索明说自己不看这排条件(window, qapp, monkeypatch) -
                         lambda text, top_k=50: [(i, 1, 0.9) for i in ids], raising=False)
     page = _library(window, qapp)
     page.filter_bar.set_field("category_ids", [cat_id])
-    page.semantic_toggle.setChecked(True)
-    page.search_input.setText("随便")
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, "随便", semantic=True)
     assert "语义通道不看上面那排筛选条件" in page.status_label.text()
 
 

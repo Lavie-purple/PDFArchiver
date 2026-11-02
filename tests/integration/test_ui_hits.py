@@ -23,6 +23,7 @@ from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui import library_hits
+from pdfarchiver.ui.library_rows import DOC_ID_COLUMN
 from pdfarchiver.ui.main_window import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -30,7 +31,7 @@ from pdfarchiver.ui.main_window import (
     MIN_WINDOW_WIDTH,
 )
 from pdfarchiver.ui.pages.reader_page import ReaderPage
-from tests.conftest import page_at as _page_at, settle as _settle
+from tests.conftest import page_at as _page_at, run_search as _run_search, settle as _settle
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ def test_命中面板按通道分组带页码与片段且无页码的通道不�
     _seed_hit_corpus(ctx, make_pdf)
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     page.search_input.setText("保留期限")   # 4 字 ⇒ trigram 正文通道，命中在第 2 页
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
 
     assert _headers(page) == ["文件名", "路径", "正文"], \
@@ -143,7 +144,7 @@ def test_浏览态不许留着上一次查询的命中(window, ctx, qapp, make_p
     _seed_hit_corpus(ctx, make_pdf)
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     assert page.hit_list.count() > 0, "用例前提：查完要有命中在场"
     page.hit_list.setCurrentRow(0)
@@ -200,7 +201,7 @@ def test_跳转按钮与双击真的走到_S2_并落在那一页(window, ctx, qa
     doc_id = _seed_hit_corpus(ctx, make_pdf)
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
 
     body_row = next(i for i in range(page.hit_list.count())
@@ -235,7 +236,7 @@ def test_跳转按钮与双击真的走到_S2_并落在那一页(window, ctx, qa
     window._select_by_page_id("library")
     _settle(qapp)
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     _activate(window, qapp)
     viewport = page.doc_table.viewport()
@@ -273,3 +274,44 @@ def test_越界页码拒绝并说明原因而不是就近取整(window, ctx, qap
     assert "第 99 页不存在" in text and "共 3 页" in text, f"越界没说明原因：{text}"
     assert "已停在第 2 页" in text, f"要能说清现在到底停在哪：{text}"
     assert reader._current_page == 1, f"越界被就近取整了：现在在第 {reader._current_page + 1} 页"
+
+
+# ---------------------------------------------------------------------------
+# 轮五十八 ②：命中表重排之后，右栏那份详情不许停在上一批的第 N 行
+# ---------------------------------------------------------------------------
+
+
+def test_命中表重排之后详情写的是这一行的那一份(window, ctx, qapp, make_pdf) -> None:
+    """用户红框点名的第二处：表里第一行已经换了，「文档详情」还写着上一批那一行。
+
+    根因不在详情那段代码，在 Qt 的选中保持：`QTableWidget` 按**行号**保选中，
+    `setRowCount` + `setItem` 不改变 `currentRow` ⇒ `itemSelectionChanged` 一次都不发，
+    只挂在那根信号上的详情就停在上一批的第 N 行（真机读数：表首行已是 `文档07.pdf`，
+    详情仍写 `文件名：文档29.pdf`）。修法因此是**再走一次那唯一的渲染入口**
+    （`_populate_table` 末尾调 `_on_doc_selected()`），而不是给详情另开第二个取数口径。
+
+    判据只有一条用户看得见的：详情首行的文件名 == 表格首行那一格。三条前提读数缺一条这条就
+    在验别的东西：重排前后 `currentRow` 都得是 0（不然"详情没跟着换"可能只是选中被清了，
+    修没修一个样）、首行那份文档必须真的换了（不然量的是没变过的表）、详情起初确实写着首行。
+    坏法注入实测（2026-11-03）：删掉 `_populate_table` 末尾那句 `self._on_doc_selected()`
+    ⇒ 红在「详情首行 == 表首行」那条，读数逐字写着两边各是哪一份。
+    """
+    _seed_hit_corpus(ctx, make_pdf)
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    assert page.doc_table.rowCount() == 2, "用例前提：浏览态两份都在表里"
+    page.doc_table.selectRow(0)
+    _settle(qapp)
+    first_before = page.doc_table.item(0, DOC_ID_COLUMN).text()
+    assert page.detail_view.toPlainText().startswith(f"文件名：{first_before}"), \
+        f"用例前提：详情写的就是当前行那一份（当前是「{first_before}」）"
+
+    _run_search(page, qapp, "复函稿")      # 只有另一份的文件名命中 ⇒ 首行换人
+    _settle(qapp)
+    assert page.doc_table.rowCount() == 1 and page.doc_table.currentRow() == 0, (
+        f"用例前提没了：重排后 {page.doc_table.rowCount()} 行 / 当前行 "
+        f"{page.doc_table.currentRow()} —— 选中被清了，这条就量不到「详情过没过期」")
+    name_now = page.doc_table.item(0, DOC_ID_COLUMN).text()
+    assert name_now != first_before, "用例前提：这批命中得真的换了一份，否则验的是没变过的表"
+    detail = page.detail_view.toPlainText()
+    assert detail.startswith(f"文件名：{name_now}"), (
+        f"详情停在上一批那一行了：表首行是「{name_now}」，详情首行是「{detail.splitlines()[0]}」")

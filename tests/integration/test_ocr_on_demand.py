@@ -18,7 +18,7 @@ from __future__ import annotations
 from pdfarchiver.ui.library_hits import OCR_HINT_BTN_TEXT
 from pdfarchiver.ui.pages.library_page import FILTER_OCR_BTN_TEXT
 from tests.integration.ocr_doubles import _scanned, _textual
-from tests.conftest import settle as _settle
+from tests.conftest import run_search as _run_search, settle as _settle
 
 #: 一个**任何正文里都不会有**的词：提示条只在"一条没命中"时说话，命中数必须是 0 而不是"很少"。
 NO_SUCH_WORD = "量子纠缠式装订线"
@@ -145,9 +145,7 @@ def test_一条都没命中时提示条说清为什么搜不到(window, ctx, roo
     [_scanned(ctx, root, make_scanned_pdf, name=f"扫描件{i}.pdf") for i in (1, 2)]
     page = _library(window, qapp)
 
-    page.search_input.setText(NO_SUCH_WORD)
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, NO_SUCH_WORD)
 
     assert page.ocr_hint_band.isVisible(), "一条没命中却没说为什么"
     line = page.ocr_hint_label.text()
@@ -161,9 +159,7 @@ def test_有命中时提示条收起(window, ctx, root, make_scanned_pdf, qapp) 
     _scanned(ctx, root, make_scanned_pdf, name="扫描件甲.pdf")
     page = _library(window, qapp)
 
-    page.search_input.setText("扫描件甲")
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, "扫描件甲")
 
     assert page.status_label.text(), "夹具没跑出结果行"
     assert not page.ocr_hint_band.isVisible(), page.ocr_hint_label.text()
@@ -175,9 +171,7 @@ def test_提示条收起时不留空名单(window, ctx, root, make_pdf, qapp) ->
     _textual(ctx, root, make_pdf, name="文字版.pdf")
     page = _library(window, qapp)
 
-    page.search_input.setText(NO_SUCH_WORD)
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, NO_SUCH_WORD)
 
     assert not page.ocr_hint_band.isVisible(), page.ocr_hint_label.text()
     assert page.ocr_hint_label.text() == "", page.ocr_hint_label.text()
@@ -189,10 +183,7 @@ def test_提示条那颗按钮排的是这一批(window, ctx, root, make_scanned
     ids = [_scanned(ctx, root, make_scanned_pdf, name=f"扫描件{i}.pdf") for i in (1, 2)]
     page = _library(window, qapp)
     before = _queued(ctx)
-
-    page.search_input.setText(NO_SUCH_WORD)
-    page.search_btn.click()
-    _settle(qapp)
+    _run_search(page, qapp, NO_SUCH_WORD)
     assert page.ocr_hint_band.isVisible()
 
     page.ocr_hint_btn.click()

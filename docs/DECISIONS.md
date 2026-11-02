@@ -979,3 +979,48 @@ keep-alive —— 没有一条是用户提过的需求）。AGENTS.md 元规则�
 WONTFIX 5｜账内 6`，改账后 `131 行｜I1–I131 连续｜MITIGATED 2｜WONTFIX 10｜账内 2｜缺陷 0`。`LEDGER_MITIGATED_CAP = 8` 与其余阈值
 一个字没动（本轮没有抬任何一条线）。台账从「130 行、看着要读一天」变成「**2 行等你**」，这就是丁 说的「一眼看得完」。
 
+## D-075 · 轮五十八：检索离开主线程 ⇒ 两条「唯一出口」立起来（`emit_if_alive` 与 `run_search`），另加浮层自画底与左栏按实测定宽（2026-11-03，用户原话「①②③④都跟着你的推荐来」）
+
+**背景（这条决定是被真实使用逼出来的，不是我走查走出来的）**：用户第一次主动报界面 ——「我进行实际查询，怎么有显示bug的」（浮层透出表格线 + 右栏详情停在上一批）
+「而且查询起来，会卡顿一下」「这个左侧菜单太宽了，适当窄一点」。四条里只有第三条要改执行模型，①②④ 都是既有屏内的改动（**屏数仍 9、导航仍 8 项**）。
+
+**决定 1 · 检索走后台线程，形状定死**：`threading.Thread(name="library-search", daemon=True)` + `QtCore.Signal` 回主线程；线程内**自己开连接**
+（`thread_connection()`）、`finally` 里 `close_thread_connection()` —— 连接不跨线程共享；点下按钮**先**上屏「检索中…」（状态栏唯一出口 `_set_status`）；
+关键词与语义**两条通道各自的失败都要上屏并带后端原文**（丁）。**`search/service.py` 一行未改**：这条只改「在哪个线程调用它」，不改它本身要多久 ——
+所以 **G2 的 500ms 线、任何耗时数字本轮一个字没动**，乙（把冷读首查读进 G2）与 丙（元数据 `UNION ALL LIKE` 那笔税）**明确不做**。
+
+**决定 2 · 后台线程回主线程那一发只有一个出口 `ui/thread_reply.py::emit_if_alive`（40 行）**：worker 最后一行裸 `signal.emit(...)` 撞上一个已销毁的接收方会抛
+`RuntimeError: Internal C++ object (…) already deleted`，**而这个抛出得了线程**（走 `threading.excepthook`，屏上什么都不显示）—— 这是 ③ 落地当天自己引入的缺陷。
+按 AGENTS.md「禁止同类问题逐个打补丁」，规则一次声明而不是逐处修：站点是 `library_page.py` 的 `library-search`／`status_page.py` 的 `status-reload`／
+`health_panel.py` 的 `db-check-<档>` **三处**（后两处是既有 worker，同一族）。两条 AST 守卫 `tests/guards/test_worker_emit_sites.py`（92 行）钉住
+「worker 里不许有裸 `emit()`」与「`ui/` 下真有 worker 的文件 ⇄ `thread_reply.py` 点名的站点名单一致」。**它查不出什么**：跨线程队列信号在接收方
+**还活着但已隐藏** 时照样投递成功 —— 那一类要的是「上屏了没有」，由决定 3 管。**为什么不是加 try/except 在调用点**：那会把「接收方已经没了」这一件真实发生的事
+咽下去，屏上从此没有那条回信，也没有任何地方记录过它。
+
+**决定 3 · 点按钮类断言必须等回主线程那一发真的上屏，唯一出口 `tests/conftest.py::run_search`**：异步化之后，六处 `search_btn.click()` + `settle()` 形状的
+用例**验的是回信之前那一屏** —— 不红，也不证明任何事（p21 注入 `k5`「关键词不看屏幕上那排 chips」迁之前照样绿，逐字 `rc=0｜failed=0 passed=1`）。
+这类缺陷不会以「红」的形式出现，所以不能逐例修：全站 grep 同一形状，**9 个测试文件 27 处**全走这一条出口（内部走真用户路径：`_do_search()` →
+`search_btn.click()` → 等那一发上屏）。迁完之后 p21 `k5`／`k6` **2/2 按期望变红** ⇒ 这条出口是被证伪过的，不是新的空转。**留下两处直连是有意的**：
+出口本身（`conftest.py:100`），以及那条必须读「`_do_search()` 返回的那一刻」状态的断言（`test_round42_ux.py:244`）。
+
+**决定 4 · 浮层必须自己画底**（①甲）：Qt **不替裸 `QWidget` 画背景**，`FloatablePanel` 浮在中栏表格上时表格线就从底下透上来。口径定成三条一起：
+`objectName` + `WA_StyledBackground` + `theme.py` 里对应 `card_bg` 的 QSS，判据用**逐点取样**（`test_浮层覆盖区自己画底_不许透出底下的表格`，先要求取样点 ≥200
+防这条自己空转），不许用「控件存在／样式表写上了」代替像素。**为什么单独写进决定**：这是桌面 Qt 与网页 CSS 直觉相反的一处，写在线条上而不是记在脑子里。
+
+**决定 5 · 左栏宽度按实测内容需求定，不按感觉**（④甲）：`NAV_WIDTH 200 → 180`，emoji 从 item 文字里挪进真 `QIcon`，**八条标题一字不改**
+（新增断言逐字比对 `item.text()` 与标题列表）。定数的依据是 `sizeHintForColumn(0) = 160`（最长那条的**内容需求**）⇒ 180 = 放得下 + 留 20px；
+坏法「再收到 140」当场红在 `侧栏实宽 140px 装不下最长那条的 160px —— 会显示成省略号，收宽收过头了`。**同批**：换了一批行之后详情走**既有入口**
+`_on_doc_selected` 重渲染（②甲），不新造第二条写详情的路。
+
+**代价（必须明写）**：① 检索改异步之后，任何「点一下→读屏幕」的新用例都必须走 `run_search`，否则就是**静默空转**（本轮已把 27 处一次性迁完，
+但这条约束是长期的，写在这里给下一轮）；② 为了不动 `library_page.py` 的 **700 行自线**（**ISSUES I96** 甲，未抬），浏览分页那一格整段搬进
+新 `ui/library_browse.py`（99 行 mixin）⇒ S1 那一屏从此分散在 4 个 mixin 里（`library_filter`／`library_hits`／`library_rows`／`library_browse`），
+读一条动线要多开几个文件；③ 全量回归本轮 **1 failed**（G1 冷启动 **15.297s** vs 线 1.5s），按配对证据（第三方 `DoubaoWork … batch_v3.py` 428.2% CPU、分段读数
+`import_to_run 12.882 / assemble 0.268 / window 0.316`）判定为负载绑定、与本轮改动无关，**没有为它重跑到绿、没有抬 1.5s、没有按它开账**。
+
+**落点与读数**：`src/pdfarchiver/ui/thread_reply.py`（新 40 行）／`ui/library_browse.py`（新 99 行）／`ui/pages/library_page.py`（现 695，自线 700 未抬）／
+`ui/pages/status_page.py`／`ui/pages/health_panel.py`／`ui/main_window.py`（`NAV_WIDTH`）／`ui/theme.py`（`floatPanel` 那条 QSS）／`ui/tier.py`／
+`tests/guards/test_worker_emit_sites.py`（新 2 条）／`tests/integration/test_worker_reply.py`（新 1 条参数化 ×3）／`tests/conftest.py`（`run_search`）／
+`tests/probes/p21_saved_search_injection.py`（`k5` 锚点跟实现走）／台账 **I11／I131 各追记一段，状态与退出判据不动、账内仍 2**。**验证读数**：
+见 `docs/VERIFICATION-RUNLOGS.md` §4.69。
+

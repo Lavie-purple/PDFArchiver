@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,37 @@ def settle(qapp, rounds: int = 6) -> None:
     """
     for _ in range(rounds):
         qapp.processEvents()
+
+
+def wait_search(page, qapp, timeout: float = 30.0) -> None:
+    """等 S1 那趟后台检索真的落回主线程。
+
+    队列信号**只有主线程跑事件循环时才投递**，所以这里必须 `processEvents()` 轮询、不能睡等
+    （睡过去只会一直 `searching`，到超时才红）。同一形状的等待在
+    `test_status_readout.py::_wait_reload` 另有一份，但那份认的是 `StatusPage.reloading` 那一格；
+    「怎么等才算完」抄两份就会漂，所以凡走 S1 检索的用例都从这里过。
+    """
+    deadline = time.monotonic() + timeout
+    while page.searching:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"后台检索 {timeout:.0f}s 未结束（library-search 线程没回信号？）")
+        qapp.processEvents()
+
+
+def run_search(page, qapp, query: str | None = None, *, semantic: bool | None = None,
+               timeout: float = 30.0) -> None:
+    """把用户那一串动作走完：写查询词 →（可选）切「语义搜索」勾选 → 点那颗按钮 → 等到上屏。
+
+    存在的理由有两个：① S1 的检索从轮五十八 ③ 甲 起是异步的，每个用例自己写一遍等待必然漂；
+    ② 它走的是**用户那条路**（往搜索框里写字、点那颗按钮），不是页面的内部方法 ——
+    原先有六个用例直接调 `_do_semantic_search()`，接线断了它们照样绿。
+    """
+    if query is not None:
+        page.search_input.setText(query)
+    if semantic is not None:
+        page.semantic_toggle.setChecked(semantic)
+    page.search_btn.click()
+    wait_search(page, qapp, timeout)
 
 
 def resize_stepped(window, qapp, width: int, height: int) -> None:

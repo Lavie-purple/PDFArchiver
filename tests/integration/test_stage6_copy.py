@@ -34,7 +34,7 @@ from pathlib import Path
 from pdfarchiver.db.models import Document
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
-from tests.conftest import settle as _settle
+from tests.conftest import run_search as _run_search, settle as _settle
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "pdfarchiver"
 # 假原文（不写本机路径字面量：`tests/guards/test_architecture.py` 拦的就是源码常量里的盘符）
@@ -106,7 +106,7 @@ def test_模型缺失时语义搜索一句上屏原文进日志(window, qapp, ct
     _seed_doc(ctx)
     monkeypatch.setattr(ctx.semantic_search, "search", _raise_missing)
     with caplog.at_level(logging.WARNING, logger="pdfarchiver"):
-        page._do_semantic_search(_QUERY)
+        _run_search(page, qapp, _QUERY, semantic=True)
     text = page.status_label.text()
     assert "语义模型不在本机" in text, f"屏上要出的是那一句实话：{text!r}"
     assert _MODEL_MISSING not in text, f"绝对路径进界面了：{text!r}"
@@ -122,11 +122,11 @@ def test_一次失败之后紧接着的成功不许留着红(window, qapp, ctx, 
     page = _library(window, qapp)
     doc_id = _seed_doc(ctx)
     monkeypatch.setattr(ctx.semantic_search, "search", _raise_missing)
-    page._do_semantic_search(_QUERY)
+    _run_search(page, qapp, _QUERY, semantic=True)
     assert page.status_label.objectName() == "danger"
     monkeypatch.setattr(ctx.semantic_search, "search",
                         lambda query, top_k=50: [(doc_id, 1, 0.87)])
-    page._do_semantic_search(_QUERY)
+    _run_search(page, qapp, _QUERY, semantic=True)
     assert page.status_label.objectName() != "danger", \
         "红是失败态专用的；成功后还挂着红等于把一次失败变成常驻"
     assert "命中 1 份" in page.status_label.text(), page.status_label.text()
@@ -136,7 +136,7 @@ def test_无结果那句不再提模型(window, qapp, ctx, monkeypatch) -> None:
     """③ 之后「模型不可用」是**抛错**，不再是"无结果"的一种原因；那句话留着就是第二句假话。"""
     page = _library(window, qapp)
     monkeypatch.setattr(ctx.semantic_search, "search", lambda query, top_k=50: [])
-    page._do_semantic_search(_QUERY)
+    _run_search(page, qapp, _QUERY, semantic=True)
     text = page.status_label.text()
     assert "模型" not in text, f"无结果的原因只剩向量库为空，那句里的「模型」已经不该在场：{text!r}"
     assert "向量" in text, f"要说清空的是哪一个库：{text!r}"

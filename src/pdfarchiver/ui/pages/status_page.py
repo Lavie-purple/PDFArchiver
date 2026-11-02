@@ -32,6 +32,7 @@ from PySide6 import QtCore, QtWidgets
 from pdfarchiver import __version__
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.nav import NAV_ITEMS
+from pdfarchiver.ui.thread_reply import emit_if_alive
 
 # 磁盘口径一句话。**2026-10-17 起它是假的**（归档执行与整批撤销接上了后台执行器），
 # 所以那一行改成了"哪两个按钮会动盘、怎么个动法"。再改它仍然要带着 G17/G18/G19 的实测证据
@@ -156,7 +157,7 @@ class StatusPage(QtWidgets.QWidget):
                 error = ""
             except BaseException as exc:  # noqa: BLE001 - 没读出来也要把原文交给界面
                 text, error = previous, f"{type(exc).__name__}: {exc}"
-            self._text_ready.emit(text, error)
+            emit_if_alive(self._text_ready, text, error)
 
         threading.Thread(target=work, name="status-reload", daemon=True).start()
 

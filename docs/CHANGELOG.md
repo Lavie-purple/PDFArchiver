@@ -6,6 +6,22 @@
 
 ---
 
+## 轮五十八（2026-11-03）—— **用户第一次主动报界面四件事，①②③④ 全按推荐落地**：浮层自己画底（逐像素取样）／重排表格后详情不过期／检索搬进后台线程（「检索中…」先上屏 + 两通道失败都上屏）／左栏 **200→180** 且 emoji 挪成真 QIcon；③ 自己引入的两条缺陷当场各追补一轮（A 回主线程那一发只有一个出口 `emit_if_alive`，B 点搜索的用例要真的等上屏，**27 处**迁移）；全量回归 **`1 failed, 1020 passed, 1 skipped in 703.20s`**，唯一那条红是 G1（负载绑定，分段读数证死不是本轮改动）；账内仍 **2**
+
+用户原话：**「我进行实际查询，怎么有显示bug的」／「而且查询起来，会卡顿一下」／「这个左侧菜单太宽了，适当窄一点」／「我进行了多个尝试了，可能没有20次这么多，目前应该也能算是真实查询 使用了这个功能了」** → 五条编号方案里勾选 **「①②③④都跟着你的推荐来」**；**⑤ 没勾** ⇒ 只做 甲（台账追记）。
+本轮承诺：**不改任何耗时数字、不抬 G2 的 500ms 线、不写真库、不加新屏**（屏数仍 **9**、导航仍 **8 项**，八条标题一字不改）。
+
+- **①甲 浮层透出**：`FloatablePanel` 是裸 `QWidget`，Qt 不替它画底，浮在中栏表格上就透线。改 `objectName="floatPanel"` + `WA_StyledBackground` + `theme.py` 一条用 `card_bg` 的 QSS；断言在浮层覆盖区**逐点取样**（先要求取样点 ≥200，防这条自己空转）。坏法摘掉 QSS ⇒ 逐字红在 `105 / 781 个取样点不是面板底色 #ffffff，露出来的是底下表格的东西`。
+- **②甲 详情过期**：换了一批行，右栏详情还停在上一批那一行。重排完走**既有入口** `_on_doc_selected` 重渲染（不新造第二条写详情的路）。坏法红在 `详情停在上一批那一行了：表首行是「请示（复函稿）.pdf」，详情首行是「文件名：归档范围与保留期限的请示.pdf」`。
+- **③甲+丁 检索搬后台**：daemon `threading.Thread(name="library-search")` + `QtCore.Signal`，线程内 `thread_connection()`、`finally` 里 `close_thread_connection()`；点下按钮先上屏「检索中…」；关键词与语义**两条通道各自的失败都要上屏并带后端原文**。`search/service.py` **一行未改**（只在 UI 侧换线程调它）。等待光标那条**没删，改成反向钉**（异步里 `overrideCursor()` 全程必须是 `None`）。为不动 `library_page.py` 的 **700 行自线**（**ISSUES I96** 甲），浏览分页那一格整段搬进新 `ui/library_browse.py`（99 行 mixin），`library_page.py` 现 **695**。**乙／丙 明确不做**（冷读进 G2 / 元数据 LIKE 那笔税）。
+- **追补 A · 自伤**：worker 最后一行 `emit` 撞上已销毁的接收方会抛 `RuntimeError: Internal C++ object (…) already deleted`，而且**出得了线程**、屏上什么都没有。规则一次声明（不逐个打补丁）：**后台线程回主线程那一发只有一个出口 `ui/thread_reply.py::emit_if_alive`**，站点三处（`library_page` / `status_page` / `health_panel`，后两处是既有 worker、同一族）+ 两条 AST 守卫 `tests/guards/test_worker_emit_sites.py`。坏法 **A1–A4 4/4 按期望变红**（A1 摘守卫 ⇒ 三条各自点名 `LibraryPage/StatusPage/HealthPanel already deleted`；A2 改回裸 emit ⇒ 点名 `library_page.py::work:402 裸 emit @ 414`；A3 冒第四个站点 ⇒ 点名 `library_hits.py`；A4 删说明里一行 ⇒ 点名 `['health_panel.py']`）。
+- **追补 B · 自伤，性质更坏**：六处用例是 `search_btn.click()` + `settle()`，检索一异步它们验的就是**回信之前那一屏** —— **不红，也不证明任何事**。全站 grep 同一形状，**9 个测试文件 27 处**全走唯一出口 `tests/conftest.py::run_search`。证伪两次：迁之前 p21 `k5` 注进去照样绿（逐字 `rc=0｜failed=0 passed=1`），迁之后 `k5`／`k6` **2/2 红**、末行 **`抓到 2/2 条坏法` / `VERDICT: ALL GREEN`**。留下两处直连是有意的（出口本身 + 那条必须读「返回那一刻」状态的断言）。⇒ 「不会变红的断言直接删」本轮的正确答案不是删，是**接回去**。
+- **④甲 左栏**：`NAV_WIDTH 200 → 180`、`NAV_ICON_SIZE 18`，emoji 从 item 文字里挪进真 `QIcon`，**八条标题一字不改**（新增断言逐字比对 `item.text()`）。实测 `nav.width() = 180｜sizeHintForColumn(0) = 160`（最长那条的内容需求）⇒ 180 是「放得下还留 20px」；坏法两条：塞回 emoji ⇒ 红在「导航文字被装饰字符污染」，再收到 140 ⇒ 红在「140px 装不下 160px，会显示成省略号」。顺带把「太宽」时的三栏视口量齐（窗口 1024／1280／2560 ⇒ 文档表视口 **778／1,034／2,314**），`test_ui_layout.py` 那条前提注数 **780 → 778**（判据未改）。
+- **⑤甲 台账（只读，状态不动）**：**I11** 追记「第一批真实查询到了，但判据① 的输入仍不满足，卡点具体 —— **查询文本在项目里没有任何落盘处**（`src/pdfarchiver/search/` 只有 `service.py`、零 logger；`app.log*` 里那 315／326 行「检索」全是 scan/worker）」，**18/20 不动、不换口径**；**I131** 追记只读新数 `document_categories` **0**、`document_tags` **0**、`categories` 14、`tags` 0，**退出判据不动、没有代点、没有写库**（没有「写库」二字）。两条背景数字明写**不是判据**：`documents` 16,760→17,456（+696）而 `text_pages` 仍 1,978,269 ⇒ **行数 ≠ 份数**；`jobs` `failed` 5,506 只记数不编原因。账内（OPEN+MITIGATED）仍 **2**。
+- **本轮自己造的假红，被守卫当场逮到**：台账追记里把状态写成加粗 `**MITIGATED**` ⇒ `tests/guards/test_ledger_shape.py` **2 failed**（`I11 的状态字段有 2 个`、`I131 的状态字段有 2 个`，每行只允许一个加粗状态词）。去掉加粗后 `test_ledger_shape + test_doc_pointers + test_file_size` **23 passed**。
+- **唯一那条红照记、没重跑到绿**：G1 冷启动 `实测 15.297s`（线 **1.5s**）。配对证据：期间 CPU **100%**／可用 **616 MiB**，占用来自**第三方** `DoubaoWork … batch_v3.py`（PID 24040，**428.2% CPU**、3,773 MiB），单条复跑仍红 **2.804s**；应用自报的分段读数 **`cold 13.466s｜import_to_run 12.882 / assemble 0.268 / window 0.316`** ⇒ 时间全在解释器与依赖 import，建窗正常 ⇒ **①甲／④甲 不是引入者**。
+- **本轮明确不做**：真库**零写入**（`backups/` 一个文件没动）、整链 11 段／soak／injection／consistency 真根／g2／package **零读数**（按 **D-074** 写「不做，无读数」，不再算欠）、109 条 CLOSED 一条没复核、⑤ 的乙（查询串落盘）与 丙（S1 分类筛选引导入口）要改产品、等单独勾。九条阈值线复核**全部未抬**（G1 1.5s／G2 500ms／忙线 60%／`MD_LIMIT 1,200`／`PY_LIMIT 800`／`library_page.py` 700／`LEDGER_SHAPE_CAP 1`／`LEDGER_STALE_CAP 7`／`PY_STALE_CAP 37`／`LEDGER_MITIGATED_CAP 8` 现 2）。
+
 ## 轮五十七（2026-11-03）—— **丙（冻结验证范围）+ 丁（台账只留两条真欠账）**：段数冻在 **11** 并有守卫当场自证变红；账内（OPEN+MITIGATED）**6 → 2**、`MITIGATED` **6 → 2**、`WONTFIX` **5 → 10**、`defects 0`；`src/`／界面／真库／九条既有阈值线 + 棘轮 **一个字未动**
 
 用户原话：**「继续丙和丁」** —— 轮五十六 明写「你点头我再动」的那两条，本轮就是那个点头。

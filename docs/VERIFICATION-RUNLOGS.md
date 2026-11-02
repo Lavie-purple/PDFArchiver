@@ -915,3 +915,97 @@ G1 **1.5s**／G2 **500ms**／忙线 **60%**／900 字截断 —— 一个数字�
 本册 **917**；`project_stats.md` 那册在 gitignore 内、不入库，所以数字写在这里而不是指向它），切册按口径该在开篇做 —— 这条已按 **I71 WONTFIX**
 记清代价，不再单独开一轮。⑤ 本轮**没有为那条 G1 红补跑任何段、没有抬 1.5s、没有按它开账**；按 D-074 与轮五十六
 的入册规则，这一族的读数属「机器状态敏感」，今后连追都不追。
+
+### 4.69 · 轮五十八（**用户第一次主动报界面四件事 ⇒ ①②③④ 全按推荐落地：浮层自己画底 / 重排表格后详情不过期 / 检索搬进后台线程 / 左栏 200→180 + 真 QIcon**；同一处改动自伤两条，当场各追补一轮（A 回主线程那一发的存活出口 / B 点按钮的用例要真的等上屏），2026-11-03 02:45:45 → 04:09:44（按产物 mtime 取），墙钟 **1:23:59**）
+
+**A · 这一轮改的是什么**：用户两条截图 + 四句原话 ——「我进行实际查询，怎么有显示bug的」「而且查询起来，会卡顿一下」「这个左侧菜单太宽了，适当窄一点」
+「我进行了多个尝试了，可能没有20次这么多，目前应该也能算是真实查询 使用了这个功能了」，随后勾选 **「①②③④都跟着你的推荐来」**。
+这是**第一次由用户主动报界面缺陷**（前五十轮全是我方走查报的），所以取证段（§4.68 之后的 #342）先做，五条编号方案（#343）等勾选。
+**⑤ 没勾** ⇒ 只做 甲（台账追记），乙（把查询串落盘）与 丙（S1 分类筛选的引导入口）一个字未动 —— 那两条都要改产品，得单独勾。
+
+**B · ①甲 浮层自己画底**（截图 1 的「表格从浮层底下透出来」）：`FloatablePanel` 是裸 `QWidget`，Qt **不替裸 QWidget 画底** —— 它浮在中栏表格上时，
+表格的线就从底下透上来。修法三条一起：`objectName="floatPanel"` + `setAttribute(WA_StyledBackground)` + `theme.py` 一条 QSS 用 `card_bg`。
+断言 `test_浮层覆盖区自己画底_不许透出底下的表格`（`tests/integration/test_ui_tier.py`）：在浮层覆盖区逐点取样（先 `assert samples >= 200`，防这条自己空转），
+每个点都必须等于面板底色。坏法 **B1** 摘掉那条 QSS ⇒ 逐字红在 **`浮层覆盖区有 105 / 781 个取样点不是面板底色 #ffffff，露出来的是底下表格的东西
+（前 3 个点：[(681, 9, '#dee2e6'), (688, 9, '#dee2e6'), (695, 9, '#dee2e6')]）`**，且只红这一条（`1 failed, 18 deselected`）。
+
+**C · ②甲 详情不过期**（截图 1 的另一半）：`_populate_table` 换了一批行之后，右栏那份详情还停在**上一批**那一行。修法是重排完走**既有入口**
+`_on_doc_selected` 重渲染，不新造第二条写详情的路。断言 `test_命中表重排之后详情写的是这一行的那一份`（`test_ui_hits.py:316`）。
+坏法 **B2** 不重渲染 ⇒ 逐字红在 **`详情停在上一批那一行了：表首行是「请示（复函稿）.pdf」，详情首行是「文件名：归档范围与保留期限的请示.pdf」`**。
+
+**D · ③甲 + 丁 检索搬进后台线程**（「查询起来会卡顿一下」）：形状 = daemon `threading.Thread(name="library-search")` + `QtCore.Signal` 回主线程；
+线程内 `thread_connection()`、`finally` 里 `close_thread_connection()`（每线程一只连接，不共享）；点下按钮**先**上屏 `SEARCHING_TEXT`「检索中…」，
+走的是状态栏唯一出口 `_set_status`；**丁** = 关键词与语义两条通道各自的失败都要上屏并带后端原文，不许接住不吭声。
+**没动的**：`search/service.py` 一行未改（只在 UI 侧换线程调用它）、任何耗时数字、G2 的 **500ms** 线 —— 乙（把冷读首查读进 G2）与 丙
+（元数据 `UNION ALL LIKE` 那笔税）本轮**明确不做**，用户勾的是 甲+丁。
+三条坏法各红各的（`.probe_work/r58_badway.log`）：**B3** 退回主线程同步跑 ⇒ 红在 `点了就必须有反馈，先上屏的是那一句：'全文索引检索｜符合筛选 2 份｜…｜2ms' == '检索中…'`；
+**B4** 接住异常但不说 ⇒ 红在 `屏上该有带后端原文的那一句：'检索中…'`；**B5** 跑完不回信号 ⇒ 红在 `tests/conftest.py:84` 的
+`后台检索 30s 未结束（library-search 线程没回信号？）`。等待光标那条没有删，**改成反向钉**：`overrideCursor()` 全程必须是 `None`
+（异步里挂全局光标只能靠再挂一个槽来归还，多一条会漏的路径，而它要给的反馈已由「检索中…」这句给）。
+承重：`library_page.py` 的 **700 行自线**（**ISSUES I96** 甲）没抬 —— 浏览分页那一格整段搬进新的 `ui/library_browse.py`（**99 行**，mixin、访问路径一条没改），
+`library_page.py` 现数 **695**。
+
+**E · 追补 A（③甲 自己引入的第一条缺陷）**：worker 最后一行 `signal.emit(...)` 撞上一个**已经销毁的接收方**会抛
+`RuntimeError: Internal C++ object (…) already deleted`，而且这个抛**出得了线程**（走 `threading.excepthook`，屏上什么都没有）。
+按「禁止同类问题逐个打补丁」，规则一次声明：**后台线程回主线程那一发只有一个出口 `ui/thread_reply.py::emit_if_alive`**（40 行），
+站点是 `library_page.py` 的 `library-search`／`status_page.py` 的 `status-reload`／`health_panel.py` 的 `db-check-<档>` **三处**（后两处是既有 worker，同一族）。
+两条守卫 `tests/guards/test_worker_emit_sites.py`（92 行）：AST 找 worker 目标函数里的裸 `emit()`（含 `import threading as X` 的改名形状）、
+以及「`ui/` 下真有 worker 的文件」必须与 `thread_reply.py` 点名的三处**一致**。
+销毁接收方的可复现办法是先实测出来的（`.probe_work/r59_alive_probe.log` 逐字）：`close()` 只隐藏（`isValid` 仍 True），
+要用 `deleteLater()` + `qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)` ⇒ `deleteLater 之后 isValid = False False`，
+之后读 `w.objectName()` 抛 **`Internal C++ object (MainWindow) already deleted.`**，而读 `page._search_ready` **不抛**（Python 侧对象还活着 —— 这就是为什么必须逐像素/逐语句证）。
+坏法 **A1–A4 4/4 按期望变红**（`.probe_work/r59_badway.log`）：A1 摘掉守卫 ⇒ 三条行为断言各自点名 `LibraryPage / StatusPage / HealthPanel already deleted`；
+A2 worker 里改回裸 `signal.emit(...)` ⇒ 守卫点名 `library_page.py::work:402 裸 emit @ 414`；A3 让第四个文件也起 worker ⇒ 点名 `library_hits.py`「两处必须一起改」；
+A4 从说明里删掉 `health_panel` 那一行 ⇒ 点名 `['health_panel.py']`。三个文件逐字节还原后两向复跑绿（行为 3 passed／守卫 2 passed）。
+
+**F · 追补 B（③甲 引入的第二条，性质更坏：断言空转）**：六处用例的形状是 `search_btn.click()` + `settle()`。检索一旦异步，`settle()` 转完事件循环时
+**回信还没到**，于是它们验的是「点下去之前那一屏」—— **不红，也不证明任何事**。这类不是打补丁能了局的：全站 grep 同一形状，
+**9 个测试文件 27 处**全迁到唯一出口 `tests/conftest.py::run_search`（内部走真用户路径：`_do_search()` → `search_btn.click()` → 等那一发回主线程上屏）。
+证伪做了两次，中间那次就是它自己：**迁之前** k5 注进去照样绿（复现脚本 stdout 逐字 `rc=0｜failed=0 errored=0 passed=1`；
+第一版复现脚本还当场抛了 `IndexError: list index out of range`，那是 runner 自己的缺陷，留着没改口径）—— 两份都是本轮一次性探针、收尾已删，**逐字原文抄在上面这一行**；
+**迁之后**同一枚注入立刻按期望变红 —— p21 `k5`（关键词不看屏幕上那排 chips）与 `k6`（语义通道不说自己不看那排条件）**2/2 红**、末行
+**`抓到 2/2 条坏法` / `VERDICT: ALL GREEN`**（`.probe_work/r59_p21.log`，基线那两条例子未注入时 2 条通过）。
+留在直连的两处是**有意**的：`conftest.py:100` 就是那条唯一出口本身，`test_round42_ux.py:244` 必须绕过出口才能读到「`_do_search()` 返回的那一刻」的状态。
+⇒ 「不会变红的断言直接删」这一条本轮的正确答案不是删，是**接回去**。
+
+**G · ④甲 左栏 200 → 180 + emoji 挪成真 QIcon**：`NAV_WIDTH = 180`、`NAV_ICON_SIZE = 18`，**八条标题一字不改**
+（`test_导航项的文字就是标题本身_图标是真图标`：`item.text()` 必须逐字等于标题列表）。实测（`.probe_work/r58_readings.log`）
+`nav.width() = 180｜sizeHintForColumn(0) = 160`（最长那条的**内容需求**）⇒ 180 是「放得下还留 20px」。两条坏法：**B6** 把 emoji 塞回 item 文字 ⇒
+红在 `导航文字被装饰字符污染了（应当一字不改就是标题）：['  📁  文档库', …]`；**B7** 再收到 140 ⇒ 红在 `侧栏实宽 140px 装不下最长那条的 160px —— 会显示成省略号，收宽收过头了`。
+顺带把用户报「太宽」时的三栏分界量齐：窗口 1024／1280／2560 的文档表视口 = **778／1,034／2,314**，`test_ui_layout.py:229` 那条「状态栏标签宽 = 视口宽」的
+前提注数从 780 更正为 **778**（判据一个字没改，只是把前提里的数字换成今天真量到的）。
+
+**H · ⑤甲 台账追记（只读，状态不动）**：I11 与 I131 各追一段。**I11**：用户的第一批真实查询到了，但**判据① 的输入仍不满足，卡点很具体 —— 查询文本在项目里没有任何落盘处**
+（`src/pdfarchiver/search/` 只有 `service.py`、零 logger 调用；`app.log*` 里那 315／326 行「检索／查询」全是 scan/worker 的行）。**18/20 阈值不动、不换口径凑绿**；
+今后两条路（用户抄回那 20 条，或产品记查询串 = 新能力，要单独勾）。**I131**：2026-11-03 只读新数 `document_categories` **0**、`document_tags` **0**（本轮新记）、
+`categories` 14、`tags` 0；**退出判据没动、没有代点、没有写库**（用户没给「写库」二字）。两条背景数字**明写不是判据**：`documents` 16,760 → 17,456（+696）而
+`text_pages` 仍 1,978,269 ⇒ **行数 ≠ 份数**（`missing_since` 非空 6,444，余下没有缺失戳）；`jobs` 侧 `failed` 5,506 只记数、不编原因。
+**本轮自己造的一条假红由守卫当场逮到**：追记里把状态写成加粗的 `**MITIGATED**` ⇒ `tests/guards/test_ledger_shape.py` **2 failed**
+（逐字 `I11 的状态字段有 2 个`、`I131 的状态字段有 2 个`）—— 台账每行只允许**一个加粗状态词**（`LEDGER_STATUS_RE`）。改成不加粗后复跑
+`test_ledger_shape + test_doc_pointers + test_file_size` **23 passed**。账内（OPEN+MITIGATED）现数仍 **2**。
+
+**I · 验证读数（末行逐字）**：全量回归 **`1 failed, 1020 passed, 1 skipped in 703.20s (0:11:43)`**、`rc=1`（那场的 stdout 是本轮一次性探针、收尾已删，末行逐字就抄在这一句里）。
+collected **1,022**（轮五十七 1,012 ⇒ **+10**）：新写 11 条（6 条 UI 行为 + `test_worker_reply` 的参数化 3 条 + `test_worker_emit_sites` 2 条），
+另**重写 1 条**（等待光标那条改成反向钉）。唯一那条红是 **G1**，报错原文逐字 `AssertionError: G1 [约定] ≤1.5s，实测 15.297s`（`tests/integration/test_app_shell.py:190`）。
+**归因走配对证据，不靠猜**：那场期间本机 CPU **100%**、可用 **616 MiB**，占用来自**第三方**进程 `DoubaoWork … python.exe batch_v3.py`
+（PID 24040，**428.2% CPU**、3,773 MiB，03:34:24 起）—— 不是我的进程，**没动它**；单条复跑仍红（**2.804s**，线 1.5s）。
+分段读数由应用自报（`state.log` 那条 `window.ready`，`ts 2026-11-02T20:08:56.745Z` = 本地 04:08:56）：
+**`cold_start_seconds 13.466`｜`phases = {import_to_run_s: 12.882, assemble_s: 0.268, window_s: 0.316}`** ⇒ 时间全花在**解释器与依赖 import**，
+建窗 0.316s 正常 ⇒ **①甲／④甲 没有把冷启动变慢**（那两条动的都在 import 之后）。同一形状下整套件耗时 703.20s vs 轮五十七 的 375.62s／476.84s（1.5–1.9 倍），
+这条只当负载旁证，不作判据。**阈值线复核（全部未抬）**：G1 **1.5s**／G2 **500ms**／忙线 **60%**／`MD_LIMIT 1,200`／`PY_LIMIT 800`／
+`library_page.py` 自线 **700**（现 695）／`LEDGER_SHAPE_CAP 1`／`LEDGER_STALE_CAP 7`／`PY_STALE_CAP 37`／`LEDGER_MITIGATED_CAP 8`（现 2）——
+**一个数字没改；本轮没有为 G1 重跑到绿，也没有按它开账**（机器状态敏感的读数按轮五十六 的入册规矩不入账，追不追按 D-074）。
+
+**J · 临时文件与真库**：`.probe_work/` 本轮起 **32 项**（31 个文件 + 1 个临时数据根 `g1dir/`）= **15 份一次性脚本**、**13 份逐字读数**（10 份 `.log` + 3 份 `.txt`）、**3 份写活册时的草稿**。这几个数是删之前 `iterdir` 现算的 —— 同段第一版写「12 份」是**凭记忆**写的，与实际差 20（「文档里的数要现跑现填」这一条本轮又应验一次）。
+与轮五十七 那次「名字一律不进文档」**相反**，本轮其中 **5 份**逐字日志被 `src/`／`tests/` 的 **12 处**注释点名
+（B／D／E／F／G 各段引的都在里面），所以它们**随注释保留**：`.probe_work/` 在 gitignore 内、不入库，是承重的本机证据根，
+`tests/guards/test_doc_pointers.py` 对它走白名单。其余 **27 项**（含 G1 单跑用的临时数据根 `g1dir/` 与它那份 0 字节 `g1run.log`）本节写完即删：
+目录总项现数 **1105 → 1078**；根 `.tmp_*` **0**。
+**这一处删多了三份**：算「留哪几份」的那条判据只 grep 了 `src/`／`tests/` 的注释，漏了「本册自己也点名」的 `r58_p21k5.log`／`r58_p21k5_repro.log`／`r58_regression.log` ⇒ 三份被一起删了。
+证据本身没丢（三处的逐字原文都抄在 D／F／I 段的正文里，指针已改成「抄在本册那一行」），但**判据口径窄了一档**这件事是真的：留删名单该按「仓里所有被点名的名字」算，不是按「代码里的注释」算。
+真库侧本轮**零写入**：H 段那些数是 `?mode=ro&immutable=1` 只读开库读出来的，`backups/` 一个文件没动。`对话记录.md` 未跟踪（按规矩永不提交）。
+
+**K · 本轮没跑／今后怎么写**：① 整链 11 段／soak／injection 段／consistency 真根／g2／package **零读数**，按 **D-074** 写「不做，无读数」，不再算欠账；
+② 台账仍 **2 条**（I11／I131），两条都要用户侧动作，我这边无事可做；③ **⑤ 的乙／丙 没做**（要改产品：查询串落盘 / S1 分类筛选引导入口），等单独勾；
+④ 109 条 CLOSED 一条没复核（同 §4.68 J ②，那需要一把「凭据今天还在吗」的机器判据）；⑤ 本轮没为新界面加屏 —— **屏数仍 9、导航仍 8 项**，
+①②③④ 全是既有屏内的改动，所以没有过线框环节（AGENTS.md 那条管的是**新界面**，本轮零新界面）。

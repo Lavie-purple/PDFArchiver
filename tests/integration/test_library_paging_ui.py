@@ -27,7 +27,7 @@ from pdfarchiver.db.repositories.documents import DocFilter
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.search.service import DEFAULT_PAGE_SIZE
 from pdfarchiver.services.bootstrap import AppContext
-from tests.conftest import settle as _settle
+from tests.conftest import run_search as _run_search, settle as _settle
 
 _TOTAL = DEFAULT_PAGE_SIZE * 2 + 30   # 130：跨过两批，又不至于让单测跑几十秒
 _FILL_TOTAL = 200                     # 视口那一档要用：库尾必须比"填满视口"更远，才测得出补批停在哪儿
@@ -303,7 +303,7 @@ def test_查询命中表滚到底不许长出库里的行(window, ctx, qapp) -> 
     page = _library(window, qapp)
     needle = _name(23)[: -len(".pdf")]
     page.search_input.setText(needle)
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     hits = page.doc_table.rowCount()
     assert 0 < hits < DEFAULT_PAGE_SIZE, f"用例前提：命中该是几条，实测 {hits} 行"

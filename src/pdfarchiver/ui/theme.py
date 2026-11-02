@@ -427,6 +427,16 @@ QWidget#treeRail QToolButton:hover {{
     border-left: 3px solid {c.accent};
 }}
 
+/* ===== 浮层面板自己的底（轮五十八 ①）=====
+   钩子是 `ui/tier.py` 给 `FloatablePanel` 挂的 `objectName="floatPanel"`。缺这段它就是透明玻璃：
+   真机逐像素 A/B，浮层覆盖区 **48.7%**（9,914 / 20,370）取样点"摘掉浮层"前后颜色一样 ——
+   底下表格的白底 / 斑马行 / 网格线透上来与面板内容叠在一起（用户红框点名的"显示 bug"）。
+   底取 `card_bg`（与表格、chip、解释带同一档：`text_primary` 与 `QLabel#muted` 压它两主题都过 AA，
+   已在 `test_theme_contrast` 的 live_pairs 量过 ⇒ **不新增字色搭配**）。
+   **不写 border**：宽档这一身是 splitter 里的常驻列（树就住在里面），轮四十二 ⑰ 已定过
+   "外面再描一圈就是双重框"，而常驻列与窄档浮层共用这同一个 `QWidget`。 */
+QWidget#floatPanel {{ background-color: {c.card_bg}; border: none; }}
+
 /* ===== 列表控件 =====
    轮四十二 ⑰：同表格。命中面板/详情这类整栏列表不再自带描边。 */
 QListWidget {{

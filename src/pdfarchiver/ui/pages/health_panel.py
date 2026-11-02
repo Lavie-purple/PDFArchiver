@@ -40,6 +40,7 @@ from pdfarchiver.services.db_check import (
 from pdfarchiver.ui.action_row import ActionRow
 from pdfarchiver.ui.library_hits import set_text_role
 from pdfarchiver.ui.table_layout import set_table_columns
+from pdfarchiver.ui.thread_reply import emit_if_alive
 
 
 class HealthPanel(QtWidgets.QWidget):
@@ -150,7 +151,7 @@ class HealthPanel(QtWidgets.QWidget):
                 report = self.ctx.db_check.run(mode)
             except BaseException as exc:  # noqa: BLE001 - 没跑起来也要把原文交给界面
                 report = self.ctx.db_check.failure_report(mode, exc)
-            self._report_ready.emit(report)
+            emit_if_alive(self._report_ready, report)
 
         self._thread = threading.Thread(target=work, name=f"db-check-{mode}", daemon=True)
         self._thread.start()

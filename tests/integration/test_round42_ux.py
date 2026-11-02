@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +22,10 @@ from pdfarchiver.db.models import Document
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui.main_window import DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT
-from tests.conftest import settle as _settle
+from pdfarchiver.ui.pages.library_page import SEARCHING_TEXT
+from tests.conftest import (
+    run_search as _run_search, settle as _settle, wait_search as _wait_search,
+)
 
 
 def _page_at(window, qapp, page_id: str):
@@ -188,14 +192,15 @@ def test_上次读到措辞按进度分档(window, qapp, tmp_path: Path) -> None
 def test_状态栏栏里是短口径_技术全称在悬停里(window, qapp) -> None:
     """⑤ 界面半边：栏里不许出现 trigram / bm25 行话；技术全称挪进 tooltip。
 
-    坏法注入实测（2026-10-30）：把 `_do_keyword_search` 里那句 `setToolTip(result.status_detail())`
-    删掉 ⇒ 本条红在 tooltip 为空。
+    坏法注入实测（2026-10-30）：把关键词那一路渲染里的 `setToolTip(result.status_detail())`
+    删掉 ⇒ 本条红在 tooltip 为空。（那句原先在 `_do_keyword_search`，轮五十八 ③ 把它搬进了
+    `_render_keyword`。）
     """
     page = _page_at(window, qapp, "library")
     _seed_docs(page.ctx)
     page.reload()
     page.search_input.setText("轮四十二")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     text = page.status_label.text()
     assert "trigram" not in text and "bm25" not in text and "LIKE" not in text, \
@@ -206,29 +211,73 @@ def test_状态栏栏里是短口径_技术全称在悬停里(window, qapp) -> N
 
     # 浏览态清掉：tooltip 是关键词检索的口径，浏览态留着就是过期读数
     page.search_input.clear()
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     assert page.status_label.toolTip() == "", "回到浏览态，关键词那条 tooltip 该清掉"
 
 
 # —— ⑥ 忙碌光标 ————————————————————————————————————————————————————
 
-def test_检索期间挂等待光标_结束归还(window, qapp, monkeypatch) -> None:
-    """⑥：真库一次检索 2–4s，没反馈会被当成"点了没反应"。坏法是删 try 外那两行
-    setOverride/restore —— 实测注入后 `seen` 里 overrideCursor() 为 None，当场红。"""
+def test_检索在后台线程里跑_期间状态栏先上那一句(window, qapp, monkeypatch) -> None:
+    """⑥ 的反馈换了形状（轮五十八 ③ 甲 + 丁）：从"按住界面 + 等待光标"改成"界面活着 + 一行字"。
+
+    两条判据都能被"退回同步"这一种坏法同时打红：
+    ① `_do_search()` 返回的那一刻，状态栏已经是「检索中…」且 `searching` 仍为 True
+       —— 同步跑的话这里读到的是结果那句，`searching` 也已经 False；
+    ② 后端真的在**别的线程**里被调用（`threading.current_thread().name`，与
+       `test_status_readout.py` 那条同一判据）。
+    等待光标那条现在反过来钉：`overrideCursor()` 全程必须是 None —— 全局光标在异步里
+    只能靠再挂一个槽来归还，多一条会漏的路径，而它要给的反馈已由这一行字给。
+    """
     page = _page_at(window, qapp, "library")
-    seen: list[object] = []
-    orig = page._do_keyword_search
+    _seed_docs(page.ctx)
+    page.reload()
+    seen: list[str] = []
+    orig = page.ctx.search.search_in
 
-    def spy(query: str) -> None:
-        seen.append(QtWidgets.QApplication.overrideCursor())
-        orig(query)
+    def spy(query, text, limit=100):
+        seen.append(threading.current_thread().name)
+        return orig(query, text, limit=limit)
 
-    monkeypatch.setattr(page, "_do_keyword_search", spy)
+    monkeypatch.setattr(page.ctx.search, "search_in", spy)
     page.search_input.setText("轮四十二")
     page._do_search()
-    assert seen and seen[0] is not None, "检索期间该挂着等待光标"
-    assert QtWidgets.QApplication.overrideCursor() is None, "结束后必须归还光标，不许永久锁 Busy"
+    assert page.status_label.text() == SEARCHING_TEXT, \
+        f"点了就必须有反馈，先上屏的是那一句：{page.status_label.text()!r}"
+    assert page.searching, "`_do_search()` 返回时检索还在跑；已经跑完就是同步，界面会被按住"
+    assert QtWidgets.QApplication.overrideCursor() is None, "等待光标已退役，不许再劫持全局光标"
+
+    _wait_search(page, qapp)
+    assert seen and seen[0] != "MainThread", f"检索在主线程里跑的（thread={seen}）"
+    assert not page.searching, "结果上屏后必须归还「在跑」那个位，否则第二次点永远进不去"
+    assert page.status_label.text() != SEARCHING_TEXT, "上屏的还是那句占位，结果没接进来"
+
+
+def test_关键词那一路失败时红字带原文且归还那一位(window, qapp, monkeypatch) -> None:
+    """③ **丁** 的关键词那半：异常在后台线程里穿不出来，屏上必须自己说话，且不许卡住「在跑」。
+
+    这条钉的是异步化**新引入**的风险，不是顺手补的断言：`work()` 里那句 `except BaseException`
+    若只接住不上屏（或接住之后不发信号），界面就永远停在「检索中…」—— 那比改之前更糟，改之前
+    异常至少还会落进 `crash.log`、主线程接着能点。四条判据：红字 + 后端原文逐字 + 表清空 +
+    `searching` 归 False（最后那条专防"接住了但位没归还"）。
+    坏法注入实测（2026-11-03，`.probe_work/r58_badway.log`）：把关键词那一支的 `_set_status(...)`
+    摘掉 ⇒ 红在"屏上没有那句"；把 `finally` 之后的 `emit` 摘掉 ⇒ 红在 `wait_search` 的 30s 超时。
+    """
+    page = _page_at(window, qapp, "library")
+    _seed_docs(page.ctx)
+    page.reload()
+
+    def boom(query, text, limit=100):      # noqa: ANN001, ARG001 - 替身要顶真签名
+        raise RuntimeError("关键词通道炸了：库正忙")
+
+    monkeypatch.setattr(page.ctx.search, "search_in", boom)
+    page.search_input.setText("轮四十二")
+    _run_search(page, qapp)
+    line = page.status_label.text()
+    assert "关键词检索失败" in line and "库正忙" in line, f"屏上该有带后端原文的那一句：{line!r}"
+    assert page.status_label.objectName() == "danger", f"失败读数没走红字：{line}"
+    assert page.doc_table.rowCount() == 0, "失败之后不许留着上一批行"
+    assert not page.searching, "失败也要归还「在跑」那个位，否则第二次点永远进不去"
 
 
 # —— ⑦ 空分类指路 ————————————————————————————————————————————————————

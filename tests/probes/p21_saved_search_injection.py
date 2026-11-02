@@ -118,8 +118,11 @@ CASES: list[Case] = [
          [Edit(COLLSVC, "        if not self.usable:", "        if False:               # injected")]),
     Case("k5", "关键词搜索不看屏幕上那排 chips（走全库）",
          CRIT + "test_关键词搜索就在当前那排chips里搜",
-         [Edit(LIB, "        result = self.ctx.search.search_in(self._query, query, limit=100)",
-               "        result = self.ctx.search.search_in({}, query, limit=100)   # injected")]),
+         # 轮五十八 ③甲 把这一句挪进了 `work()` 闭包里（`criteria` = 那排 chips 的 dict），锚点跟着改；
+         # 追补 B 之后用例走 `conftest.run_search`（真的等回主线程那一发上屏，否则注进去也骗得过）。
+         # 2026-11-03 k5/k6 各重新真注入过一次，实录见 `.probe_work/r59_p21.log`。
+         [Edit(LIB, "                    result = self.ctx.search.search_in(criteria, query, limit=100)",
+               "                    result = self.ctx.search.search_in({}, query, limit=100)   # injected")]),
     Case("k6", "语义通道不说自己不看那排条件",
          CRIT + "test_语义搜索明说自己不看这排条件",
          [Edit(LIB,

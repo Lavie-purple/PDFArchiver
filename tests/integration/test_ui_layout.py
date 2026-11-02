@@ -13,12 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from pdfarchiver.ui.main_window import (
     DEFAULT_WINDOW_WIDTH,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
+    NAV_ICON_SIZE,
     NAV_WIDTH,
 )
 from pdfarchiver.ui.nav import NAV_ITEMS
@@ -224,6 +225,8 @@ def test_表格定宽列放不下时必须还能滚到(window, ctx, qapp) -> Non
     （220+200+86+163+111）—— 装不下是设计内的（D-040：宁可牺牲命中面板也不动侧栏）。
     轮四十二 ⑭ 之后**宽档**右栏不再占 splitter 槽（改常驻浮层），中栏拿到 1014px、五列反而
     装得下，所以这条必须压到地板档再量前提。
+    【2026-11-03 追记（**轮五十八 ④甲**，导航 200→180）】同一档现量视口 778px、宽档中栏
+    1,034px（`.probe_work/r58_readings.log`）—— 前提「780 > 地板档视口」仍然成立，判据一条没改。
     装不下时剩下的列**必须仍然可达**：横向滚动条可用，
     且把滚动值拧到底之后最后一列会进视口。
     """
@@ -485,3 +488,44 @@ def test_内容列集合必须还是可截断列集合的子集() -> None:
     """两套列名各说各话，早晚会有一列"既没人承诺装得下、也没人承诺能回读"。"""
     assert CONTENT_COLUMNS <= ELIDABLE_COLUMNS, (
         f"只在 CONTENT_COLUMNS 里的列：{sorted(CONTENT_COLUMNS - ELIDABLE_COLUMNS)}")
+
+
+# —— 轮五十八 ④：侧栏收宽之后的两条 ————————————————————————————————————
+# 用户点名「左侧菜单太宽了，适当窄一点」。收宽只在这一条前提下才许做：
+# **最长那条标题不许被截掉** —— 原先 200px 不是空胖，emoji 写在文字前导空格里
+# （`f"  {icon}  {title}"`）白吃约 35px，挪成真的 `QIcon` 之后内容需求才掉进 180。
+
+
+def test_侧栏收宽之后最长那条标题仍然完整可见(window, qapp) -> None:
+    """判据是"内容需求 ≤ 实宽"，不是"宽度等于某个数"。
+
+    `sizeHintForColumn(0)` 是 Qt 自己按**当前这批条目的文字**算出来的最宽内容需求，
+    拿它和实宽比就是用户那句"有没有被截掉"的直接换算；写死 `== 180` 只会跟着常量一起漂。
+    实测（2026-11-03 离屏，八条标题一字未动）：emoji 写在前导空格里的那一形状要 225px，
+    挪成真图标之后掉到 160px —— 180 这一格因此还留着 20px 余量，这才叫"适当"。
+    坏法注入实测（2026-11-03）：把 `NAV_WIDTH` 改成 150 ⇒ 本条红在「内容需求 > 实宽」；
+    把 emoji 塞回文字（`f"  {icon}  {title}"`）⇒ 红在下一条「标题一字不改」。
+    """
+    _settle(qapp)
+    need = window.nav.sizeHintForColumn(0)
+    assert need <= window.nav.width(), (
+        f"侧栏实宽 {window.nav.width()}px 装不下最长那条的 {need}px —— 会显示成省略号，"
+        f"收宽收过头了")
+
+
+def test_导航项的文字就是标题本身_图标是真图标(window, qapp) -> None:
+    """两向都钉：文字里不许再有装饰字符，图标必须是画得出像素的 `QIcon`。
+
+    「八条标题一字不改」是本轮的硬要求（用户点名的只有宽度）。emoji 从文字挪进图标之后，
+    屏上看着还是那一排，但 `item.text()` 变成了标题本身 —— 于是无障碍读屏、悬停、
+    以及"这条叫什么"的搜索都拿到的是干净的那几个字，而不是一串带空格的字符画。
+    """
+    titles = [item.title for item in NAV_ITEMS]
+    texts = [window.nav.item(i).text() for i in range(window.nav.count())]
+    assert texts == titles, f"导航文字被装饰字符污染了（应当一字不改就是标题）：{texts}"
+    side = QtCore.QSize(NAV_ICON_SIZE, NAV_ICON_SIZE)
+    assert window.nav.iconSize() == side, f"图标尺寸与 `_nav_icon` 画的画布对不上：{window.nav.iconSize()}"
+    for i, title in enumerate(titles):
+        painted = window.nav.item(i).icon().pixmap(side)
+        assert not painted.isNull(), (
+            f"「{title}」在 {NAV_ICON_SIZE}px 下画不出图标 —— emoji 挪走了又没画回来，这一格就是空白")

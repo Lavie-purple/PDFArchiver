@@ -33,7 +33,7 @@ from pdfarchiver.search.service import (Criteria, FIELD_BODY, FIELD_FILENAME, FI
 from pdfarchiver.ui import library_hits
 from pdfarchiver.ui.main_window import DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH
 from pdfarchiver.ui.theme import ThemeManager
-from tests.conftest import settle as _settle
+from tests.conftest import run_search as _run_search, settle as _settle
 
 _PAGE_ROLE = library_hits._HIT_PAGE_ROLE
 
@@ -224,7 +224,7 @@ def test_每条命中行尾挂的是后端后缀_界面不自己拼(window, corp
     `SearchResult.suffix(hit)`，界面只做这一个拼接动作，不许另写一版措辞。"""
     page = _page_at(window, qapp)
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
 
     result = page.ctx.search.search_in(page._query, "保留期限", limit=100)
@@ -262,7 +262,7 @@ def test_解释带连控件带样式一起拆干净(window, corpus, qapp) -> Non
     assert "ocrHintBand" in qss, "用例前提：情境提示条（甲 · 乙）必须还在场，别拆过头"
 
     page.search_input.setText("保留期限")
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     page.hit_list.setCurrentRow(_body_row(page))
     _settle(qapp)

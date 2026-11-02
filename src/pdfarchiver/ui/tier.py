@@ -41,6 +41,15 @@ AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪
 轮四十五 丙 把 S8 从 `collapsible` 里摘出去：⑮ 那条实测说的是 **S1 的筛选**场景（14 个默认
 分类零篇挂载），S8 是**管理**场景，那棵树正是这一屏要编辑的主对象 —— 默认藏起来是语义错放。
 **D-066** 那句"没有布局例外"随之改成按角色判定，定案写在 **D-067**（`docs/DECISIONS.md`）。
+
+轮五十八 ① 补上浮层自己的底。用户在真机（11,562MiB 真库）点名"有显示 bug"，逐像素 A/B 实测：
+把浮层摘掉再放回，覆盖区域里 **48.7%**（9,914 / 20,370）取样点颜色一模一样 —— 那一片浮层
+一个字也没画，露出来的是底下表格的白底、斑马行、网格线甚至链接色，所以表格内容会从面板
+"底下"透上来跟面板内容叠在一起。根因与轮四十五 乙 那根条完全同类：**裸 `QWidget` 不吃样式表的
+背景**，必须有 `objectName` + `WA_StyledBackground`。条当年挂了，面板自己没挂。所以这里给面板挂
+`objectName="floatPanel"`，底色交回 `theme.py`（与 `treeRail` 同族，取 `card_bg`）：
+**这一处不写 border** —— 轮四十二 ⑰ 已经定过"树常驻在 FloatablePanel 里，外面再描一圈就是双重框"，
+宽档的常驻列和窄档的浮层共用这一个 `QWidget`，描边就同时描给了常驻列。
 """
 from __future__ import annotations
 
@@ -112,6 +121,11 @@ class FloatablePanel(QtWidgets.QWidget):
 
         self.body = QtWidgets.QVBoxLayout(self)
         self.body.setContentsMargins(8, _DOCKED_TOP_MARGIN, 8, 8)
+        # 面板必须自己画底，否则浮层就是一块透明玻璃（轮五十八 ① 的逐像素 A/B：48.7% 的
+        # 取样点摘掉浮层后颜色不变 ⇒ 露出的是底下表格）。与下面 `treeRail` 同一味药：
+        # 裸 QWidget 不吃样式表的背景，得有 objectName + WA_StyledBackground 才画。
+        self.setObjectName("floatPanel")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
 
         # 「✕」不进 body：它是面板自己的角标，位置在 resizeEvent 里钉在右上角。
         # 显式挂父（构造时给 self）—— 轮三十九的孤儿顶层窗就是漏挂父爆出来的。

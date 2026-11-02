@@ -12,8 +12,8 @@
 （筛选条递条件的落点）、`self._query`（"有无条件"是收放的自动档）、
 `self._update_ocr_hint`（右栏那条情境提示，`LibraryHitsMixin` 提供）。
 
-搜索编排、浏览分页与 `_apply_query` 本体**留在页面里**：一次条件变化要同时写
-中栏表、状态栏、右栏与这一区四处状态，拆开就是两边各拿一半。
+搜索编排、`_apply_query` 本体与浏览分页（2026-11-03 起在 `ui/library_browse.py`）**都留在页面一侧**：
+一次条件变化要同时写中栏表、状态栏、右栏与这一区四处状态，拆开就是两边各拿一半。
 """
 from __future__ import annotations
 
@@ -60,7 +60,8 @@ class LibraryFilterMixin:
         # 位置紧贴筛选条、**不跟**「送去识别」同一排：那一颗认"表格里勾了哪几份"，这一颗认
         # "筛选命中的那一批"，两句并排在同一行会让人以为它们是同一件事的两种说法。
         # 同理也不进 `ocr_row`：面板展开时「送去识别（选中 2 份）」会变宽，那一排实测已到
-        # 823 地板档的边上（`test_面板展开时页面与窗口都不许顶过地板宽度`）。
+        # 地板档的边上（`test_面板展开时页面与窗口都不许顶过地板宽度`；页面宽 823 → 843 之后，
+        # **轮五十八 ④甲** 2026-11-03 那条守卫原样绿）。
         filter_ocr_row = QtWidgets.QHBoxLayout()
         self.filter_ocr_btn = QtWidgets.QPushButton(FILTER_OCR_BTN_TEXT)
         self.filter_ocr_btn.setObjectName("clearBtn")

@@ -46,13 +46,16 @@
 （**ISSUES I96** 甲，2026-10-20）—— 控件仍然挂在页面对象上（`page.right_panel` / `page.hit_list`），
 挪走的只有归属。搜索编排留在本文件：一次查询同时写中栏表、状态栏与右栏三处，拆开就是两边各拿一半。
 筛选区（筛选条 + 「按当前筛选送识别」+ 收放开关）同理在 `ui/library_filter.py`
-（2026-10-30 第二次按主题拆）。
+（2026-10-30 第二次按主题拆），浏览分页（`_start_browse` 那一批一批取）在
+`ui/library_browse.py`（2026-11-03 第三次按主题拆）。
 
 数据来自 `AppContext.search`、`AppContext.documents`、`AppContext.catalog`、`AppContext.ocr`、
 `AppContext.collection`（存/覆盖集合与数命中都走它，这一页不碰 `collections` 仓储）。
 """
 from __future__ import annotations
 
+import logging
+import threading
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -60,6 +63,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.services.collection_service import CollectionEntry
 from pdfarchiver.ui.catalog_links import CatalogLinkBar
+from pdfarchiver.ui.library_browse import LibraryBrowseMixin
 from pdfarchiver.ui.library_filter import FILTER_OCR_BTN_TEXT, LibraryFilterMixin
 from pdfarchiver.ui.library_hits import LibraryHitsMixin, set_text_role
 from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN, category_cell,
@@ -67,6 +71,7 @@ from pdfarchiver.ui.library_rows import (HEADERS, CATEGORY_COLUMN, DOC_ID_COLUMN
 from pdfarchiver.ui.ocr_batch_panel import OcrBatchPanel
 from pdfarchiver.ui.semantic_state import absent_or_original, apply_state
 from pdfarchiver.ui.table_layout import CELL_PADDING_WIDTH, set_table_columns
+from pdfarchiver.ui.thread_reply import emit_if_alive
 from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 
 
@@ -74,13 +79,26 @@ from pdfarchiver.ui.tier import LEFT_COLUMN_WIDTH, FloatablePanel, sync_tier
 #: 所以写它的时候只有一处，读它的时候也只有一处 —— 两处各写一份就会有一天对不上。
 OCR_BTN_TEXT = "送去识别"
 
+_LOG = logging.getLogger(__name__)
 
-class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
+#: 点下检索到结果上屏之间，状态栏那一行读的那句（轮五十八 ③ 丁）。
+#: 轮四十二 ⑥「点了必须有反馈」那条判据没变，变的只是形状 —— 那段不再冻界面，
+#: 全局等待光标（`setOverrideCursor`）在异步里归还的时机只能挂在槽上，多一条会漏的路径。
+SEARCHING_TEXT = "检索中…"
+
+
+class LibraryPage(LibraryFilterMixin, LibraryBrowseMixin, LibraryHitsMixin,
+                  QtWidgets.QWidget):
     """S1：宽档三栏常驻（分类树 | 文档表格 | 命中面板），窄档走 `ui/tier.py` 的降级。"""
 
     # (doc_id, page_no)；page_no 为 None 表示这一条命中没有页码（文件名/路径/元数据三通道）。
     # 用 tuple 而不是给 page_no 编一个 0 当"没有"，是为了让越界判定只存在于阅读器一处。
     open_in_reader = QtCore.Signal(object)
+
+    # 检索线程 → 主线程的载荷：通道名 + 后端给的结果 + 后端抛的异常（三者只有一路非空）。
+    # 类型全用 `object` 是有意的：关键词那路是 `SearchResult`，语义那路是
+    # `list[tuple[int, int, float]]`，一根线上跑两种东西，编不出一个更窄的类型。
+    _search_ready = QtCore.Signal(str, object, object)
 
     def __init__(self, ctx: AppContext, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -131,6 +149,8 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         self.search_btn = QtWidgets.QPushButton("搜索")
         self.search_btn.setObjectName("searchBtn")
         self.search_btn.clicked.connect(self._do_search)
+        # 后台那一趟回到主线程的唯一落点（轮五十八 ③ 甲）。
+        self._search_ready.connect(self._on_search_ready)
         search_lay.addWidget(self.search_btn)
         self.clear_btn = QtWidgets.QPushButton("清除")
         self.clear_btn.setObjectName("clearBtn")
@@ -167,12 +187,14 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         # 分类名一段按 5 字算。
         # 上一轮这三列反算的是**文本宽**、给的是 +8，于是显示成 `2026-1…` / `1…` ——
         # 少算了 Qt 单元格实测的 23px 内边距（见 table_layout.CELL_PADDING_WIDTH）。
-        # 五列合计 780px（220+200+86+163+111）。视口三档实测（2026-10-31，空库，窗口高 720）：
-        # 758／1014／2294 —— 地板档（窗口 1024 / 页面 823）装不下 780，宽档反富余 234／1514。
+        # 五列合计 780px（220+200+86+163+111）。视口三档实测（空库、窗口高 720、导航 180 那一档，
+        # 2026-11-03 `.probe_work/r58_readings.log`）：**778／1,034／2,314** —— 地板档（窗口 1024 /
+        # 页面 843）装不下 780，宽档反富余 254／1,534。导航仍是 200 时的旧读数是 758／1,014／2,294
+        # （2026-10-31），逐档差的 20px 就是侧栏收窄的那一截（**轮五十八 ④甲**）。
         # **行号列已经不在了**（**ISSUES I54**，`set_table_columns` 里 hide），所以读数不随行号的
         # 位数漂；长列表顶出**纵向滚动条**那一档还要再窄一点，"只随滚动条变、不随行的位数变"由
         # `test_ui_tier.test_视口宽度只随滚动条变不随行的位数变` 钉住。
-        # 「文件名」声明当吸收列（**ISSUES I121 ①甲**）：宽档吃掉剩余（1014 档 454 → 2294 档 1734），
+        # 「文件名」声明当吸收列（**ISSUES I121 ①甲**）：宽档吃掉剩余（1034 档 474 → 2314 档 1754），
         # 地板档装不下时由 `table_layout` 的运行时判据自动退回全定宽 + 横向滚动。判据不写在这里 ——
         # 原先这里写的是「不给任何列设 Stretch」，依据是「定宽列已经把视口吃满」，而那从来没人按
         # 当时的视口算过，于是 780px 的五列在 2560 档右边空出 1,514px，文件名却永远挤在 220px 里。
@@ -268,6 +290,10 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         self._query: dict = {}
         self._current_docs: list = []
         self._selected_doc_id: int | None = None
+        # 这一趟检索还在后台跑吗（轮五十八 ③ 甲）。它同时是"别连点"的那道闸：
+        # 置 True 在起线程之前，归还在槽的第一行 —— 线程里每一条路都要 emit（连失败也是），
+        # 所以不存在"卡在 True"的那条路径。
+        self._search_running = False
         # —— 浏览分页（**ISSUES I51**）——
         # `_browse_active`：表里这一列是不是"浏览库"来的。是 → 滚动到底补一批；
         #   否 → 表里是查询命中（有上限），滚动到底什么都不该再加。
@@ -350,100 +376,84 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
     def _on_category_clicked(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         self._load_documents_by_category(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
 
-    # ---- 浏览：一批一批取（**ISSUES I51**）------------------------------------
+    # ---- 浏览：一批一批取（**ISSUES I51**）在 `ui/library_browse.py` 的混入里 ----
 
-    def _start_browse(self) -> None:
-        """把中栏切成"浏览库里这一列"：只先取第一批，剩下的等滚动。
-
-        修前这里是 `documents.list(limit=1000)` 一次灌满再逐行取分类：8,000 份的库实测
-        `table_rows=1000 / 看不见 7,000 份 / 逐行 SQL 1,000 条`，而状态栏那句
-        「共 1000 份文档」把"没显示"说成了"不存在"（×10 档 8 万份时看不见 79,000 份）。
-        """
-        self._browse_active = True
-        self._browse_exhausted = False
-        self._browse_total = 0
-        # 轮四十二 ⑤：浏览态的口径是 `_browse_line()`，关键词那条 tooltip 是过期口径，清掉。
-        self.status_label.setToolTip("")
-        self._current_docs = []
-        self.doc_table.setRowCount(0)
-        self._load_more()
-        self._fill_viewport()
-
-    def _load_more(self) -> None:
-        """取下一批追加到表尾。取完了就是空操作 —— 不许到库尾再绕回头。"""
-        if not self._browse_active or self._browse_exhausted:
-            return
-        # `or None`：第一批还没数过（`_browse_total` 是 0），把 0 当"已知的数"递下去就等于
-        # 叫后端跳过 `count_matching`、然后状态栏说「共 0 份文档」。第二批起才带上第一批
-        # 那个读数 —— 每批重数一遍全表是 O(行数²)，见 `SearchService.search` 的 `known_total`。
-        result = self.ctx.search.browse_documents(
-            query=self._query, offset=len(self._current_docs),
-            total=self._browse_total or None)
-        self._browse_total = result.matching_documents
-        docs = [hit.doc for hit in result.hits]
-        if not docs:
-            self._browse_exhausted = True
-        elif len(self._current_docs) + len(docs) >= self._browse_total:
-            self._browse_exhausted = True
-        self._append_rows(docs)
-        # 轮四十二 ⑦：筛选是"分类 = X"、一页都没取到、且表格本来就空 ⇒ 十有八九是这个分类
-        # 底下还没有任何文档**归入**（真库实测 `document_categories` 0 行、14 个裸分类）。
-        # 只报「共 0 份文档」会让人以为程序坏了；出路指真实的写入口（catalog_links 那排按钮）。
-        if not docs and not self._current_docs and self._query.get("category_ids"):
-            self._set_status(f"{result.status_line()}｜这个分类还没有文档归入："
-                             "在表格里选中文件后，用那排写入按钮里的「归入分类…」建立关联。")
-        else:
-            self._set_status(result.status_line())
-
-    def _append_rows(self, docs: list) -> None:
-        if not docs:
-            return
-        start = len(self._current_docs)
-        self.doc_table.setRowCount(start + len(docs))
-        self._write_rows(start, docs)
-        self._current_docs += docs
-
-    def _fill_viewport(self) -> None:
-        """第一批顶不出滚动条时（视口比一批还高）永远不会有人滚 ⇒ 也就永远不会补，
-        所以这里主动补到"能滚"为止。行高统一（**D-040**）⇒ 一次乘法就够，不测每行。"""
-        while self._browse_active and not self._browse_exhausted \
-                and self._loaded_height() <= self.doc_table.viewport().height():
-            self._load_more()
-
-    def _loaded_height(self) -> int:
-        if not self._current_docs:
-            return 0
-        return self.doc_table.rowHeight(0) * len(self._current_docs)
-
-    def _on_scrolled(self, value: int) -> None:
-        bar = self.doc_table.verticalScrollBar()
-        if bar.maximum() - value <= self.doc_table.viewport().height():
-            self._load_more()
+    # ---- 检索：调用在后台线程，上屏在主线程（轮五十八 ③ 甲 + 丁）----
 
     def _do_search(self) -> None:
         query = self.search_input.text().strip()
         if not query:
             self._apply_query(self._query)
             return
+        if self._search_running:
+            return
 
-        # 轮四十二 ⑥：真库一次检索 2–4s（G2 之外的最坏分支），没有任何反馈会被当成"点了没反应"
-        # 而连点几轮。等待光标比禁用按钮好：语义与关键词各自的成功路径都要改表格，
-        # 漏一处 enable 就是永久锁死；try/finally 保证异常路径也归还光标。
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
-        try:
-            if self.semantic_toggle.isChecked():
-                # 语义搜索
-                self._do_semantic_search(query)
+        # 真库一次关键词检索实测 2–4 秒（正文通道冷读）。这一段原先在 GUI 线程里同步跑，
+        # 于是"点了、界面被按住、几秒后一起变"—— 用户报的「卡顿一下」就是它。
+        # **耗时一个字不改**（那是后端冷读，要动它得连 G2 的 500ms 口径一起谈），改的是"冻住"。
+        # 线程里不碰控件（Qt 的硬规矩），所以三样输入都在主线程读成局部值再递进去。
+        # `criteria` 递的是引用，但 `_apply_query` 每次换一份**新** dict，飞行途中动 chips
+        # 动的是下一份，不会把这一趟的脚下抽走。
+        kind = "semantic" if self.semantic_toggle.isChecked() else "keyword"
+        criteria = self._query
+        self._search_running = True
+        self._set_status(SEARCHING_TEXT)
+
+        def work() -> None:
+            try:
+                if kind == "semantic":
+                    result: object = self.ctx.semantic_search.search(query, top_k=50)
+                else:
+                    result = self.ctx.search.search_in(criteria, query, limit=100)
+                error = None
+            except BaseException as exc:  # noqa: BLE001 - 穿出线程就永久卡在「检索中」
+                result, error = None, exc
+            finally:
+                # 那条连接是本线程建的（`threading.local`，`db/engine.py:55`），只有它自己关得掉。
+                self.ctx.engine.close_thread_connection()
+            emit_if_alive(self._search_ready, kind, result, error)
+
+        threading.Thread(target=work, name="library-search", daemon=True).start()
+
+    @property
+    def searching(self) -> bool:
+        """给测试与外壳看的「这一趟还在跑」；与 `StatusPage.reloading` 同一格东西。"""
+        return self._search_running
+
+    @QtCore.Slot(str, object, object)
+    def _on_search_ready(self, kind: str, result: object,
+                         error: BaseException | None) -> None:
+        """后台那一趟唯一的上屏口：先归还「在跑」那个位，再按通道分开渲染。
+
+        失败这一支是异步**逼出来的**，不是顺手加的：原先关键词那路的异常穿出 Qt 槽、进
+        `crash.log`，屏幕上什么都不发生（**ISSUES I84** ③ 说过的老毛病）；搬进线程之后异常
+        再也穿不出来，接住它就只有这一个落点。接住而不说 = 比原先更糟，所以两路都上状态栏。
+        """
+        self._search_running = False
+        if error is not None:
+            _LOG.warning("S1 检索失败（%s 通道）", kind, exc_info=error)
+            # 表与右栏都要清空：状态栏那一行是「表里这些行是什么」的唯一口径（**ISSUES I60**），
+            # 留着上一批行配一句失败 = 两个答案。
+            self._current_docs = []
+            self._populate_table([])
+            self._clear_hits()
+            self._update_ocr_hint(empty=False)
+            self.status_label.setToolTip("")
+            if kind == "semantic":
+                # 语义那一路的成因是"模型不在本机"，那句话里不许出现盘符与文件名（Q3 乙）。
+                self._set_status(absent_or_original(error, prefix="语义搜索失败："), danger=True)
             else:
-                # 关键词搜索（四通道）
-                self._do_keyword_search(query)
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
+                # 关键词那一路没有模型这件事：借 `absent_or_original` 会把任何
+                # `FileNotFoundError` 都念成「语义模型不在本机」—— 替后端说没说的话。
+                self._set_status(f"关键词检索失败：{type(error).__name__}: {error}", danger=True)
+            return
+        if kind == "semantic":
+            self._render_semantic(result)
+        else:
+            self._render_keyword(result)
 
-    def _do_keyword_search(self, query: str) -> None:
-        """关键词检索：四通道（文件名/路径/元数据/正文），**并且就在当前那排 chips 的条件里搜**。"""
-        result = self.ctx.search.search_in(self._query, query, limit=100)
-
+    def _render_keyword(self, result: SearchResult) -> None:
+        """关键词命中的四通道结果上屏（**并且就在当前那排 chips 的条件里搜**）。"""
         seen_ids: set[int] = set()
         docs: list[Document] = []
         for hit in result.hits:
@@ -477,32 +487,18 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         set_text_role(self.status_label, "danger" if danger else "muted")
         self.status_label.setText(text)
 
-    def _do_semantic_search(self, query: str) -> None:
-        """语义搜索：基于向量相似度。"""
+    def _render_semantic(self, results: list) -> None:
+        """语义命中的上屏：命中是 (doc_id, page_no, score)，正文由主线程按 id 现取。"""
         # 语义通道"没命中"的原因是向量库，不是"扫描件没识别过"（向量入场券 I116 甲已改成
         # 有可搜正文才入场）—— 那条提示条讲的是关键词正文通道的事，这里一律收起。
         self._update_ocr_hint(empty=False)
         self.status_label.setToolTip("")  # 轮四十二 ⑤：语义那行没有 keyword 口径可悬停
-        try:
-            results = self.ctx.semantic_search.search(query, top_k=50)
-        except Exception as exc:
-            # **ISSUES I84** ③：模型不在场时服务层抛 `FileNotFoundError`（原文逐字在那条台账里），
-            # 而这里原先没有 `except` ⇒ 异常穿出 Qt 槽，屏幕上**什么都不发生**（表格停在上一状态），
-            # 原文只进 `crash.log`。落点与 AI 分类那条同一口径（轮五十一 Q3 乙取代旧的「原文上屏」）：
-            # 模型缺席只上一句人话、原文逐字进日志；其余失败照旧回后端原文。
-            # 表也要清空：状态栏那一行是「表里这些行是什么」的唯一口径（**ISSUES I60**），
-            # 留着上一批行配一句失败 = 两个答案。
-            self._current_docs = []
-            self._populate_table([])
-            self._clear_hits()
-            self._set_status(absent_or_original(exc, prefix="语义搜索失败："), danger=True)
-            return
 
         if not results:
             self._current_docs = []
             self._populate_table([])
             self._clear_hits()
-            # ③ 落地之后「模型不可用」不再是"无结果"的一种原因（它现在带原文走红字那条路），
+            # 「模型不可用」不是"无结果"的一种原因（它现在带原文走红字那条路），
             # 这句因此去掉那半截 —— 同一条规则：文案只报后端此刻真的知道的事。
             self._set_status("语义搜索无结果（向量库里还没有向量）")
             return
@@ -548,6 +544,11 @@ class LibraryPage(LibraryFilterMixin, LibraryHitsMixin, QtWidgets.QWidget):
         self._current_docs = list(docs)
         self.doc_table.setRowCount(len(docs))
         self._write_rows(0, docs)
+        # Qt 按**行号**保选中：`setRowCount` + `setItem` 不动 `currentRow` ⇒ 换了这批行
+        # `itemSelectionChanged` 也不会发，右栏那份详情就停在上一批的第 N 行（轮五十八 ②
+        # 真机实测：表里第一行已是 `文档07.pdf`，详情仍写 `文件名：文档29.pdf`）。
+        # 渲染入口只有 `_on_doc_selected` 这一个，这里再走它一次；空表它自己走 `<0` 那支清掉。
+        self._on_doc_selected()
 
     def _write_rows(self, start: int, docs: list[Document]) -> None:
         """把一批文档写进表格的连续几行 —— 每格写什么在 `ui/library_rows.py`。

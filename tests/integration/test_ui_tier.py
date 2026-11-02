@@ -27,7 +27,7 @@ import ast
 from pathlib import Path
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from pdfarchiver.db.models import Document, TextPage
 from pdfarchiver.db.repositories.documents import DocFilter
@@ -51,12 +51,13 @@ from pdfarchiver.ui.tier import (
     TREE_STRIP_WIDTH,
     FloatablePanel,
 )
-from tests.conftest import page_at as _page_at, settle as _settle
+from tests.conftest import page_at as _page_at, run_search as _run_search, settle as _settle
 
-# 页面可用宽 = 窗口宽 − 导航 − 1px 边框（实测 1024→823、1280→1079；这条 −1 的口径
-# 与 `test_ui_layout.AVAILABLE_WIDTH` 同一个来源，两处都不写死像素）。
-PAGE_WIDTH_AT_FLOOR = MIN_WINDOW_WIDTH - NAV_WIDTH - 1     # 823
-PAGE_WIDTH_AT_DEFAULT = DEFAULT_WINDOW_WIDTH - NAV_WIDTH - 1   # 1079
+# 页面可用宽 = 窗口宽 − 导航 − 1px 边框（导航 180 那一档：1024→843、1280→1099，2026-11-03
+# 现量 `.probe_work/r58_readings.log`；这两个数就是下面两个表达式的值，写在这儿只为读的人
+# 一眼知道量级。这条 −1 的口径与 `test_ui_layout.AVAILABLE_WIDTH` 同一个来源，两处都不写死像素）。
+PAGE_WIDTH_AT_FLOOR = MIN_WINDOW_WIDTH - NAV_WIDTH - 1     # 843
+PAGE_WIDTH_AT_DEFAULT = DEFAULT_WINDOW_WIDTH - NAV_WIDTH - 1   # 1099
 
 # `window` 夹具与 `_page_at` 走 conftest 那一份（**ISSUES I58** 丙，2026-10-17：
 # `test_app_shell.py` 拆成四份后四组都要它，本地再留一份一模一样的就是第二个口径）。
@@ -198,7 +199,8 @@ def test_轨整根可点且带分类计数(window, ctx, qapp) -> None:
 def test_窄档左栏收成_48px_的条而右栏同样不占槽(window, qapp) -> None:
     """**D-040** 的取舍：地板档放不下三栏，牺牲的是命中/详情栏，**不是分类树**。
 
-    分类树在窄档换成一条 48px 的条，中栏吃掉剩余宽度（实测 823 档：[48, 774]）。
+    分类树在窄档换成一条 48px 的条，中栏吃掉剩余宽度（实测 843 档：[48, 794]，2026-11-03；
+    导航仍是 200 时那一读是 823 档 [48, 774]）。
     右栏非常驻，窄档它还是那块默认关的浮层 —— 窄档真正要降级的只有左栏。
     """
     page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
@@ -454,13 +456,17 @@ def test_状态栏那行口径在两档都不裁字不顶宽(window, ctx, qapp) 
     坏法注入实测（2026-10-17）：删掉 `library_page` 里那句 `setWordWrap(True)` ⇒ 先红在
     `wordWrap()` 那条；把这条也临时让过去，下一条「不顶宽」跟着红，读数是
     **1280px 档搜完「请示」之后页面最小宽 1031px > 823px** —— 两条都不是装饰。
+
+    【2026-11-03 追记（**轮五十八 ④甲**，导航 200→180）】同一处现量：地板档标签 778px、
+    默认档 1,034px，页面最小宽 321px 不变（`.probe_work/r58_readings.log`）。比上面那两个读数宽
+    截，来源是 轮四十二 ⑭ 之后右栏不再占 splitter 槽 + 本轮侧栏收窄，判档与断言口径一条没变 ——
+    「不顶宽」那条比的是 `PAGE_WIDTH_AT_FLOOR`（跟着 `NAV_WIDTH` 算），不是写死的 823。
     """
     _seed_docs(ctx, 3)
     for width in (MIN_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH):
         page = _page_at(window, qapp, "library", width, MIN_WINDOW_HEIGHT)
         for query, want_slow in (("请示", True), ("保留期限", False)):
-            page.search_input.setText(query)
-            page._do_search()
+            _run_search(page, qapp, query)
             _settle(qapp)
             label = page.status_label
             assert ("慢速" in label.text()) is want_slow, (
@@ -502,12 +508,12 @@ def test_浅扫自报要出现在状态栏标签上(window, ctx, qapp, monkeypat
     page.search_input.setText("请示")
 
     monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 1)
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     assert "未扫完" in page.status_label.text(), page.status_label.text()
 
     monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 99)
-    page._do_search()
+    _run_search(page, qapp)
     _settle(qapp)
     assert "未扫完" not in page.status_label.text(), page.status_label.text()
 
@@ -575,3 +581,56 @@ def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
     orphans = [w for w in QtWidgets.QApplication.topLevelWidgets()
                if isinstance(w, QtWidgets.QToolButton) and w.text() == "✕"]
     assert not orphans, f"桌面级顶层控件里扫到 {len(orphans)} 颗孤儿「✕」按钮"
+
+
+# ---------------------------------------------------------------------------
+# 轮五十八 ①：浮层必须自己画底（本文件唯一量像素的一条）
+# ---------------------------------------------------------------------------
+
+
+def _logical_rect(page, widget) -> QtCore.QRect:
+    """把子控件的矩形换算到页面坐标系（取样要跨两个坐标系就必须只留一个口径）。"""
+    top_left = page.mapFromGlobal(widget.mapToGlobal(QtCore.QPoint(0, 0)))
+    return QtCore.QRect(top_left, widget.size())
+
+
+def test_浮层覆盖区自己画底_不许透出底下的表格(window, ctx, qapp) -> None:
+    """用户红框点名的第一处"显示 bug"：表格内容从面板**底下**透上来，与面板内容叠在一起。
+
+    为什么这条量像素而其它条量几何：透明面板的 `geometry()` / `width()` / `isVisible()`
+    **全都对** —— 毛病正好是"这一块画了什么"，只有取样颜色能判（真机 A/B：摘掉浮层后覆盖区
+    **48.7%**（9,914 / 20,370）取样点颜色一模一样 ⇒ 那一片一个字也没画）。
+    判据取浮层覆盖区里**不属于任何子控件**的取样点（面板自己的边距环与控件间隙），
+    逐点必须等于面板底色令牌 `card_bg`；只要有一个点不是，那就是底下的东西透上来了。
+
+    坏法注入实测（2026-11-03）：去掉 `ui/tier.py` 那行 `WA_StyledBackground` ⇒ 本条红，
+    红字报的是"不等于底色的点数"，而不是"面板不见了"（面板仍在场、几何仍对）。
+    """
+    _seed_docs(ctx, 12)
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    panel = page.right_panel
+    panel.open_overlay()
+    _settle(qapp)
+    assert panel.isVisible() and panel.width() == tier.OVERLAY_WIDTH, \
+        "用例前提：宽档的右栏是浮层且真的开着，否则量的是页面自己的底"
+
+    expected = QtGui.QColor(window.theme.colors.card_bg)
+    image = page.grab().toImage()
+    ratio = image.width() / page.width()      # 高 DPI 下 grab 给的是设备像素
+    covered = [_logical_rect(page, child) for child in panel.findChildren(QtWidgets.QWidget)
+               if child.isVisible()]
+    rect = _logical_rect(page, panel)
+    samples = 0
+    mismatched: list[tuple[int, int, str]] = []
+    for y in range(rect.top() + 2, rect.bottom(), 7):
+        for x in range(rect.left() + 2, rect.right(), 7):
+            if any(box.contains(QtCore.QPoint(x, y)) for box in covered):
+                continue
+            samples += 1
+            color = image.pixelColor(int(x * ratio), int(y * ratio))
+            if color != expected:
+                mismatched.append((x, y, color.name()))
+    assert samples >= 200, f"取样点只有 {samples} 个 —— 这条已经空转，判据落不到面板自己的底上"
+    assert not mismatched, (
+        f"浮层覆盖区有 {len(mismatched)} / {samples} 个取样点不是面板底色 "
+        f"{expected.name()}，露出来的是底下表格的东西（前 3 个点：{mismatched[:3]}）")

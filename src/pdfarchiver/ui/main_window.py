@@ -48,7 +48,18 @@ DEFAULT_WINDOW_HEIGHT = 800
 # 导航栏宽度。布局守卫（`tests/integration/test_ui_layout.py`）拿它算"一屏还能用多宽"，
 # 所以它是外壳的口径，不是测试里写死的第二个数。侧栏不参与 D-040 的降级授权 ——
 # 宽度不足时牺牲的是 S1 的右栏，不是这里。
-NAV_WIDTH = 200
+# 轮五十八 ④ 由 200 收到 180（用户点名"太宽了，适当窄一点"）。原先 200 不是空胖：emoji 写在
+# **前导空格**里（`f"  {icon}  {title}"`），四个空格加一枚 emoji 把最长那条撑过了 180。
+# **先挪图标、再收宽度**，顺序反了就会把「归档预览与确认」显示成省略号：emoji 换成真 `QIcon`
+# 之后 2026-11-03 offscreen 现量 `sizeHintForColumn(0)` = 160 ≤ 180，留 20px 富余
+# （`.probe_work/r58_readings.log`），这一格才真的能收；那一句由
+# `test_侧栏收宽之后最长那条标题仍然完整可见` 钉住。地板档页面宽 1024−180−1 = 843、
+# 默认档 1280−180−1 = 1,099，两档离降级分界 1076 的上下关系与改宽之前一致
+# ⇒ D-040 的判档一条不用改。
+NAV_WIDTH = 180
+
+# 导航图标的尺寸：`setIconSize` 与 `_nav_icon()` 画的画布共用这一个数，写两处就会有一天对不上。
+NAV_ICON_SIZE = 18
 
 # 导航项对应的 Unicode 图标
 _NAV_ICONS: dict[str, str] = {
@@ -61,6 +72,29 @@ _NAV_ICONS: dict[str, str] = {
     "categories": "\U0001f3f7\ufe0f", # 🏷️ 分类标签
     "backup": "\U0001f4be",       # 💾 备份恢复
 }
+
+
+def _nav_icon(page_id: str) -> QtGui.QIcon:
+    """把那一枚 emoji 画成真正的图标，而不是写进条目文字的前导空格里（轮五十八 ④）。
+
+    画布按 2 倍尺寸画、再由 `QIcon` 缩到 `NAV_ICON_SIZE`：emoji 的字形轮廓在小尺寸上直接
+    糊，2 倍画再缩是同一行代码就能拿到的清晰度。
+    文字里只留条目名（`NAV_ITEMS` 那八条标题一个字没动）—— 前导空格既吃宽度，
+    又让"图标在第几像素"取决于手数空格，而不是布局。
+    """
+    emoji = _NAV_ICONS.get(page_id, "")
+    if not emoji:
+        return QtGui.QIcon()
+    side = NAV_ICON_SIZE * 2
+    canvas = QtGui.QPixmap(side, side)
+    canvas.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(canvas)
+    font = painter.font()
+    font.setPixelSize(side)
+    painter.setFont(font)
+    painter.drawText(canvas.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, emoji)
+    painter.end()
+    return QtGui.QIcon(canvas)
 
 # 主题按钮与 F5 提示的唯一文案（轮四十一 ①甲 / ②乙 / F5）。
 THEME_BTN_TEXT = "\u25d0"  # ◐ 半月：不抢眼的主题切换，颜色由当前主题 QSS 决定
@@ -88,10 +122,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.nav = QtWidgets.QListWidget()
         self.nav.setObjectName("navList")
         self.nav.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.nav.setIconSize(QtCore.QSize(18, 18))
+        self.nav.setIconSize(QtCore.QSize(NAV_ICON_SIZE, NAV_ICON_SIZE))
         for item in NAV_ITEMS:
-            icon = _NAV_ICONS.get(item.page_id, "")
-            self.nav.addItem(f"  {icon}  {item.title}")
+            self.nav.addItem(QtWidgets.QListWidgetItem(_nav_icon(item.page_id), item.title))
         self.stack = QtWidgets.QStackedWidget()
         split.addWidget(self.nav)
         split.addWidget(self.stack)

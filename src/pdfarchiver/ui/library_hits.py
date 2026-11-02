@@ -16,8 +16,9 @@ AGENTS.md 那条「单文件超 800 行就拆」已经变成"下一次写入就�
 `self.open_in_reader`（`(doc_id, page_no)` 信号，跳到 S2 的出口）、
 `self._set_status`（状态栏那一行的唯一出口，「为当前文档建向量」的回回执到这里）。
 
-搜索编排（`_do_search` / `_do_keyword_search` / `_do_semantic_search`）**留在页面里**：
-一次查询要同时写中栏表、状态栏与这一栏三处状态，拆开就是两边各拿一半。
+搜索编排（`_do_search` 起线程 → `_on_search_ready` 落回主线程 → `_render_keyword` /
+`_render_semantic` 上屏）**留在页面里**：一次查询要同时写中栏表、状态栏与这一栏三处状态，
+拆开就是两边各拿一半。
 每一格写什么、详情那一段的排版在 `ui/library_rows.py`；两档切换的尺子在 `ui/tier.py`。
 """
 from __future__ import annotations
@@ -91,7 +92,7 @@ class LibraryHitsMixin:
         self.hit_list = QtWidgets.QListWidget()
         # 命中行是"整句片段"，必须折行；折行就意味着行高不齐 —— 这**不打犯** D-040 的
         # 行高统一：那条管的是中栏那张要虚拟化的文档表（行号↔坐标必须 O(1)），而这一栏
-        # 的行数有上限：`_do_keyword_search` 传的 `limit=100`（后端页上限 `MAX_PAGE_SIZE=200`）
+        # 的行数有上限：`_do_search` 给关键词那一路传的 `limit=100`（后端页上限 `MAX_PAGE_SIZE=200`）
         # 加至多 4 条组头 ⇒ ≤104 行，所以这一栏不虚拟化。实测（2026-10-17，宽档 344px 列内）
         # 组头 25px、单行命中 38px、被折成三行的路径命中 77px。
         self.hit_list.setWordWrap(True)
