@@ -114,6 +114,8 @@
   门禁里那把棘轮（账内条数上限）就是为了让这张表**能收敛**而存在的。每条的处置格写着卡在哪一步、需要谁配合。
   **这里不复写条数**：那份表是唯一口径，抄一份数字到 README 就会漂（2026-10-18 发现本处旧数
   停在 71 条而台账已有 88 条，见 **ISSUES I87** 同族）
+  **验证范围是冻结的（**D-074**，2026-11-03）**：不再新增门禁段、不再为"想跑一次"起长任务。
+  那类没做的量级测量今后统一写「按 D-074 不做，无读数」—— 不许写成「已验证」，也不许写成「欠」
 - [`docs/VERIFICATION.md`](docs/VERIFICATION.md) —— 所有性能与结论的原始读数（含"这个数字今天还成不成立"的口径）；逐轮收尾的那几块在 [`docs/VERIFICATION-RUNLOGS.md`](docs/VERIFICATION-RUNLOGS.md)（**§4.56 起**，最近几轮）；§4.17–§4.25 / §4.26–§4.37 / §4.38–§4.45 / §4.46–§4.55 四批整轮逐字在 [`…-ARCHIVE.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE.md) / [`…-ARCHIVE-2.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-2.md) / [`…-ARCHIVE-3.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-3.md) / [`…-ARCHIVE-4.md`](docs/VERIFICATION-RUNLOGS-ARCHIVE-4.md)（**节号不变，分册只回答「它在哪一份里」**）
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) —— 按阶段记录真正做过并验证过的变更；`勾选轮（十九）`–`勾选轮（七）`
   整批逐字在 [`docs/CHANGELOG-ARCHIVE-2.md`](docs/CHANGELOG-ARCHIVE-2.md)（2026-10-28 第二次切册），

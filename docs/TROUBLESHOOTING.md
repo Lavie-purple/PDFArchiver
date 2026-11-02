@@ -113,7 +113,7 @@
    `漏索引 > 0` → 有页没进倒排，跑 `ctx.indexer.rebuild_fts()`（实测能把漏的补回来）。
    ⚠️ **已知仪器盲区（ISSUES I8）**：外部内容表的"幽灵行"（已删正文仍留在倒排里）**没有免词的检测口径** ——
    `count(*) FROM content_fts`、`rowid NOT IN (…)`、`integrity_check` 在坏状态下全部看不出问题。
-   你现在看不到幽灵结果，只因为检索通路每次 `JOIN text_pages`；`rebuild_fts()` 是补救入口
+   你现在看不到幽灵结果，只因为检索通路每次 `JOIN text_pages`；`rebuild_fts()` 是补救入口（**界面上没有"重建索引"这颗按钮**，2026-11-03 定案：那是要先过线框确认的新动作，**ISSUES I81** 已按「明确不做」记档 —— 上面这行是给会跑 Python 的人的补救路径）
    （`tests/probes/p14_fts_instrument.py` ⑤：三种坏法叠进同一份库时 `漏索引 1 / 花名册残留 1 / 倒排幽灵 2`，
    一次 rebuild 后三个数全归 0。它返回六个数（`pages`、`docs`、`unindexed_before`、`unindexed_after`、
    `stale_before`、`stale_after`），也就是"补之前欠了多少、补之后还剩多少"的现场对账）。

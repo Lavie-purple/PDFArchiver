@@ -93,8 +93,10 @@ LEDGER_STATUS_RE = re.compile(r"\*\*(OPEN|MITIGATED|CLOSED|WONTFIX|LIMIT)\*\*")
 #: 少了这两串字面量，"逐条销账"就退化成一句口号（**ISSUES I35** 那次的教训就是静默失效的判定等于没有判定）。
 MITIGATED_EXIT_MARK = "退出判据："
 LIMIT_REOPEN_MARK = "重开触发："
-#: 现数 6（轮五十六 甲 逐条核实后：23 条 MITIGATED 里 6 条转 CLOSED、10 条转 LIMIT、1 条转 WONTFIX，留 6 条）。
-#: 上限留 2 格余量给下一轮真冒出来的缺陷。**涨了不许抬线**：先去查有没有
+#: 现数 2（轮五十六 甲 逐条核实后是 6 条；轮五十七 丁 把其中 5 条按各自真实性质转 WONTFIX、
+#: 另开 **ISSUES I131** 一条，账内收成 I11 与 I131 两条）。
+#: 上限 8 是**往下的锁**，本轮没有抬它、也没有把它改成 2 —— 改成 2 就等于把"下一轮真冒出来
+#: 一条缺陷"的空间焊死，而那条空间必须有。**涨了不许抬线**：先去查有没有
 #: 「退出判据已经满足却没改状态」的那几条（本轮逮到两处 —— **ISSUES I109**：台账写着「按钮仍同步」，
 #: 而 `status_page.py:161` 早就在后台线程里跑了；**ISSUES I40**：台账写着「`volume_id` 待删」，
 #: 而 `db/migrations/0006_drop_volume_id.py:17` 早就真删了那一列），抬线等于把这条锁拆掉。
@@ -490,6 +492,8 @@ def segment_g2() -> list[Row]:
 
 
 SEGMENTS: dict[str, tuple[str, list[str]]] = {
+    # 段数是冻结的（**D-074** · 轮五十七 丙「以后不新增门禁段、不起长任务」）：
+    # 这把锁住在 `tests/guards/test_scope_freeze.py`，加一段要先拿用户同意并另立编号决定。
     "guards": ("依赖守卫 + 架构守卫 + 交付文档在场性", ["1.4–2.8s"]),
     "regression": ("全量回归（pytest tests/，条数只认当次输出，不写死）", ["49.6–236.8s（2026-10-21 782 条）"]),
     "coldstart": ("G1 冷启动 + 关窗对账", ["1.0–2.0s"]),
