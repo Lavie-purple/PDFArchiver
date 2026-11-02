@@ -6,6 +6,48 @@
 
 ---
 
+## 轮五十四（2026-11-02）—— **12 段整链在同一条命令的一场上跑满（`合计判定 36 条｜本次未跑 0 段`）**，以 **`VERDICT: RED（3 条未过）`** 收官；三条红逐一定性 ⇒ 新开 **ISSUES I129**（真根 `C3·D:` 漏索引一份刚到的用户文档）与 **I130**（G2 P95 506.0ms 按门禁自己的分类规则判**产品红**）；台账 **OPEN 0 → 2**；`src/` 与 `tests/` **一行未改**
+
+用户原话：**「12 段整链门禁没在同一条命令的一场上跑满（本轮链内只跑过 consistency） 现在能执行嘛」** → 「现在应该执行了吧」 → 「继续盯着跑完」。
+方案按勾选的 **甲 · 等安静窗自动起跑** 执行；长跑结果是 **RED** ⇒ 本轮只落账，**不重跑到绿、不改任何阈值、不碰真库**（这三条是起跑前就写死的承诺）。
+
+- **起跑前的看门狗替自己犯了三个错**（一次性脚本已删，日志留 `.probe_work/u54_watch.log`）：① `git status --porcelain` 把中文名八进制转义后的
+  字符串当成「注入残迹」，报了一次**假 ABORT**（改 `-z` 分隔后同一判据不再误报）；② 「最吃内存进程」原来**恒返回 `Idle`**（占用为零的伪进程），
+  改成两次采样取差、跳过 `Idle` 再取最大；③ 监视器原来认裸 `VERDICT:`，会被段内探针自己打的末行抢先命中，改成必须同时出现
+  `^  合计判定 \d+ 条` 与 `^VERDICT: ` 才算链末。**外加一条我自己加的判据**：起跑条件「连续 3 次 CPU ≤45% 且 **可用 ≥1536MiB**」里那 1536MiB
+  不是既有门禁线，是从 `scripts/g2_search_benchmark.py` 的负载分支借来的，借用没写在需求里。**没有为了起跑放宽判据**：第一场 60s 采样
+  **4 次没等到窗** ⇒ `TIMEOUT 4 次采样内没等到安静窗，不起跑`；第二场第 4 次（28.9%）达成 ⇒ **19:14:58 起跑**，但门禁自己采到的起跑负载是
+  **CPU 57.1%**（比末次采样高 **28.2 个百分点**）⇒ **这一场不是安静窗场**，下面所有负载绑定读数都按这一档来读。
+- **链本体**：`gates/final.py --all --data-root C:/Users/lavie/AppData/Local/PdfArchiver`，`.venv\Scripts\python.exe -u` 后台一条命令。逐段
+  **docs-inject 0.0s｜guards 5.7s｜regression 284.4s｜coldstart 1.9s｜e2e 14.1s｜injection 822.2s｜ui-inject 86.6s｜ocr 33.7s｜consistency 4,413.0s｜soak 321.9s｜package 301.8s｜g2 178.2s**，
+  末两行逐字 `  合计判定 36 条｜本次未跑 0 段` / `VERDICT: RED（3 条未过）`。十二段相加 **6,463.5s** vs 墙钟 **6,466s**（差 **2.5s**）⇒ 中途没有被休眠冻结过。
+  **「跑满」不是本轮首创**：同形状先例在本文件**轮三十六**的收尾（「整链 12 段一条命令 36 判定 / 1 红 / 未跑 0 段」35/36 绿）；本轮兑现的是
+  **轮五十三自己留下的那条本轮欠账**（它那一场链内只跑过 `consistency`），没有声称比先例多跑什么。
+- **红 ①（regression 段内）G1 计时**：`AssertionError: G1 [约定] ≤1.5s，实测 1.719s`（`tests/integration/test_app_shell.py`，全量回归
+  **1003 passed / 1 failed / 1 skipped**）。**同一条链里 `coldstart` 段是绿的**（冷启动 1.217s）、`e2e` 段 1.497s —— 三个数出自同一场、同一条 1.5s 线，
+  差别只在机器那一刻忙不忙 ⇒ 归 **ISSUES I25 / I102** 的负载绑定残留（轮五十二 1.939s@CPU 62%、轮五十三 1.683s@37% 同形状），
+  **1.5s 一个字没抬、没有重跑到绿、不另立新行**。
+- **红 ②（consistency 段）真根 `C3·D:`** ⇒ 新开 **ISSUES I129（OPEN，推荐 甲）**：19 条里红 1 条，measured 原文「盘上 PDF 104｜该子树主记录 103
+  （已标缺失 0）…… ── 盘上有、库里没有（漏索引）1 个」，点名一份 `d:/wechat files/…/2026-11/` 下的白皮书 PDF；盘上只读 `os.stat` =
+  **2,958,705 字节、mtime 2026-11-02 18:26:51** ⇒ 落在轮五十三收尾（16:30:50）与本场起跑（19:14:58）**之间**，而链是 headless 跑的。
+  **与 I119／I120 那两条 WONTFIX 的性质区别写在台账里**：那两条是工具自带／工具产生的 PDF，这一份是用户 11 月收到的真实文档 ⇒ 是功能损失，不是已接受的代价。
+  **为什么没按「等我的内容 均跟进你的建议来」直接执行 甲**：甲 要写真库，而本轮承诺明写「不碰真库」⇒ 两条指令冲突，按 AGENTS.md 先指出冲突点再停手，等一句「写库」。
+- **红 ③（g2 段）P95 = 506.0ms** ⇒ 新开 **ISSUES I130（OPEN，推荐 乙）**：第一次读数 `P95=503.0ms` 在 **CPU 81.6%** 下被判**负载场不作数**、等 90s 自动重试；
+  重试场自采 **CPU 49.6%｜可用 5593MiB**，**49.6% < 60% 忙线 ⇒ 按门禁自己的分类规则判产品红，不许归因给负载**（同场分类自检 **6/6** 正确，含「正好 500ms 判绿」
+  与「652.0ms@CPU 60.0% 判负载」两条边界）。**+6.0ms 是 1.2% 的超线**，不是量级崩塌；**500ms 与 60% 两条线一个字没动，本轮也没有再跑第二次 g2**（收束条款）。
+- **绿的那 33 条**：p12 反向注入自检 **抓到 22/22 条坏法**；soak 注入 **13/13**、`首段中位 113.0 → 末段中位 113.0MiB（增长 +0.0）｜G8 余量 1086.9MiB`；
+  package 构建 **`VERDICT: ALL GREEN` 147.5s**、冻结冒烟 149.2s、**整包 400.3 MiB**、12 条冒烟断言全 PASS；guards／docs-inject／injection／ui-inject／ocr／e2e／coldstart 七段 0 红。
+- **台账**：`gates/final.py::ledger_check` 现跑 **130 行｜I1–I130 连续｜CLOSED 101｜MITIGATED 23｜OPEN 2｜WONTFIX 4**（结构不合格仍是历史伤 **I35** 那 **1** 行，
+  `LEDGER_SHAPE_CAP 1` 未抬）。**OPEN 0 → 2** 两条都是本轮实测冒出来的，不是旧账翻红。
+- **收尾**：`scripts/precheck.py`（`.venv\Scripts\python.exe`，日志 `.probe_work/u54_precheck.log`）**`合计 2 步｜红 0 ⇒ VERDICT: ALL GREEN`** —— guards **`59 passed in 16.69s`**、
+  `gates/final.py` 的 `docs-inject + guards` **`合计判定 9 条｜本次未跑 10 段`** 全绿 ⇒ **`LEDGER_STALE_CAP 7` 与 `PY_STALE_CAP 37` 两条上限都没被本轮新措辞顶破、`MD_LIMIT 1,200` 未抬**；
+  台账 `.probe_work/u54_ledger.txt` **defects 0**；定稿后复跑一场同样 ALL GREEN（**`59 passed in 15.42s`｜`合计 2 步｜红 0`**，新日志名 `.probe_work/u54_precheck_final.log`，不覆写上一场）。
+  `.probe_work/` 本轮起过 **52** 个 `u54_*`、删掉 **47** 个、留下 **5** 个（`.probe_work/u54_chain_all.log`／`.probe_work/u54_watch.log`／`.probe_work/u54_precheck.log`／`.probe_work/u54_precheck_final.log`／`.probe_work/u54_ledger.txt`），
+  另三份本场证据用跨轮固定名（`p12_real_root.json`／`regression_full.txt`／`frozen_smoke_result.json`）⇒ **留证 8 个**；逐轮读数的正文在 `docs/VERIFICATION-RUNLOGS.md` §4.65 **A–I**。
+- **仍欠**：① **ISSUES I11** 仍 MITIGATED（Recall@10 11/20 < 18/20），缺用户的 **20 条真实查询**；② **I129 甲** 等「写库」二字；③ **I130 乙** 等低负载窗单跑
+  `gates/final.py --only g2`；④ 两份活文档都过了 **D-059** 的再切线（活 `CHANGELOG.md` **896 行** > 600、活 `docs/DECISIONS.md` **924 行** > 900），本轮只加一节、没切册；
+  ⑤ 防休眠 keep-alive 与自动备份保留策略的那条手工删除命令，仍未做。
+
 ## 轮五十三（2026-11-01）—— **I128 甲**：真库三条漂移按「备份 → 单事务删测试残迹 → 产品路径重扫 → 产品 `recover()` 收残尸」清完，**带真根的 consistency 段第一次全绿**；台账 **OPEN 1 → 0**
 
 用户原话：**「先做 I128 写库修复」**（这就是我一直等的那两个字）。**没有改一行产品代码、没有动表结构、没有新屏**（屏数仍 9／导航仍 8 项），
