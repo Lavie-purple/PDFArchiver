@@ -61,6 +61,18 @@ AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪
 不写第二个 1,124）：算不下时那一栏自己变成 420px 浮层（`tight`），算得下时贴边常驻。
 左树因此永远不让位 —— 它是 **D-039** 点名要在 1024 档收起的那一栏，收起的是它自己那根轨，
 不是它守的分类。
+
+轮六十 **乙**（**ISSUES I133**）把那次核算的第二项从"地板"换成"真实需求"：②甲 之后中栏
+只要 ≥ `CENTER_MIN_WIDTH` 480 就让右栏贴边，可 S1 那张文档表五列定宽合计 780px ——
+默认窗口 1,280 那一档右栏常驻时中栏实测 689px，**整张表放不下**，横向滚动条从此常驻，
+而滚动条要滚的正是用户要读的文件名与路径。现在 `_center_requirement` 读页面自己声明的
+`center_minimum_width`（= `set_table_columns` 返回的定宽合计 + 中栏布局左右边距 = **796**），
+没声明的屏（S8）退回 480 那条地板。三条下限（480 / 360 / 236）与 D-039 的 1024 地板
+一个像素都没动，变的只有"这一栏常驻的入场券"。实测交叉档（`.probe_work/r60_crossover.log`，
+2026-11-04）：**条态从窗口 1,387 起贴边、展开左树要从 1,624 起** —— 比台账里那句
+"约 1,385 / 约 1,621"各晚 2px 与 3px，差的正是 splitter 那几根 1px 把手（`_handle_cost`）。
+对上了才叫承诺：**常驻的每一档中栏实得 ≥ 796、表格视口 ≥ 780、横向滚动条 maximum=0**；
+让位的档（默认 1,280 与 1,360）里中栏拿到 1,050／1,130，整张表一屏放完。
 """
 from __future__ import annotations
 
@@ -126,6 +138,12 @@ class FloatablePanel(QtWidgets.QWidget):
         # 只有本来就常驻的栏才谈得上"被牺牲"（非常驻栏两档都是浮层，没有可让的槽）。
         self.sacrificial = bool(sacrificial and docked)
         self.tight = False
+        # 「页面有没有主动要过这一栏在场」。`set_tight` 让位时认的是它，不是 `isVisible()`：
+        # 作为常驻列的"可见"是布局给的（构造完就是 True），拿它当"用户正在看"会在**第一次
+        # 切档**就把一条空栏唤成开着盖住表格右端的浮层 —— **ISSUES I133** 乙 之后的默认档
+        # （窗口 1,280）正好天天撞上新建的窗，所以这条必须是"被唤出过"而不是"本来在场"。
+        # 置位只有两个入口：`open_overlay()`（页面唤出）与 `close_overlay()`（用户亲手关 ⇒ 清零）。
+        self._invoked = False
         # `setFixedWidth` 同时改 min 和 max，回宽档要恢复的就是这两个默认值。这里记下构造时
         # 的默认上限，而不是硬写 `QWIDGETSIZE_MAX` —— PySide6 6.8 的 `QtWidgets` 里**没有**
         # 这个常量（实测 AttributeError），而它一旦被写进一个 Qt 虚函数调用链里，异常会被
@@ -304,17 +322,20 @@ class FloatablePanel(QtWidgets.QWidget):
         只有 `sacrificial` 的栏会被调用；非让位栏即使被调也当场返回 False，
         这样"谁可以让位"只有 `sacrificial` 一个声明处。
 
-        让位前就开着的那一栏**让位之后仍然开着**（收成浮层贴在右沿）：用户正在读它，
-        形状变了却把内容变没，等于"点一下别处的按钮，我看的这一栏蒸发了"。
+        让位前**被页面唤出过**的那一栏，让位之后仍然开着（收成浮层贴在右沿）：用户正在读它，
+        形状变了却把内容变没，等于"点一下别处的按钮，我看的这一栏蒸发了"。认的是
+        `_invoked` 而不是 `isVisible()` —— 常驻列的"可见"是布局给的，构造完就是 True；
+        拿它当"用户正在看"，每个新窗口第一次进默认档（1,280）都会把一条**空栏**唤成
+        开着盖住表格右端的浮层（**ISSUES I133** 乙 之后那一档天天存在，实测 `.probe_work/r60_truth.log`）。
         与 `set_narrow` 的区别正在这里 —— 换档是窗口宽度的事（用户拖窗口，屏幕整体重排），
         让位是这一栏自己的事（用户展开左树，只有这一栏受影响）。
         """
         if not self.sacrificial or tight == self.tight:
             return False
-        was_open = self.isVisible()
+        invoked = self._invoked
         self.tight = tight
         self._apply_shape()
-        if tight and was_open:
+        if tight and invoked:
             self.open_overlay()
         return True
 
@@ -397,6 +418,9 @@ class FloatablePanel(QtWidgets.QWidget):
         self.open_overlay()
 
     def open_overlay(self) -> None:
+        # 先记账再走早退：页面每一次"唤出"都是用户要看这一栏的信号，让位时该尊重它
+        # （哪怕此刻它是常驻列，早退不代表用户不想看它）。
+        self._invoked = True
         if not self._is_overlay():
             # 宽档的常驻列没有"浮层"这一说：可收栏的"开"就是展开成常驻列，
             # 不可收的常驻列本来就开着 —— 与原来的早退等价。让位的那一栏走下面（它是浮层）。
@@ -422,6 +446,7 @@ class FloatablePanel(QtWidgets.QWidget):
         """
         if not self._is_overlay():
             return
+        self._invoked = False     # 用户亲手关掉 ⇒ 账清掉：之后让位不再替他把这一栏唤回来
         self.setVisible(False)
         self.closed.emit()
 
@@ -436,14 +461,18 @@ def sync_tier(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],
     它开着的时候窗口变宽变窄都得跟着贴右沿。
 
     档位之外还有第二次核算（**D-040**「必须且只牺牲右栏」，轮五十九 ②甲）：宽档里如果
-    所有常驻件同时在场会把中栏压到 `CENTER_MIN_WIDTH` 以下，那让位的就是 `sacrificial`
-    那一栏 —— 左树永远不让（**D-039** 点名收起的是它自己，收起的方式是收成那根轨）。
+    所有常驻件同时在场会把中栏压到它自己的需求以下，那让位的就是 `sacrificial` 那一栏 ——
+    左树永远不让（**D-039** 点名收起的是它自己，收起的方式是收成那根轨）。中栏的需求由
+    `_center_requirement` 读页面自己声明的那个数（**ISSUES I133 乙**：轮五十九 ②甲 之后
+    判的不再只是 480 那条地板，而是"让出这一栏之后中栏还装不装得下整张定宽表"）；
+    能摆下多少件由 `_handle_cost` 先扣掉 splitter 自己的把手。
     """
     if host_width <= 0:
         return
     narrow = host_width < THREE_COLUMN_MIN_WIDTH
     switched = [panel.set_narrow(narrow) for panel in panels]
-    tight = not narrow and host_width < _resident_demand(panels) + CENTER_MIN_WIDTH
+    available = host_width - _handle_cost(splitter, panels)
+    tight = not narrow and available < _resident_demand(panels) + _center_requirement(panels)
     for panel in panels:
         if panel.sacrificial:
             switched.append(panel.set_tight(tight))
@@ -451,6 +480,40 @@ def sync_tier(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],
         splitter.setSizes(_tier_sizes(splitter, panels, host_width))
     for panel in panels:
         panel.place()
+
+
+def _handle_cost(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel]) -> int:
+    """splitter 的把手也吃宽度，按「所有常驻件同时在场」那一档的形状算。
+
+    实测（窗口 1,385 / 页面 1,204 / 条态）：`setSizes([48, 796, 360])` 之后中栏实得 **794**，
+    表格视口 **778** —— 两根 1px 把手就是那差下去的 2px。所以判据不扣它们的话，
+    「常驻 ⇒ 整张定宽表装得下」正好在交叉档那一个宽度上差一口气红掉（**ISSUES I133 乙** 落地时现量）。
+
+    让位的那一栏此刻不在 splitter 里（比常驻少一根把手），而判的是**它回来之后**放不放得下，
+    所以要补回来。这一项不许跟着当前形状漂：漂了就会出现"算得下 ⇒ 贴边 ⇒ 多一根把手 ⇒
+    又算不下 ⇒ 让位 ⇒ 少一根把手 ⇒ 又算得下"的来回翻。
+    """
+    back = sum(1 for panel in panels
+               if panel.sacrificial and panel.parent() is not splitter)
+    return splitter.handleWidth() * max(0, splitter.count() - 1 + back)
+
+
+def _center_requirement(panels: list[FloatablePanel]) -> int:
+    """中栏需要多宽：页面声明过的真实需求，兜在 **D-040** 那条 480px 地板之上。
+
+    `CENTER_MIN_WIDTH` 是线框时代那句"别低于这个数"，它从来没数过中栏里那张表 —— S1 的
+    文档表五列定宽合计 780px，加上中栏布局自己的左右边距是 796px。轮五十九 ②甲 只按 480
+    算，于是默认窗口 1,280 那一档右栏贴了边、中栏拿到 689px，整张定宽表**放不下**、
+    横向滚动条常驻（**ISSUES I133** 的开账理由）。**乙** 的修法就是把这一栏的常驻判定
+    换成中栏的真实需求，三条地板（480 / 360 / 236）一个像素都不放宽。
+
+    这个数不许写在 `tier.py` 里：它是**那张表的形状**，只有一个合法产地（列宽声明处
+    `ui/table_layout.set_table_columns` 的返回值 → `pages/library_page.py` 的
+    `self.center_minimum_width`）。这里从 host 读，读不到就退回 480 —— 没声明的屏（S8）
+    中栏不是那张 780px 的表，退回地板才是对的。
+    """
+    return max([CENTER_MIN_WIDTH,
+                *(getattr(panel.host, "center_minimum_width", 0) for panel in panels)])
 
 
 def _resident_demand(panels: list[FloatablePanel]) -> int:

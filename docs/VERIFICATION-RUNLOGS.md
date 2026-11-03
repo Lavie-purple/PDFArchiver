@@ -1099,3 +1099,59 @@ VERDICT: ALL GREEN
 ```
 
 三条如实：① **这一场的 `VERDICT: ALL GREEN` 不覆盖整链** —— 上面四条 SKIP 是脚本逐条自己打出来的（每条都带「这一场的「全绿」不覆盖它」），本轮按 **D-074** 不跑整链 ⇒ 「本次未跑 10 段」是预期值而不是事故（11 段里 guards 自己算跑了，其余 10 段没跑，与 K 段口径同源）。② **步 1 的 68 条与轮五十八 同数** —— 本轮改动全落在 `tests/integration/` 的既有断言上（`test_ui_hits.py`／`test_ui_tier.py`／`test_ui_layout.py`／`test_hit_explain.py`／`test_round42_ux.py`），守卫文件一个没加 ⇒ 守卫条数一格没抬，也没为变绿放宽任何采样档或判据。③ 这一行抄的是 **L 段落笔之前** 那一场；L 段写进本册之后同一条命令又复跑一场 —— 这一行新加的反引号名会被 K 段那条守卫当场重查，所以「填完之后仍然绿」必须真跑过而不是推断 —— **末行两句与上面一致**（`合计 2 步｜红 0` 与 `VERDICT: ALL GREEN`），步内秒数按轮五十六 的入册规矩**只记不判**，两场读数都进 project_stats（不入库）。
+
+### 4.71 · 轮六十（**I133 按推荐档 乙 落地：右栏常驻的入场券从「中栏 ≥ 480 地板」换成「让出这一栏之后中栏仍装得下整张定宽表」，一个数只有一个产地；账内 3 → 2；坏法真跑 9 档；九条阈值线 + 两把棘轮一个字未抬、真库零读写 —— 2026-11-04 00:55:40 → 本册定稿）
+
+**A · 收尾那场全量一次绿，本轮没有「改完先跑全量、当场红两条」那一幕**：`.probe_work/r60_regress.log` 末行逐字 **`1024 passed, 1 skipped in 320.00s (0:05:19)`**。条数比轮五十九 **+1**，全部增量就是新判据 `test_右栏常驻的入场券是中栏装得下全表`；`test_ui_tier.py` 加完之后超 800 行 ⇒ 按主题拆出 `tests/integration/test_ui_table_geom.py`（224 行，行高／I54 行号／视口／I60 状态栏／D-051 浅扫那五组整体搬走），共享夹具（`seed_docs`／`WINDOW_WIDTH_RIGHT_DOCKED`／`PAGE_WIDTH_AT_*`）迁进 `tests/conftest.py`（392 行）—— **拆分只搬不增**。上一轮那条已知假红（G1 冷启动 1.5s 线）本轮没复现，线本身一个字没动。
+
+**B · 坏法注入 9 档**（`.probe_work/r60_inject.py` → `.probe_work/r60_inject.log`；每条改成「等价但坏」、跑、**字节拼接还原 + md5 比对**、再跑绿）：
+
+| 档 | 坏法 | 末行与红在哪条 |
+| --- | --- | --- |
+| ① | `_center_requirement` 只看 480 地板（＝乙 之前的算式） | `1 failed` ⇒ `1280px（条态）该让位成浮层，实际 tight=False parent 在 splitter=True` |
+| ② | `_handle_cost` 归 0（不扣 splitter 把手） | `1 failed` ⇒ `1386px（条态）该让位成浮层…` —— 正好红在交叉档那一格 |
+| ③ | `sync_tier` 的 `tight` 恒 False（右栏永不让位） | `1 failed` ⇒ 同 ① 那条 1,280 |
+| ④ | `set_tight` 的 `invoked` 改回 `isVisible()` | **`1 failed, 1 passed`** ⇒ `1386px 这一档右栏是浮层，新建窗口就把它开着 ⇒ 一条空栏盖住表格右端（⑭「默认关」）` |
+| ⑤ | `_update_ocr_hint` 不唤出右栏（只把带子 `setVisible`） | `1 failed` ⇒ `提示条要说话，可它挂着的那一栏不在屏幕上`（`test_ocr_on_demand.py:158`） |
+| ⑥ | 出口角标恒可见（✕ 跟着形状走） | `1 failed` ⇒ `宽档常驻：「✕」在场=True，这一档的形状却是 overlay=False` |
+| ⑥b | 同 ⑥，但把该档的采样宽从 1,440 搬回 1,280 | **`1 passed`** —— 这一档**预期就是绿**：1,280 在乙 之后是浮层档，「恒可见」在那里没错。它证明 C② 那个 1,440 是判据的一部分而不是巧合，**不搬档这条守卫就没牙齿** |
+| ⑦ | 页面不再声明真实需求（`center_minimum_width` 写死 480） | `1 failed` ⇒ 新判据第一条 `assert page.center_minimum_width == 796` |
+| ⑧ | 声明值比真正落屏的列宽窄（把定宽合计加宽 `+40`） | 第一次 **`1 passed`（空结果）** —— 吸收列把那 40px 吞了；改成 `+100` 才 **`1 failed`** ⇒ 同一句 `center_minimum_width == 796` 红在读到 896。空结果如实记在这里，不当「已验」 |
+
+**C · 三条后果（都不是靠放宽判据变绿，是判据变了之后事实变了）**：① `library_hits.py::_update_ocr_hint` 末尾补 `if show: self._open_right_panel()` —— 提示条挂在右栏里，那一栏不在屏幕上时它说话没人听得见（⑤ 的逐字）。② `test_ui_hits.py` 两条进档宽度 1,280 → `WINDOW_WIDTH_RIGHT_DOCKED`(1,440)：乙 之后 1,280 是「浮层默认关」那一档，在那里断言常驻形状等于断言一个不存在的形状；1,280 不是缺陷，是选定形状。③ `test_round42_ux.py::test_浮层没有标题行_关闭键是角标` 与 `FloatablePanel._invoked` 绑定：只有 `open_overlay`／`close_overlay` 两个写者，`set_tight` 读 `_invoked` 而不是 `isVisible()`。
+
+**D · 交叉档量到 1px（`.probe_work/r60_crossover.log`，两态各 17 档）**：条态 `1385 页 1204 | tight=True 常驻=False w=420 | 中栏 1155 表格视口 1139 | 滚条 max=0` → `1387 页 1206 | tight=False 常驻=True w=360 | 中栏 796 表格视口 780 | [48, 796, 360] | 滚条 max=0`；展开态 `1623 页 1442 | tight=True 常驻=False | 中栏 1156` → `1624 页 1443 | tight=False 常驻=True w=360 | 中栏 796 表格视口 780 | [48, 236, 360, 796] | 滚条 max=0`。**常驻那侧中栏恒 ≥ 796、横滚恒 0**，这就是乙 买到的东西。I133 开账时那两个「约 1,385／约 1,621」分别差 **2px 与 3px**，差的是 splitter 那几根 1px 把手（`_handle_cost` 按「所有常驻件同时在场」那一档算，不随当前形状漂 —— 漂了会在交叉档来回翻）。
+
+**E · 我自己把 D-064 ⑭ 弄坏，被现量探针先看见**：乙 落地后第一次量（`.probe_work/r60_truth.log`）1,280–1,386 那几档逐字 `tight=True 常驻=False 可见=True ✕=True … 引导=True` —— 让位把浮层**开着**交回去，等于一条 420px 空栏盖在表格右端；根因是 `set_tight` 把「常驻列构造完就可见」（布局给的）当成「用户正在看」。改 `_invoked` 之后同一条探针复量（`.probe_work/r60_truth2.log`）同档全 `可见=False ✕=False 引导=False`，1,387／1,624 起才 `常驻=True 可见=True ✕=False`。这一形状先于任何断言被我看见，是因为探针把 可见／✕／引导 三个数一起打；④ 那档注入之后它在 pytest 侧也有了牙。**另一条我自己写错的账当场改过**：初稿在 ISSUES 与交付报告写「差的是 splitter 那根 1px 把手」，与两个「约」的差实际是 2px 与 3px（把手有两根），已按 `r60_crossover.log` 逐字改成「那几根 1px 把手」。**没改的那一档也记着**：1,024 条态 视口 778（比 780 差 2px）、滚条=1 —— 那是 ②甲 之前就有的窄档行为，本轮不动它。
+
+**F · 台账读数（`gates/final.py::ledger_check` 同一条命令，本轮两次）**：开账前（轮五十九 定稿值）**`133 行｜I1–I133 连续｜CLOSED 110｜LIMIT 10｜MITIGATED 2｜OPEN 1｜WONTFIX 10｜账内 3｜缺陷 0`**；I133 转 CLOSED 之后 **`133 行｜I1–I133 连续 || CLOSED 111｜LIMIT 10｜MITIGATED 2｜WONTFIX 10 || 账内（OPEN+MITIGATED）2 条｜MITIGATED 2（上限 8）｜LIMIT 10 条不计算账 || 结构不合格 1 行（上限 1）：I35（3 格、行尾未闭合）`、`缺陷 0`**（`.probe_work/r60_ledger.log`）。**账内 3 → 2**，回到轮五十九 开 I133 之前那个数；剩下两条 **I11**（要用户本人 20 条真实查询）与 **I131**（要他本人点一次分类筛选）都不是工程能变绿的，没有假销账。文档类守卫（含台账棘轮与文档指针）在 ISSUES/DECISIONS/本册落笔之后独立复跑 **`19 passed`**。
+
+**G · 一个数只有一个产地**：`ui/table_layout.py::set_table_columns` 返回定宽合计（**780**，与 `_ViewportStretchPolicy` 那个「吸不吸收」的决定读的是同一次计算，不是第二个口径）→ `pages/library_page.py` 加中栏布局左右边距（8+8）→ `self.center_minimum_width = 796` → `tier.py::_center_requirement` 从 host 读。**`tier.py` 里不出现 796／780**。**没动的线**（逐条现读）：三栏下限 1,076／右栏 360／中栏地板 480／轨 48／浮层 420／导航 180／最小窗宽 1,024／`LEDGER_STALE_CAP` 7／`PY_STALE_CAP` 37／`MD_LIMIT` 1,200／`PY_LIMIT` 800／`library_page.py` 的 700 自线（现数**正好 700，零余量**）。
+
+**H · 真库与产品面**：`src/`／`tests/`／`docs/` 之外零改动，**真库一次都没开**（读写都没有；所有几何读数来自临时数据根的空库窗口），`backups/` 一个文件没动，用户没给「写库」二字。**屏数仍 9、导航仍 8 项、八条标题一字不改** ⇒ 本轮零新界面，不过线框环节。**没有改 `docs/UI-SCREENS.md`／`UI-WIREFRAMES.md`**：轮五十九 同一形状改动的那一次提交（`37b0b64`）也没改它们，§七 那句「收敛到『左树（宽档）+ 搜索框』」已按 §九 读，本轮不发明文档churn。
+
+**I · 工时与埋点**（`.probe_work/r60_worktime.py` 读会话 JSONL，口径同轮五十一／五十九）：窗 **2026-11-04 00:55:40.652 →（本册定稿时）03:41:52**，墙钟 **9,971.65s = 2:46:11**；窗内事件 **2,298** 条、真人消息 **5** 条（00:55:40「继续执行未完成的内容」／01:21:36「回答我①甲 + ②甲 + ③甲 + ④乙 这些都做完了吗」／01:24:14「直接回答我这四条完成没有…」／02:09:33「欠缺都跟进你建议来执行…」／03:04:13「继续执行未完成的，完成之后汇报进度」）、compact 摘要 **9** 条；**>30min 空档 1 段** 01:24:20 → 02:09:20（**2,700s = 0:45:00**，人不在）⇒ 真正在做的墙钟 **≈ 2:01:11**。日志体积 605,090,027 B / 160,557 行，自轮五十九 I 段那次读数（589,113,911 B / 157,630 行）增量 **+15,976,116 B**（本机 token 恒为 0，只能按字节当代理并标注）。**本轮 5 条真人消息里没有一条打过「乙」字** —— 授权读法写在 **D-077** 第一段。
+
+**J · 本轮没跑／今后怎么写**：整链 11 段／soak／injection 段／consistency 真根／g2／package **零读数**，按 **D-074** 写「不做，无读数」，不算欠账、不再追。账内 2 条（I11／I131）都要用户侧动作，本轮没有新输入到场；I131 的真库 `document_categories` 行数本轮**不声明**（没开库）。其余 CLOSED 条目一条没复核（同 §4.68 J ②）。
+
+**K · 临时文件与留删名单**：本轮被 `src/`／`tests/`／`docs/` 点名的都在场、随证据保留 —— `.probe_work/r60_crossover.log`、`.probe_work/r60_truth.log`、`.probe_work/r60_truth2.log`、`.probe_work/r60_inject.py`、`.probe_work/r60_inject.log`、`.probe_work/r60_ledger.log`、`.probe_work/r60_worktime.py`、`.probe_work/r60_worktime.log`、`.probe_work/r60_regress.log`、`.probe_work/r60_guards.log`、`.probe_work/r60_precheck.log`、`.probe_work/r60_precheck2.log`、`.probe_work/r60_docguards.log`、`.probe_work/r60_filesize.log`；**没被点名的探针草稿**（同前缀那两个形状量测读数与一份早期一次性探针脚本）本节写完即删、**不在本册留名**（留名会顶破 `PY_STALE_CAP` 37，那把棘轮现顶格）；`tests/integration/__pycache__/` 里一份早期探针的 `.pyc` 残迹一并清；根 `.tmp_*` **0**。
+
+**L · 收尾预检**（仓里唯一的收口命令 `scripts.precheck`，本册 L 段落笔之前那场；整场输出逐字，**首行含本机目录，按 R-003 遮成 `<仓根>`，其余一字未改**）：
+
+```text
+收尾预检运行于 <仓根>｜python 3.11.7
+  PASS  1/2  tests/guards（守卫全量）
+        ....................................................................     [100%]
+        68 passed in 26.56s
+  PASS  2/2  gates/final.py docs-inject + guards
+          SKIP  未跑的段：consistency（p12 注入自检 + p14 一致性仪表验牙 + （给了 --data-root 就）核查真实现场）—— 这一场的「全绿」不覆盖它
+          SKIP  未跑的段：soak（p13 注入自检 + 真长跑采样）—— 这一场的「全绿」不覆盖它
+          SKIP  未跑的段：package（build.py 内容断言 + 冻结产物冒烟全阶段）—— 这一场的「全绿」不覆盖它
+          SKIP  未跑的段：g2（G2 搜索 P95 真库实测（绑定真库；--all 会跑；负载场判「环境不合格」不作数））—— 这一场的「全绿」不覆盖它
+          合计判定 9 条｜本次未跑 10 段
+        VERDICT: ALL GREEN
+  合计 2 步｜红 0
+VERDICT: ALL GREEN
+```
+
+三条如实：① **这一场的全绿不覆盖整链** —— 四条 SKIP 是脚本自己逐条打的，本轮按 **D-074** 不跑整链 ⇒「本次未跑 10 段」是预期值（11 段里 guards 自己算跑了）。② **68 条与轮五十九／轮五十八 同数** —— 本轮没有新增守卫文件，也没有为变绿放宽任何采样档；新判据长在 `tests/integration/` 里，不在守卫侧。③ **下一轮开篇必须先切册**：行数守卫独立跑（`.probe_work/r60_filesize.log`）末行 **`扫了 256 个 .py 与 37 个 .md｜临近线（余量 ≤100 行）11 份｜VERDICT: ALL GREEN`**，其中本轮写入直接相关的三份是 **`docs/DECISIONS.md` 1,161（余 39）**、**`docs/VERIFICATION-RUNLOGS.md` 1,137（余 63）**、**`src/pdfarchiver/ui/pages/library_page.py` 700（对那条 700 自线余 0）**，另有 `src/pdfarchiver/ui/theme.py` 800（对红线 800 余 0）是本轮之前就在的。**一条线没抬、一个字没改判据** —— 台账按 **D-059** 整批切册、`.py` 按主题拆，那是下一轮的第一件事，不是把线挪松。④ 这一段（含 K 段刚补的四个名字）落笔之后，同一条命令又复跑一场（`.probe_work/r60_precheck2.log`）—— **「填完之后仍然绿」是真跑出来的而不是推断**：末行两句与上面逐字一致（`合计 2 步｜红 0`／`VERDICT: ALL GREEN`），步内秒数按轮五十六 的入册规矩**只记不判**。

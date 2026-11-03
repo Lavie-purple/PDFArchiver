@@ -29,7 +29,10 @@ from pdfarchiver.ui.main_window import (
     MIN_WINDOW_WIDTH,
 )
 from pdfarchiver.ui.pages.reader_page import ReaderPage
-from tests.conftest import page_at as _page_at, run_search as _run_search, settle as _settle
+from tests.conftest import (
+    WINDOW_WIDTH_RIGHT_DOCKED,
+    page_at as _page_at, run_search as _run_search, settle as _settle,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +179,17 @@ def test_右栏常驻时空着也有一句引导_有命中之后要让位(window
     ③ 把 `sync_hint` 写成恒 `setVisible(False)` ⇒ 本条只红在①（测试在第一条断言就停，恒灭看不见
        后面），另两处在同一份日志里红：全站那条点名守卫（这次四栏一起报）与
        `test_引导跟着条数走_有内容之后要让位` 的 `隔壁那句空着的引导不该被一起灭掉`。
+
+    追注（2026-11-04 · **轮六十 乙**）：入场档从"宽档"收窄成**右栏真的贴边常驻那一档**，所以
+    本页从 `DEFAULT_WINDOW_WIDTH`（1,280）搬到 `WINDOW_WIDTH_RIGHT_DOCKED`（1,440）。乙 之后
+    1,280 那一档这一栏是**让位、且默认关着的浮层** —— 按 `test_empty_state.py`「隐藏的列表不在场」，
+    ⑱ 在那一档根本不该生效，本条的三条断言在 1,280 会红在第一条前提。不变的是这条守卫管的东西：
+    **只要这一栏是常驻的，空着就必须有那句引导**。
     """
     doc_id = _seed_hit_corpus(ctx, make_pdf)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert page.right_panel.isVisible(), "用例前提：②甲 之后宽档这一栏是常驻的"
+    page = _page_at(window, qapp, "library", WINDOW_WIDTH_RIGHT_DOCKED, DEFAULT_WINDOW_HEIGHT)
+    assert page.right_panel.isVisible(), \
+        f"用例前提：常驻档（{WINDOW_WIDTH_RIGHT_DOCKED}）这一栏该是贴边常驻且在场"
     assert page.hit_list.count() == 0, f"用例前提：还没搜过，这一栏该是空的：{_rows(page)}"
     assert page.hit_hint.isVisible(), "常驻的一栏空着却没有 ⑱ 那句引导"
 
@@ -237,8 +247,13 @@ def test_Ctrl_F_把光标交给搜索框而右栏等搜索结果(window, qapp) -
        ⇒ 红在判据 1（焦点在导航列表上按键没反应）；
     ③ 在 Ctrl+F 的槽里加一句 `right_panel.open_overlay()` ⇒ 红在判据 3（窄档那一档
        `(False, False)` 变 `(True, False)`，浮层凭空盖在表格上）。
+
+    追注（2026-11-04 · **轮六十 乙**）：宽档那一档从 1,280 搬到 1,440 —— 乙 之后 1,280 右栏是
+    **让位的浮层**，那句"常驻列一直场"的分支在 1,280 不再在场，两档会量到同一种形状（判据 3 只剩
+    一条分支被覆盖）。搬到常驻档之后 `(True, True)` 那一支重新被采样。副作用要说清：注入 ③ 现在
+    只在窄档那一档红 —— 常驻档上 `open_overlay()` 对已贴边的面板是空转（早退），改不了形状与在场。
     """
-    for width in (MIN_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH):
+    for width in (MIN_WINDOW_WIDTH, WINDOW_WIDTH_RIGHT_DOCKED):
         page = _page_at(window, qapp, "library", width, MIN_WINDOW_HEIGHT)
         assert str(window.search_shortcut.key().toString()) == "Ctrl+F"
         panel = page.right_panel

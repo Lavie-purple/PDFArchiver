@@ -200,11 +200,16 @@ class LibraryPage(LibraryFilterMixin, LibraryBrowseMixin, LibraryHitsMixin,
         # 当时的视口算过，于是 780px 的五列在 2560 档右边空出 1,514px，文件名却永远挤在 220px 里。
         # 两条判据各钉在哪：吸与退 = `test_吸收列按视口宽运行时决定且地板档退回全定宽`，
         # 退回之后还得滚得过去 = `test_表格定宽列放不下时必须还能滚到`（同量地板档那档）。
-        set_table_columns(self.doc_table,
-                          {0: 220, 1: 200,
-                           2: 63 + CELL_PADDING_WIDTH,
-                           3: 140 + CELL_PADDING_WIDTH,
-                           4: 88 + CELL_PADDING_WIDTH}, stretch_col=0)
+        table_fixed_total = set_table_columns(
+            self.doc_table,
+            {0: 220, 1: 200,
+             2: 63 + CELL_PADDING_WIDTH,
+             3: 140 + CELL_PADDING_WIDTH,
+             4: 88 + CELL_PADDING_WIDTH}, stretch_col=0)
+        # 中栏的**真实**最低需求 = 整张定宽表 + 中栏布局自己的左右边距（**ISSUES I133 乙**）。
+        # 右栏该不该贴边常驻，判的是"让出那一栏之后中栏还装不装得下全表"，不是 **D-040** 那个 480。
+        left, _top, right, _bottom = center_lay.getContentsMargins()
+        self.center_minimum_width = table_fixed_total + left + right
         self.doc_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         # **ISSUES I78** 甲（2026-10-19）改多选：「批量打标签」在 SPEC 阶段 3 里写的是"一批文档"，
         # 单选的话一次只能归一份，那条验收仍然做不到。Ctrl/Shift 与 `SelectRows` 同一形状，

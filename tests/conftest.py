@@ -21,7 +21,48 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from pdfarchiver.db.models import Document  # noqa: E402
+from pdfarchiver.fs.identity import identity_key  # noqa: E402
 from pdfarchiver.services.bootstrap import AppContext, bootstrap  # noqa: E402
+from pdfarchiver.ui.main_window import (  # noqa: E402
+    DEFAULT_WINDOW_WIDTH,
+    MIN_WINDOW_WIDTH,
+    NAV_WIDTH,
+)
+
+# S1 右栏**真的贴边常驻**那一档的窗口宽（**ISSUES I133** 乙，2026-11-04 实测
+# `.probe_work/r60_truth2.log`：左树收成条时从 1,387 起常驻、展开左树要 1,624 起 ——
+# 默认窗口 1,280 那一档它让位成了浮层）。凡"这一栏是常驻列"的用例前提都取这一个数，
+# 不许在各文件里各写各的档；展开态那一档只有 `test_ui_tier.py` 量得到，所以留在该文件里。
+WINDOW_WIDTH_RIGHT_DOCKED = 1440
+
+# 页面可用宽 = 窗口宽 − 导航 − 1px 边框（导航 180 那一档：1024→843、1280→1,099，2026-11-03
+# 现量 `.probe_work/r58_readings.log`）。写进 conftest 是因为**两个文件**都要它
+# （`test_ui_tier.py` 判形状、`test_ui_table_geom.py` 判"状态栏不顶宽"），而这条 −1 的口径
+# 与 `test_ui_layout.AVAILABLE_WIDTH` 同一个来源 —— 抄第二处就等着分家。
+PAGE_WIDTH_AT_FLOOR = MIN_WINDOW_WIDTH - NAV_WIDTH - 1     # 843
+PAGE_WIDTH_AT_DEFAULT = DEFAULT_WINDOW_WIDTH - NAV_WIDTH - 1   # 1,099（乙 之后右栏在这一档让位）
+PAGE_WIDTH_AT_DOCKED = WINDOW_WIDTH_RIGHT_DOCKED - NAV_WIDTH - 1   # 1,259
+
+
+def seed_docs(ctx: AppContext, count: int = 3) -> list[int]:
+    """灌几行进文档表 —— 空表量不到行高，长文件名才量得到"变行高展开"会不会发生。
+
+    返回落库后的 id：⑮ 那颗小圆点的用例要真去建一条"文档 ↔ 分类"关联。
+    搬进 conftest（轮六十 拆 `test_ui_tier.py` 时，与 `page_at` 同一个理由）：表格几何那一组
+    用例现在在 `test_ui_table_geom.py`，形状这一组留在这里，两份一模一样的种子就是两个口径。
+    """
+    ids: list[int] = []
+    for n in range(count):
+        name = f"归档范围与保留期限的请示（复函稿）第{n}版附件全部版本.pdf"
+        path = f"D:\\用户资料\\2026 年度合同与结算凭证归档\\{name}"
+        doc = ctx.documents.upsert(Document(
+            path=path, path_key=identity_key(path), name=name,
+            size_bytes=1024 * 1024, mtime_ns=1_760_000_000_000_000_000,
+            sha256=f"{n:064x}", text_status="done", fts_status="done"))
+        ids.append(doc.id)
+    return ids
+
 
 
 @pytest.fixture

@@ -97,7 +97,7 @@ class _ViewportStretchPolicy:
 
 
 def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
-                      stretch_col: int | None = None) -> None:
+                      stretch_col: int | None = None) -> int:
     """`widths` 是「列号 → 定宽 px」，**含** `CELL_PADDING_WIDTH`。
 
     `stretch_col` 是**这一列愿意吸收剩余宽度**的声明：能不能真的吸，由
@@ -107,6 +107,12 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
     全站 10 张表都经这里（ISSUES I61 选甲：判重页并进；#198 加 S7 库体检表；轮五十 加 S6 恢复页的
     选包表）：archive 2 / backup 3 / library 1 / operations 2 / dedup 1 / monitor 1。行号列统一
     `hide()`，守卫 `test_ui_tier.py` 逐屏扫全部 10 张。
+
+    **返回值 = 这张表「每一列都保住自己那份宽」所需的最低视口宽**，算法与
+    `_ViewportStretchPolicy` 判"吸不吸"用的是同两个数（其余定宽列合计 + 吸收列的下限），
+    所以它不是第三条口径。要它的人是 **ISSUES I133 乙**：右栏该不该贴边常驻，取决于中栏
+    在让出那一栏之后**还装不装得下整张定宽表** —— 这个数只能由列宽声明处算一次交出去，
+    让页面自己抄一个 780 就是第二个口径（改了列宽忘了改它，让位核算会照着旧数判）。
     """
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
@@ -129,6 +135,11 @@ def set_table_columns(table: QtWidgets.QTableWidget, widths: dict[int, int],
         header.setSectionResizeMode(stretch_col, QtWidgets.QHeaderView.ResizeMode.Stretch)
         # 构造时就挂上事件过滤器并按当时的视口宽判一次（`HostResizeWatcher.attach`）。
         _ViewportStretchPolicy(table, widths, stretch_col)
+    # 吸收列没在 `widths` 里出现时，它的下限就是 `_ViewportStretchPolicy` 用的那份兜底值 ——
+    # 这里的式子必须与那条判据（`其余定宽 + 吸收列下限 ≤ 视口`）逐项对得上，否则交出去
+    # 的那个数不是同一件事（归档页的 `stretch_col=3` 正是这一档：声明里只有前三列）。
+    return sum(widths.values()) + (
+        0 if stretch_col is None or stretch_col in widths else STRETCH_MIN_WIDTH)
 
 
 def loaded_line(total: int, loaded: int, unit: str) -> str:

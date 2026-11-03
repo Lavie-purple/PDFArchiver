@@ -1,21 +1,27 @@
 """**D-039 / D-040** 的降级几何 —— 1024 档收起侧栏，两屏共用 `ui/tier.py` 那一条规则；
-外加 **ISSUES I54** 的表格几何（行号列在不在场、视口随不随数据量漂）、
-**ISSUES I60** 的状态栏几何（口径那一行长什么样、折行之后顶不顶宽）、
-**D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏），以及 `FloatablePanel`
-自己的两条形状账（宽档两栏都是常驻列、「✕」不许漏成桌面顶层窗）。
+外加 `FloatablePanel` 自己的两条形状账（宽档两栏都是常驻列、「✕」不许漏成桌面顶层窗）。
+（**追注 2026-11-04 · 轮六十**：**ISSUES I54** 的表格几何、**ISSUES I60** 的状态栏几何与
+**D-051** 的状态栏接线三组按 800 行线拆进 `test_ui_table_geom.py`，刀口在"量的对象"——
+这一文件管面板在宽度档下收成什么形状，那一文件管表里的行与状态栏那句口径话占掉多少像素。）
 轮四十二 ⑭ 之后右栏曾两档都是浮层、默认关、搜索出结果才开；轮五十九 ②甲 把它改回**宽档贴边常驻**
 （浮层盖住的正好是它自己抄的那一列），代价是「轨 + 展开的树 + 中栏下限 + 右栏」= 1,124 > 默认档
 可用的 1,099 —— 三条地板下限一条没放宽，放不下时由 `sacrificial` 那一栏让位（**D-040**
-「必须且只牺牲右栏」从此按当下需求算，不再只看宽窄）。轮四十四 ⑮（**D-066**）
+「必须且只牺牲右栏」从此按当下需求算，不再只看宽窄）。轮六十 **ISSUES I133** 乙 把这条算式里
+中栏那一格从 480 的地板换成**它自己的真实需求**（S1 = 定宽表 780 + 中栏左右边距 16 = **796**，
+由页面从 `set_table_columns` 的返回值算出来，`ui/tier.py` 里不出现第二个数），再把 splitter
+那 1~3 根 1px 把手一起算进去 —— 于是"贴边常驻"有了入场券：**条态从窗口 1,387 起、展开左树
+从 1,624 起**，默认档 1,280 退回浮层（并且按 ⑭ 那条"默认关"，空栏不再盖着表格），换回的是
+中栏整张定宽表一屏放完、横向滚动条不再常驻。轮四十四 ⑮（**D-066**）
 又把左树在宽档也收成 48px 的条、轮四十五 乙 把那根条做成**标题轨**（整根可点 + 带分类计数）、
 丙 把 S8 从可收起里摘出去 —— `test_宽档左树默认收成条而右栏贴边常驻`、
+`test_右栏常驻的入场券是中栏装得下全表`（乙 新加的那一条：两档交叉 + 换来的是什么）、
 `test_宽档展开左树时让位的是右栏_三条下限一条不放宽`、
-`test_轨整根可点且带分类计数`、`test_地板档下_S8_的树侧栏收起而宽档常驻` 四条钉的是这几轮
+`test_轨整根可点且带分类计数`、`test_地板档下_S8_的树侧栏收起而宽档常驻` 五条钉的是这几轮
 叠在一起之后的契约。
 
 为什么单独成一个文件（`test_app_shell.py` 那一摊 2026-10-17 已按 **ISSUES I58** 丙 拆成四份，
 见 **REPO-JOURNAL R-010**）：这一组量的是**同一个控件在两个宽度档下的形状**，判据全部来自
-`ui/tier.py` 与 `ui/table_layout.py` 的常量，跟外壳/读数/列宽底线守卫不是一条链。
+`ui/tier.py` 的常量，跟外壳/读数/列宽底线守卫不是一条链。
 **ISSUES I53** ②甲/③甲 那一节（命中面板的行文案、浏览态清空、Ctrl+F、跳到 S2 的链、
 越界页码）2026-10-30 按同一理由拆进 `test_ui_hits.py` —— 它量的是**数据到文字的链路**，
 不是控件在两个宽度下的形状。
@@ -33,19 +39,13 @@ from pathlib import Path
 import pytest
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pdfarchiver.db.models import Document, TextPage
-from pdfarchiver.db.repositories.documents import DocFilter
-from pdfarchiver.fs.identity import identity_key
-from pdfarchiver.services.bootstrap import AppContext
 from pdfarchiver.ui import library_hits, tier
 from pdfarchiver.ui.main_window import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
-    NAV_WIDTH,
 )
-from pdfarchiver.ui.nav import NAV_ITEMS
 from pdfarchiver.ui.pages import categories_page, library_page
 from pdfarchiver.ui.tier import (
     CENTER_MIN_WIDTH,
@@ -55,33 +55,20 @@ from pdfarchiver.ui.tier import (
     TREE_STRIP_WIDTH,
     FloatablePanel,
 )
-from tests.conftest import page_at as _page_at, run_search as _run_search, settle as _settle
+from tests.conftest import (
+    PAGE_WIDTH_AT_DEFAULT,
+    PAGE_WIDTH_AT_DOCKED,
+    PAGE_WIDTH_AT_FLOOR,
+    WINDOW_WIDTH_RIGHT_DOCKED,
+    page_at as _page_at,
+    resize_stepped as _stepped,
+    seed_docs as _seed_docs,
+    settle as _settle,
+)
 
-# 页面可用宽 = 窗口宽 − 导航 − 1px 边框（导航 180 那一档：1024→843、1280→1099，2026-11-03
-# 现量 `.probe_work/r58_readings.log`；这两个数就是下面两个表达式的值，写在这儿只为读的人
-# 一眼知道量级。这条 −1 的口径与 `test_ui_layout.AVAILABLE_WIDTH` 同一个来源，两处都不写死像素）。
-PAGE_WIDTH_AT_FLOOR = MIN_WINDOW_WIDTH - NAV_WIDTH - 1     # 843
-PAGE_WIDTH_AT_DEFAULT = DEFAULT_WINDOW_WIDTH - NAV_WIDTH - 1   # 1099
-
-# `window` 夹具与 `_page_at` 走 conftest 那一份（**ISSUES I58** 丙，2026-10-17：
-# `test_app_shell.py` 拆成四份后四组都要它，本地再留一份一模一样的就是第二个口径）。
-
-
-def _seed_docs(ctx: AppContext, count: int = 3) -> list[int]:
-    """灌几行进文档表 —— 空表量不到行高，长文件名才量得到"变行高展开"会不会发生。
-
-    返回落库后的 id：⑮ 那颗小圆点的用例要真去建一条"文档 ↔ 分类"关联。
-    """
-    ids: list[int] = []
-    for n in range(count):
-        name = f"归档范围与保留期限的请示（复函稿）第{n}版附件全部版本.pdf"
-        path = f"D:\\用户资料\\2026 年度合同与结算凭证归档\\{name}"
-        doc = ctx.documents.upsert(Document(
-            path=path, path_key=identity_key(path), name=name,
-            size_bytes=1024 * 1024, mtime_ns=1_760_000_000_000_000_000,
-            sha256=f"{n:064x}", text_status="done", fts_status="done"))
-        ids.append(doc.id)
-    return ids
+# 三个量档（843 / 1,099 / 1,259）与 `_seed_docs` 都在 `tests/conftest.py`：判形状的这一组与
+# 判表格几何的那一组（`test_ui_table_geom.py`，轮六十 按 800 行线拆出）都要它们，抄两份就是
+# 第二个口径。**ISSUES I58** 丙 拆 `test_app_shell.py` 时同一条理由。
 
 
 def _center(splitter: QtWidgets.QSplitter, page) -> QtWidgets.QWidget:
@@ -107,9 +94,14 @@ def test_宽档左树默认收成条而右栏贴边常驻(window, qapp) -> None:
     没动的读数：`narrow is False`（切档**真的跑过** —— 上一轮这里量到 [236, 481, 360] 看着对，
     其实那三个数来自 `__init__` 里手写的 `setSizes`，切档代码在 Qt 虚函数里抛异常被吞了、从没跑过）。
     跟着形状一起改的只有右栏那几条：它现在**吃档位判定**，所以 `narrow` 不再是 None。
+
+    【2026-11-04 **ISSUES I133** 乙】"贴边常驻"从这一轮起有入场券（要装得下中栏那张定宽表），
+    默认档 1,280 不再常驻 ⇒ 这一条的量档换到 `WINDOW_WIDTH_RIGHT_DOCKED`（1,440，页面 1,259
+    ≥ 轨 48 + 中栏 796 + 右栏 360 + 两根 1px 把手 = 1,206）。**默认档为什么让位、让位之后
+    中栏拿到多少**由 `test_右栏常驻的入场券是中栏装得下全表` 那条量，两条不重叠。
     """
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    assert page.width() == PAGE_WIDTH_AT_DEFAULT, f"页面可用宽不是 {PAGE_WIDTH_AT_DEFAULT}：{page.width()}"
+    page = _page_at(window, qapp, "library", WINDOW_WIDTH_RIGHT_DOCKED, DEFAULT_WINDOW_HEIGHT)
+    assert page.width() == PAGE_WIDTH_AT_DOCKED, f"页面可用宽不是 {PAGE_WIDTH_AT_DOCKED}：{page.width()}"
     assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下左树 + 中栏 + 右栏"
     tp = page.tree_panel
     assert tp.narrow is False, "切档没跑（还是 None）—— 异常被 Qt 的虚函数调用吞掉了"
@@ -119,9 +111,8 @@ def test_宽档左树默认收成条而右栏贴边常驻(window, qapp) -> None:
     assert tp.strip.isVisible() and tp.strip.width() == TREE_STRIP_WIDTH, \
         f"宽档没留出 {TREE_STRIP_WIDTH}px 的条：{tp.strip.width()}"
 
-    # 右栏（②甲 改的就是这几条）：左树收成条时「轨 + 中栏下限 + 右栏」= 48+480+360 = 888
-    # ≤ 1,099，放得下，它就该在第三槽里贴边常驻（实测 sizes=[48, 689, 360]，
-    # `.probe_work/r59_readings.log`）。
+    # 右栏（②甲 改的就是这几条）：左树收成条时「轨 48 + 中栏真实需求 796 + 右栏 360」+ 两根
+    # 1px 把手 = 1,206 ≤ 1,259，放得下，它就该在第三槽里贴边常驻。
     rp = page.right_panel
     assert rp.docked and rp.narrow is False, \
         f"右栏现在吃档位判定了，narrow 必须是现成的读数而不是 None：{rp.narrow}"
@@ -132,17 +123,18 @@ def test_宽档左树默认收成条而右栏贴边常驻(window, qapp) -> None:
         "常驻列不该有「✕」—— 关不掉的栏摆一颗按下去没反应的按钮，是假出口"
     assert page.splitter.count() == 3, f"宽档该是「条 + 中栏 + 右栏」三槽：{page.splitter.sizes()}"
     center = _center(page.splitter, page)
-    # 减掉的是两根 1px 把手（实测 689 = 1,099 − 48 − 360 − 2），不是"中栏自己缩了"。
+    # 减掉的是两根 1px 把手（实测 849 = 1,259 − 48 − 360 − 2），不是"中栏自己缩了"。
     assert center.width() >= page.width() - TREE_STRIP_WIDTH - RIGHT_COLUMN_WIDTH - 2, \
         f"收起的左树没把宽度还给中栏：中栏 {center.width()}px"
-    assert center.width() >= CENTER_MIN_WIDTH, f"中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限"
+    assert center.width() >= page.center_minimum_width, \
+        f"乙 的承诺兑现不了：右栏常驻时中栏只有 {center.width()}px，装不下它自己声明的 {page.center_minimum_width}px"
 
     # 收起态与展开态的常驻需求不同（48+360 vs 48+236+360），最低宽度因此**本来就会变**，
     # 所以这里在起始形状取基准、走完一个来回再比 —— 比的仍是同一个形状。
     hint = window.minimumSizeHint().width()
     assert hint <= MIN_WINDOW_WIDTH, f"宽档常驻形状已经吃掉 D-039 的 {MIN_WINDOW_WIDTH}px 地板余量：{hint}"
 
-    # 点条展开 = 236px 常驻列（右栏因此放不下、让位成浮层，那一形状单独一条用例量）。
+    # 点条展开 = 236px 常驻列（这一档展开之后右栏放不下、让位成浮层，那一形状单独两条用例量）。
     tp.strip_button.click()
     _settle(qapp)
     assert tp.isVisible() and tp.parent() is page.splitter, "点条没把这一栏放回 splitter"
@@ -160,54 +152,156 @@ def test_宽档左树默认收成条而右栏贴边常驻(window, qapp) -> None:
         f"收回成条反而把窗口最低宽度顶宽了：{hint} → {window.minimumSizeHint().width()}"
 
 
+def test_右栏常驻的入场券是中栏装得下全表(window, ctx, qapp) -> None:
+    """**ISSUES I133** 乙：常驻不再只看 D-040 那条 480 地板，看的是"让出右栏之后中栏装不装得下**整张定宽表**"。
+
+    三段判据（读数 2026-11-04 现量 `.probe_work/r60_truth2.log`）：
+    ① **需求产地唯一** —— 中栏要多少由页面自己声明（`set_table_columns` 返回的定宽合计
+       780 + 中栏布局左右边距 16 = **796**），`ui/tier.py` 里不出现这个数；
+    ② **入场券按这条算式生效，两档各量两侧** —— 条态 1,360／1,386 让位、1,387 常驻；
+       展开左树 1,623 让位、1,624 常驻。只量一侧挡不住"把手归零"那类改法（台账那句
+       "约 1,385／约 1,621"与实测之差正好是 splitter 的 1px 把手），所以两侧都是判据；
+    ③ **换来的是什么** —— 常驻的每一档中栏 ≥ 页面声明的需求，且文档表
+       `horizontalScrollBar().maximum() == 0`（整张表一屏放完，用户不必横向滚文件名与路径 ——
+       那正是 ②甲 之后滚动条常驻在 S1 的东西）；让位的档里右栏按 ⑭ 那条「默认关」**不唤出空栏**。
+
+    为什么 ③ 用 `maximum()==0` 而不是"视口 ≥ 780"：780 是那张表的形状，已经在 ① 那个数里
+    由列宽声明处产出一次；再在断言里抄一遍字面量就是第二个口径（**D-040** 那条纪律）。
+    `maximum()==0` 是 Qt 自己对"装得下"的读数，它把 796 这个数**覆盖不到**的变数一起算进来
+    —— 注入 ⑧ 就是这一句的唯一牙齿（见下）。
+
+    坏法注入实测（2026-11-04 跑 `.probe_work/r60_inject.py`，九条各跑一遍、每条按字节还原并
+    校验 md5；逐字红字带行号见 RUNLOGS §4.71 与 `.probe_work/r60_inject.log`。下面按"哪一句先红"
+    记，行号会随本文件增删漂移，所以不写行号）：
+    ① 把 `_center_requirement` 换成 `return CENTER_MIN_WIDTH`（＝乙 之前的算式，只看 480 地板）
+       ⇒ 红在让位那一支的 `state == (True, False)`：「1280px（条态）该让位成浮层，实际
+       tight=False parent 在 splitter=True」；
+    ② 把 `_handle_cost` 直接 `return 0` ⇒ 同一句，但红在 1,386 那一侧（1,387 常驻、1,386 也常驻）
+       —— 这就是"两侧都量"的理由：只量常驻那一侧，把手归零照样绿；
+    ③ 把 `sync_tier` 的 `tight = ...` 硬改成 `False` ⇒ 同一句，红在 1,280；
+    ④ 把 `set_tight` 里 `invoked = self._invoked` 换回 `invoked = self.isVisible()` ⇒ 红在让位那一支
+       最后的 `not rp.isVisible()`：「1386px 这一档右栏是浮层，新建窗口就把它开着」；同一场里 ⑭
+       那条老守卫（`test_宽档展开左树时让位的是右栏_三条下限一条不放宽`）**照旧绿**
+       （1 failed, 1 passed）⇒ 「默认关」这一半只有本用例接得住；
+    ⑦ 把 `library_page` 那句声明改成 `self.center_minimum_width = 480`（页面不再交出真实需求）
+       ⇒ 红在开头 `center_minimum_width == 796`：「中栏的需求不是从列宽声明处算出来的：480」；
+    ⑧ 把 `set_table_columns` 落屏的列宽整体 +100（交出的那个数与真实所需分家）⇒ 红在
+       `bar.maximum() == 0`：「1440px 常驻时文档表还要横向滚 2px…视口 833px、中栏 849px、
+       纵向滚动条在场=False」，而它上一句"中栏 ≥ 它自己声明的需求"**照旧绿** —— 849 ≥ 796 是真的，
+       格子够了而表放不下，只有 Qt 自己的滚动读数看得见。（先试过 +40：超出量被吸收列的 Stretch
+       吃掉，全表仍 `max=0` ⇒ 这一句的入场券是"定宽列本身超出视口"，不是"表比声明宽一点"。）
+    """
+    _seed_docs(ctx)
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    rp, table = page.right_panel, page.doc_table
+    bar, vsb = table.horizontalScrollBar(), table.verticalScrollBar()
+    assert page.center_minimum_width == 796, \
+        f"中栏的需求不是从列宽声明处算出来的：{page.center_minimum_width}（该是定宽表 780 + 边距 16）"
+    assert page.center_minimum_width > CENTER_MIN_WIDTH, \
+        "用例前提：这一屏的真实需求要高于 D-040 的地板，否则乙 的核算与 ②甲 等价、白测"
+
+    # (窗口宽, 展开左树?) ⇒ 该不该常驻。两侧都取自现量交叉档。
+    cases = [(DEFAULT_WINDOW_WIDTH, False, False), (1360, False, False), (1386, False, False),
+             (WINDOW_WIDTH_RIGHT_DOCKED, False, True), (1386, True, False), (1624, True, True)]
+    for width, expand, docks in cases:
+        if expand:
+            page.tree_panel.expand()
+        else:
+            page.tree_panel.collapse()
+        _stepped(window, qapp, width, DEFAULT_WINDOW_HEIGHT)
+        state = (rp.tight, rp.parent() is page.splitter)
+        center = _center(page.splitter, page)
+        shape = "展开" if expand else "条态"
+        if docks:
+            assert state == (False, True), \
+                f"{width}px（{shape}）该贴边常驻，实际 tight={rp.tight} parent 在 splitter={state[1]}"
+            assert center.width() >= page.center_minimum_width, \
+                f"{width}px 常驻时中栏 {center.width()}px < 它自己声明的 {page.center_minimum_width}px —— 常驻的代价又回来了"
+            assert bar.maximum() == 0, (
+                f"{width}px 常驻时文档表还要横向滚 {bar.maximum()}px（整张定宽表没放完，**ISSUES I133**）；"
+                f"视口 {table.viewport().width()}px、中栏 {center.width()}px、"
+                f"纵向滚动条在场={vsb.isVisible()} 宽 {vsb.width()}px")
+        else:
+            assert state == (True, False), \
+                f"{width}px（{shape}）该让位成浮层，实际 tight={rp.tight} parent 在 splitter={state[1]}"
+            assert center.width() >= page.center_minimum_width, \
+                f"{width}px 让位之后中栏 {center.width()}px 仍装不下整张表：让位没换来东西"
+            assert not rp.isVisible(), \
+                f"{width}px 这一档右栏是浮层，新建窗口就把它开着 ⇒ 一条空栏盖住表格右端（⑭「默认关」）"
+
+    # 「默认关」不等于「唤出来也关不掉」：让位的档里页面真要它时必须在场（这条钉 `_invoked` 的另一半）。
+    page.tree_panel.collapse()
+    _stepped(window, qapp, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    assert rp.tight and not rp.isVisible(), "回到让位那一档后它该是关着的浮层（上面那支已量过，这里是用例前提）"
+    rp.open_overlay()
+    _settle(qapp)
+    assert rp.isVisible() and rp.width() == tier.OVERLAY_WIDTH, "open_overlay() 没把让位中的浮层开出来"
+    rp.close_overlay()
+    _settle(qapp)
+    assert not rp.isVisible(), "✕ 关不掉 ⇒ 这条浮层成了关不掉的遮罩"
+
+
 def test_宽档展开左树时让位的是右栏_三条下限一条不放宽(window, qapp) -> None:
     """**D-040**「必须且只牺牲右栏」从"整档只看宽窄"精确成"按当下常驻需求算"（轮五十九 ②甲）。
 
-    算术（全部现量 `.probe_work/r59_readings.log`）：默认窗口 1,280 下页面可用 **1,099**，
-    而「轨 48 + 展开的树 236 + 中栏下限 480 + 右栏 360」= **1,124** > 1,099。
-    ②甲 把右栏放回第三槽之后，这个差值第一次真的会撞上车 —— 左树收起时放得下（888 ≤ 1,099，
-    中栏实测拿到 689），展开时放不下。**修法不是**把三条下限一起放宽（D-039/D-040 的地板一个
-    像素都没动），而是让声明了 `sacrificial` 的那一栏在算不下时变回浮层 —— 窄档的牺牲逻辑
-    本来就是这一味药，现在它按需求算，而不是按"宽窄"这一个布尔值算。
+    算术（②甲 那份现量 `.probe_work/r59_readings.log`，乙 之后那份 `.probe_work/r60_truth2.log`）：
+    展开左树要同时放下「轨 48 + 树 236 + 中栏 + 右栏 360」，**中栏那一格从 480 的地板换成
+    它自己的真实需求 796**（**ISSUES I133** 乙）⇒ 门槛 1,124 → **1,440**。三条地板
+    （480 / 360 / 236）与 D-039 的 1,024 一个像素都没动，动的只有"这一栏常驻的入场券"。
+    ②甲 之后这个门槛真的会撞上车：左树收起时 1,440 那一档放得下（乙 的量档，见
+    `test_右栏常驻的入场券是中栏装得下全表`），展开时放不下 —— **修法不是**把下限一起放宽，
+    而是让声明了 `sacrificial` 的那一栏在算不下时变回浮层；窄档的牺牲逻辑本来就是这一味药，
+    现在它按需求算，而不是按"宽窄"这一个布尔值算。
 
-    坏法注入实测（2026-11-03）：
+    这一条的"常驻"前提因此从默认档 1,280 挪到 `WINDOW_WIDTH_RIGHT_DOCKED`（1,440），
+    "宽一档又回来了"那半挪到 1,660（页面 1,479 ≥ 1,440 + 三根 1px 把手）。
+
+    坏法注入实测（2026-11-03 三条 + 2026-11-04 一条）：
     ① 把 `library_hits` 构造里的 `sacrificial=True` 摘掉 ⇒ 红在「右栏没让位」那条
-       （它硬占 360px，中栏被压到 1,099−48−236−360=455 < 480）；
+       （它硬占 360px，中栏被压到 1,259−48−236−360−3=612 < 796，
+       `test_右栏常驻的入场券是中栏装得下全表` 同时红）；
     ② 把 `sync_tier` 那句 `tight = …` 硬改成 `False` ⇒ 同一条红，读数一样 —— 这两条注入
-       分不开，所以 ① 之外另钉 `rp.sacrificial`（声明处）与 ② 之外钉下面那档 1,440；
-    ③ 把 `set_tight` 里 `was_open` 那三行删掉 ⇒ 红在「让位把用户正在看的那一栏变没了」。
+       分不开，所以 ① 之外另钉 `rp.sacrificial`（声明处）与 ② 之外钉下面那档 1,660；
+    ③ 把 `set_tight` 里 `_invoked` 那一步删掉（让位时不再重开）⇒ 红在「让位把用户正在看的
+       那一栏变没了」；
        （2026-11-03 补做实测：第一次锚点出现 0 次没打上，那句话当时是空头账。按 CRLF 重锚后真跑
        `2 failed, 18 passed` —— 逐字「让位不许把用户正在看的那一栏变没（set_tight 里 was_open 那一步）」
        @ :193，另 :634 那条跟着红（它的前提就是"让位成了开着的浮层"）；还原后逐字节相同。）
+    ④ 【乙】把 `set_tight` 的判据从 `self._invoked` 换回 `self.isVisible()` ⇒ 这一条**不红**
+       （常驻列本来就 visible，两种写法在这里同值）；红的是
+       `test_右栏常驻的入场券是中栏装得下全表` 的「默认关」那一支 —— 注入记录留在这里是为了
+       说明这两条的分工，别把 ③ 与 ④ 当成同一条。
     """
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    page = _page_at(window, qapp, "library", WINDOW_WIDTH_RIGHT_DOCKED, DEFAULT_WINDOW_HEIGHT)
     tp, rp = page.tree_panel, page.right_panel
-    assert rp.parent() is page.splitter, "用例前提：左树收起时右栏是常驻列"
-    demand = TREE_STRIP_WIDTH + LEFT_COLUMN_WIDTH + CENTER_MIN_WIDTH + RIGHT_COLUMN_WIDTH
-    assert demand == 1124 and page.width() < demand, \
+    assert rp.parent() is page.splitter, \
+        f"用例前提：条态、{WINDOW_WIDTH_RIGHT_DOCKED}px 这一档右栏是常驻列"
+    demand = TREE_STRIP_WIDTH + LEFT_COLUMN_WIDTH + RIGHT_COLUMN_WIDTH + page.center_minimum_width
+    assert demand == 1440 and page.width() < demand, \
         f"用例前提：这一档正好放不下四件常驻件（{page.width()} < {demand}）"
 
+    rp.open_overlay()      # 「用户正在看这一栏」这笔账由页面记；乙 之后让位认的是它，不是 isVisible()
+    _settle(qapp)
     tp.expand()
     _settle(qapp)
     assert rp.tight is True and rp.parent() is page, \
         f"放不下时右栏没让位（还在第三槽）：tight={rp.tight} parent={rp.parent()}"
     assert rp.width() == tier.OVERLAY_WIDTH, \
         f"让位后的右栏不是窄档那块浮层的 {tier.OVERLAY_WIDTH}px：{rp.width()}"
-    assert rp.isVisible(), "让位不许把用户正在看的那一栏变没（`set_tight` 里 `was_open` 那一步）"
+    assert rp.isVisible(), "让位不许把用户正在看的那一栏变没（`set_tight` 里 `_invoked` 那一步）"
     assert rp.close_button.isVisible(), "让位后它是浮层形状，✕ 就必须在场（常驻列上没有）"
     assert tp.width() == LEFT_COLUMN_WIDTH, "展开的左树被一起挤掉了 —— 让位只许发生在 sacrificial 那一栏"
     assert _center(page.splitter, page).width() >= CENTER_MIN_WIDTH, \
         f"让位之后中栏仍低于 D-040 的 {CENTER_MIN_WIDTH}px：{_center(page.splitter, page).width()}"
 
-    # 宽一档（1,440 → 页面 1,259 ≥ 1,124）四件常驻件同时放得下，右栏就该自己回到第三槽。
+    # 再宽一档（1,660 → 页面 1,479）四件常驻件连同 splitter 的把手同时放得下，右栏就该自己回第三槽。
     # 这一半挡住"把 tight 恒置 True"那类假修法：让位必须由需求算出来，不是形状写死。
-    window.resize(1440, DEFAULT_WINDOW_HEIGHT)
-    _settle(qapp)
+    _stepped(window, qapp, 1660, DEFAULT_WINDOW_HEIGHT)
     assert page.width() >= demand, f"用例前提：这一档该放得下四件常驻件：{page.width()} < {demand}"
     assert rp.tight is False and rp.parent() is page.splitter and rp.width() == RIGHT_COLUMN_WIDTH, \
         f"放得下却没回到常驻列：tight={rp.tight} w={rp.width()}"
     assert not rp.close_button.isVisible(), "常驻列上的 ✕ 没跟着形状收回去"
-    assert _center(page.splitter, page).width() >= CENTER_MIN_WIDTH
+    assert _center(page.splitter, page).width() >= page.center_minimum_width
 
 
 def test_条上小圆点跟着分类关联走(window, ctx, qapp) -> None:
@@ -412,194 +506,6 @@ def test_尺寸阈值只有_tier_里那一份() -> None:
         assert own == [], f"{module.__name__} 里自己定义了尺寸 {own} —— 用 ui/tier.py 的常量"
 
 
-def test_文档表行高统一不许变行高展开(window, ctx, qapp) -> None:
-    """**D-040** 表里第一行的形状：行高统一 ⇒ 行号↔坐标换算保持 O(1)。
-
-    为什么判"各行等高"而不是判"等于 `defaultSectionSize`"：统一的加高行仍然是 O(1)，
-    规则禁的是"按行撑高"（实测 `resizeRowsToContents()` 把三行量成 [85, 85, 16]）——
-    8 万行档那版一撑就要整表测高，AGENTS.md 明令禁止 O(n²)。
-    """
-    _seed_docs(ctx)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-    heights = [page.doc_table.rowHeight(r) for r in range(page.doc_table.rowCount())]
-    assert len(heights) >= 2, f"用例前提：得真的灌进行，空表量不到行高：{heights}"
-    assert len(set(heights)) == 1, f"行高不齐 {heights} —— 行号↔坐标不再是 O(1)"
-
-
-# ---------------------------------------------------------------------------
-# **ISSUES I54**：Qt 自动长出来的行号列
-# ---------------------------------------------------------------------------
-# 全项目没有一处主动要过这一列，但只要有行它就在场，而且**按行号的位数变宽**
-# （2026-10-17 现测：空表 0 / 2 行 38 / 40 行 51px）。两条断言分管两头：
-# 第一条管"在场不在场"（逐屏扫），第二条管"在场会造成什么"（视口随数据量漂）。
-
-
-def test_每张表都不许带行号列(window, ctx, qapp) -> None:
-    """10 张表逐个点名 —— 这条是"第 11 张表冒出来时会不会漏"的牙。
-
-    坏法注入（本轮真跑）：删掉 `table_layout.set_table_columns()` 里那行
-    `verticalHeader().hide()` → 7 张表当场红；判重页那张不经 `set_table_columns`
-    （表头按内容自适应），所以它自己一行 `hide()` 也在被扫的范围里 —— 两处任删一处都红。
-    """
-    _seed_docs(ctx, 40)   # 空表量不出行号列，必须灌进行
-    seen = 0
-    for item in NAV_ITEMS:
-        if not item.implemented:
-            continue
-        window._select_by_page_id(item.page_id)
-        _settle(qapp)
-        page = window._pages[item.page_id]
-        assert page.isVisible(), f"用例前提：{item.page_id} 得是当前可见页，否则量到的都是 0"
-        # 有 reload 的页重查一遍（archive / operations 没有，它们不随库里的行数变）：
-        # 只有真的灌进行，`verticalHeader().width()` 才是非 0 的读数，断言才不只是"标志位对不对"。
-        reload = getattr(page, "reload", None)
-        if callable(reload):
-            reload()
-            _settle(qapp)
-        for table in page.findChildren(QtWidgets.QTableWidget):
-            seen += 1
-            vh = table.verticalHeader()
-            assert vh.isHidden() and vh.width() == 0, (
-                f"{item.page_id} 的表（{table.objectName() or '未命名'}，"
-                f"{table.rowCount()} 行）带着行号列：宽 {vh.width()}px —— "
-                f"它没经 `set_table_columns()` 也没自己 `hide()`（ISSUES I54）")
-    assert seen == 10, f"全站该扫到 10 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了，重数一遍再改注释"
-
-
-def test_每张表都是单行行高_不许开自动换行(window, ctx, qapp) -> None:
-    """**ISSUES I107**：`wordWrap` 开着时，Qt 把「反斜杠 + CJK 混排」的长路径画成 `C…`。
-
-    真桌面实测（2026-10-24，S3 计划表）：同一格 260px、文本 98 字符，`ElideRight` 下整行只剩
-    一个字符加省略号；同一格换成正斜杠串立刻正常，`setWordWrap(False)` 后也恢复正常
-    （对照图 `.probe_work/_plan_repro_full.png` / `_plan_nowrap.png`）。离屏平台不复现这条
-    绘制差异（CJK 字形本就缺），所以这里钉的是**开关**：10 张表一律 `wordWrap() is False`。
-
-    坏法注入（2026-10-24 真跑过）：删掉 `table_layout.set_table_columns()` 里那行
-    `setWordWrap(False)` → 这里 10 张表逐张红并点名；还原后绿。
-    """
-    seen = 0
-    for item in NAV_ITEMS:
-        if not item.implemented:
-            continue
-        window._select_by_page_id(item.page_id)
-        _settle(qapp)
-        page = window._pages[item.page_id]
-        assert page.isVisible(), f"用例前提：{item.page_id} 得是当前可见页，否则扫不到表"
-        reload = getattr(page, "reload", None)
-        if callable(reload):
-            reload()
-            _settle(qapp)
-        for table in page.findChildren(QtWidgets.QTableWidget):
-            seen += 1
-            assert not table.wordWrap(), (
-                f"{item.page_id} 的表（{table.objectName() or '未命名'}）开着自动换行 —— "
-                "单行行高 + ElideRight 会把反斜杠 CJK 路径画成 `C…`（ISSUES I107）；"
-                "经 `set_table_columns()` 建的表都该被那一行关掉")
-    assert seen == 10, f"全站该扫到 10 张表，实际 {seen} 张 —— 有页面新增了表或表被拆掉了"
-
-
-def test_视口宽度只随滚动条变不随行的位数变(window, ctx, qapp) -> None:
-    """I48 那套列宽反算的分母必须是个**定值**，否则"装不装得下"随数据量漂。
-
-    实测对照（S1 中栏、宽档页面 1079px）：修复前 0 行 463 / 2 行 425 / 40 行 404，
-    修复后 0 行 463 / 2 行 463 / 40 行 455。剩下那 8px 是**纵向滚动条**（40 行时
-    `verticalScrollBar()` 才出现，实测宽 8px）—— 那是真在占地方，不修，所以判据放它过去。
-    坏法注入：删掉 `hide()` 那行 → 40 行档量到 404 < 463 − 8 = 455，红。
-    """
-    readings = []
-    for count in (0, 2, 40):
-        if count:
-            _seed_docs(ctx, count)
-        page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-        table = page.doc_table
-        assert table.rowCount() == count, f"用例前提：灌了 {count} 行就该读到 {count} 行"
-        readings.append((count, table.viewport().width(),
-                         table.verticalScrollBar().isVisible(),
-                         table.verticalScrollBar().width()))
-    baseline = readings[0][1]
-    for count, width, vsb_visible, vsb_width in readings[1:]:
-        allowance = vsb_width if vsb_width and vsb_visible else 0
-        assert width >= baseline - allowance, (
-            f"{count} 行时视口只有 {width}px，空库是 {baseline}px，滚动条只占 {allowance}px —— "
-            f"多出来的 {baseline - allowance - width}px 是 Qt 自己长出来的行号列（ISSUES I54）")
-    assert readings[-1][2], "用例前提：40 行那一档要真的把纵向滚动条顶出来，否则这条只测了个等式"
-
-
-def test_状态栏那行口径在两档都不裁字不顶宽(window, ctx, qapp) -> None:
-    """**ISSUES I60** 的界面半边：§S1 要这一栏把检索口径与各通道行数都上屏，那句话在中栏里
-    必须同时做到 ①两向都对 ②看得见尾 ③不把窗口顶过 D-039 地板。
-
-    数字来自本轮探针 `.probe_work/i60_status_line_probe.py`（2026-10-17 实测）：
-    把 `SearchResult.lines()` 整句塞进标签，不折行要 1056px ⇒ 页面最小宽 1121px、
-    窗口最小宽 1178px，`test_ui_layout` 那两条 minimumSizeHint 守卫当场红；
-    换成 `status_line()`（2 字口径不折行 816px、trigram 口径 708px）并折行之后
-    ⇒ 地板档标签拿到 758px、宽档拿到 465px（2026-10-17 复测：4 字口径在 758px 下一行就放得下，
-    2 字口径要两行），页面最小宽 321px / 546px。
-    坏法注入实测（2026-10-17）：删掉 `library_page` 里那句 `setWordWrap(True)` ⇒ 先红在
-    `wordWrap()` 那条；把这条也临时让过去，下一条「不顶宽」跟着红，读数是
-    **1280px 档搜完「请示」之后页面最小宽 1031px > 823px** —— 两条都不是装饰。
-
-    【2026-11-03 追记（**轮五十八 ④甲**，导航 200→180）】同一处现量：地板档标签 778px、
-    默认档 1,034px，页面最小宽 321px 不变（`.probe_work/r58_readings.log`）。比上面那两个读数宽
-    截，来源是 轮四十二 ⑭ 之后右栏不再占 splitter 槽 + 本轮侧栏收窄，判档与断言口径一条没变 ——
-    「不顶宽」那条比的是 `PAGE_WIDTH_AT_FLOOR`（跟着 `NAV_WIDTH` 算），不是写死的 823。
-    """
-    _seed_docs(ctx, 3)
-    for width in (MIN_WINDOW_WIDTH, DEFAULT_WINDOW_WIDTH):
-        page = _page_at(window, qapp, "library", width, MIN_WINDOW_HEIGHT)
-        for query, want_slow in (("请示", True), ("保留期限", False)):
-            _run_search(page, qapp, query)
-            _settle(qapp)
-            label = page.status_label
-            assert ("慢速" in label.text()) is want_slow, (
-                f"{width}px 档「{query}」的口径提示方向错了：{label.text()}")
-            assert label.wordWrap(), (
-                "不折行的 QLabel 其 `minimumSizeHint()` 等于整句宽，会把窗口顶过 D-039 地板")
-            need = label.heightForWidth(label.width())
-            assert label.height() >= need, (
-                f"{width}px 档那句话被裁了：给高 {label.height()}px，要 {need}px —— {label.text()}")
-            assert page.minimumSizeHint().width() <= PAGE_WIDTH_AT_FLOOR, (
-                f"{width}px 档搜完「{query}」之后页面最小宽 {page.minimumSizeHint().width()}px，"
-                f"超过地板档可用的 {PAGE_WIDTH_AT_FLOOR}px —— 状态栏把中栏顶宽了")
-
-
-# ---------------------------------------------------------------------------
-# **D-051**：浅扫自报的界面半边
-# ---------------------------------------------------------------------------
-
-
-def _seed_bodies(ctx: AppContext, count: int = 3) -> None:
-    """给 `_seed_docs` 那几份各补一页正文 —— 浅扫预算管的是 `text_pages` 里的行，
-    没有正文行就没有窗口，标签上那句「未扫完」也无从出现（`_seed_docs` 只建主记录）。"""
-    _seed_docs(ctx, count)
-    for doc in ctx.documents.list_sorted(DocFilter(), sort="name", limit=count):
-        ctx.texts.replace_pages(int(doc.id), [TextPage(
-            doc_id=int(doc.id), page_no=1, body="归档范围与保留期限的请示正文", char_count=13)])
-
-
-def test_浅扫自报要出现在状态栏标签上(window, ctx, qapp, monkeypatch) -> None:
-    """后端认了"没扫完"，屏幕上就得看得见这句话。**ISSUES I60** 那轮的教训正是"后端三样都算好了、
-    只有界面没接"，所以这条不复用 formatter 的断言，它读的是 `status_label.text()`。
-
-    两向都钉：预算 1 行（库里有 3 行）⇒ 必须说「未扫完」；预算 99 行（盖得住全库）⇒ 必须不说。
-    坏法注入实测（2026-10-17）：把 `library_page.py` 那句 `setText(result.status_line())`
-    换回 I60 之前那句 `f"关键词搜索命中 {len(docs)} 份文档…"` ⇒ 第一条红在「未扫完」。
-    """
-    _seed_bodies(ctx, 3)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-    page.search_input.setText("请示")
-
-    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 1)
-    _run_search(page, qapp)
-    _settle(qapp)
-    assert "未扫完" in page.status_label.text(), page.status_label.text()
-
-    monkeypatch.setattr("pdfarchiver.search.service.LIKE_SCAN_ROWS", 99)
-    _run_search(page, qapp)
-    _settle(qapp)
-    assert "未扫完" not in page.status_label.text(), page.status_label.text()
-
-
 # ---------------------------------------------------------------------------
 # `FloatablePanel` 自己的两条形状账
 # ---------------------------------------------------------------------------
@@ -618,10 +524,16 @@ def test_常驻列关不掉_让位成浮层的那一栏才有出口(window, qapp
     （2026-10-17 探针实测到了这个形状）。右栏的浮层形状改由「让位」产生 —— 展开左树把它挤出
     第三槽的那一刻，✕ 必须真的在、且真的关得掉。判据收在 `_is_overlay()` 一个出口上
     （**D-040** 第三条后果那条纪律：`narrow or tight` 的合并写法散开就是第二个口径）。
+
+    【2026-11-04 **I133** 乙】"宽档右栏是常驻列"这一前提从默认档 1,280 挪到
+    `WINDOW_WIDTH_RIGHT_DOCKED`（1,440）：乙 之后 1,280 那一档它本来就让位成浮层了，
+    前提会在第一行就红。下面那半（展开 ⇒ 让位 ⇒ ✕ 在场且关得掉）跟着 `_invoked` 那笔账走 ——
+    上半那次 `open_overlay()` 就是"用户正在看这一栏"，让位时它不会凭空变没。
     """
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    page = _page_at(window, qapp, "library", WINDOW_WIDTH_RIGHT_DOCKED, DEFAULT_WINDOW_HEIGHT)
     rp = page.right_panel
-    assert rp.parent() is page.splitter and rp.isVisible(), "用例前提：宽档右栏是常驻列"
+    assert rp.parent() is page.splitter and rp.isVisible(), \
+        f"用例前提：{WINDOW_WIDTH_RIGHT_DOCKED}px 这一档右栏是常驻列"
     rp.open_overlay()
     _settle(qapp)
     assert rp.parent() is page.splitter and rp.width() == RIGHT_COLUMN_WIDTH, \
@@ -740,3 +652,4 @@ def test_浮层覆盖区自己画底_不许透出底下的表格(window, ctx, qa
             f"{expected.name()}，露出来的是底下表格的东西（前 3 个点：{mismatched[:3]}）")
         panel.close_overlay()
         _settle(qapp)
+

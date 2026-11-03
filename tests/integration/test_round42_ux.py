@@ -21,11 +21,10 @@ from PySide6 import QtCore, QtWidgets
 from pdfarchiver.db.models import Document
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
-from pdfarchiver.ui.main_window import (
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
-)
+from pdfarchiver.ui.main_window import MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH
 from pdfarchiver.ui.pages.library_page import SEARCHING_TEXT
 from tests.conftest import (
+    WINDOW_WIDTH_RIGHT_DOCKED,
     run_search as _run_search, settle as _settle, wait_search as _wait_search,
 )
 
@@ -123,6 +122,15 @@ def test_浮层没有标题行_关闭键是角标(window, qapp) -> None:
     反过来把 `docked` 改回 `False`（②甲 摘掉）**不**红本条 —— 那种形状下「✕ 在场」与
     `_is_overlay()` 同时为真，等式仍成立；这一条只钉"出口跟着形状走"，形状本身归
     `test_ui_tier.py` 那四条（实测红在那边）。
+
+    追注（2026-11-04 · **轮六十 乙**）：常驻那一档的窗口宽从 `DEFAULT_WINDOW_WIDTH`（1,280）
+    搬到 `WINDOW_WIDTH_RIGHT_DOCKED`（1,440）。乙 之后 1,280 这一栏是**让位的浮层**，两档会量到
+    同一种形状，等式两条都成立 ⇒ 上面那句"恒 `setVisible(True)`"的注入**不再变红**（1,440 才有
+    常驻列可钉）。这一档不是可选的：不搬就等于把出口↔形状那条守卫删掉。
+    两条注入都在 2026-11-04 各跑一遍（`.probe_work/r60_inject.py`，跑完按字节还原）：
+    在 1,440 上注入 ⇒ 红「宽档常驻：「✕」在场=True，这一档的形状却是 overlay=False」；
+    把这一档临时搬回 1,280 再注入同一条 ⇒ `1 passed` —— 追注那句"不搬就等于删掉守卫"是量出来的，
+    不是推出来的。
     """
     page = _page_at(window, qapp, "library")
     panel = page.right_panel
@@ -130,7 +138,7 @@ def test_浮层没有标题行_关闭键是角标(window, qapp) -> None:
              if w.objectName() == "sectionTitle" and not w.text().strip()]
     assert empty == [], "浮层里不该再有没字的标题行 —— 留一条空行就是留一条空带"
     assert panel.close_button.text() == "✕"
-    for shape, width in (("窄档浮层", MIN_WINDOW_WIDTH), ("宽档常驻", DEFAULT_WINDOW_WIDTH)):
+    for shape, width in (("窄档浮层", MIN_WINDOW_WIDTH), ("宽档常驻", WINDOW_WIDTH_RIGHT_DOCKED)):
         window.resize(width, MIN_WINDOW_HEIGHT)
         _settle(qapp)
         shown = panel.close_button.isVisibleTo(panel)

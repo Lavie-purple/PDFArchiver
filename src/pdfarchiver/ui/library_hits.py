@@ -202,11 +202,20 @@ class LibraryHitsMixin:
 
         `empty` 由页面（搜索编排那一侧）判定 —— 这一栏不知道刚才查了什么，也不该自己再数一遍。
         名单为空时同样收起：一条按下去点不到任何一份的横幅比没有横幅更糟。
+
+        最后那一句 `if show: self._open_right_panel()` 是 **轮六十 乙** 的直接后果（2026-11-04
+        全量回归当场红在 `test_ocr_on_demand.py` 两条上）：这条带子挂在右栏里，而 乙 之后
+        **默认档（窗口 1,280）右栏是让位、按 ⑭ 默认关着的浮层** ⇒ 只把带子 `setVisible(True)`
+        等于把那句话写进一块不在屏幕上的面板。规则与 `_show_hits` 那句"有正文命中才开"是同一条
+        （**有增量内容才唤出**），只是此刻这一栏唯一的增量内容就是这句话；出口也只有一处
+        （`_open_right_panel`，顺带把 `_invoked` 记上，让位↔常驻来回切档时不会把它关没）。
         """
         pending = getattr(self, "_pending_ocr", None)
         show = bool(empty and pending is not None and pending.ids)
         self.ocr_hint_label.setText(pending.strip_line() if show else "")
         self.ocr_hint_band.setVisible(show)
+        if show:
+            self._open_right_panel()
 
     def _show_hits(self, result) -> None:
         """右栏只列**带增量的命中**：有页码、有正文片段的那几路（正文 / 语义）。

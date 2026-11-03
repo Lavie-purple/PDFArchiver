@@ -141,12 +141,25 @@ def test_一条都没命中时提示条说清为什么搜不到(window, ctx, roo
 
     坏法（"提示条常驻"）：`_update_ocr_hint` 不看 `empty` —— 那么用户每次搜索都会看到
     一条和当前查询无关的横幅，第二次起就被当成装饰忽略掉。
+
+    追注（2026-11-04 · **轮六十 乙**）：这条带子挂在**右栏里**，而 乙 之后默认档（窗口 1,280）
+    右栏是让位、按 ⑭ 默认关着的浮层 ⇒ 带子自己 `setVisible(True)` 不够，`_update_ocr_hint`
+    必须连带唤出那一栏（走 `_open_right_panel()` 那一个出口），否则这句话写进一块不在屏幕上的
+    面板。全量回归当场红在本条与 `test_提示条那颗按钮排的是这一批` 两条上，红字逐字
+    `assert False + where False = <built-in method isVisible ...>.isVisible`。下面那行
+    `right_panel.isVisible()` 是补的**归因**断言：以后再红，一眼能分清是"带子没出现"还是
+    "带子出现了但那一栏不在屏幕上"（这两件事原先共用同一条红字，正是这轮排查花掉的时间）。
+    坏法注入实测（2026-11-04，`.probe_work/r60_inject.py` 第 ⑤ 条：把 `_update_ocr_hint` 末尾
+    那三句 `if show: self._open_right_panel()` 摘掉，只留 `setVisible(show)`）⇒ 红字逐字
+    「提示条要说话，可它挂着的那一栏不在屏幕上 / assert False」—— 红在**归因那一行**，
+    而不是下一行的带子，正是补这行的意义。
     """
     [_scanned(ctx, root, make_scanned_pdf, name=f"扫描件{i}.pdf") for i in (1, 2)]
     page = _library(window, qapp)
 
     _run_search(page, qapp, NO_SUCH_WORD)
 
+    assert page.right_panel.isVisible(), "提示条要说话，可它挂着的那一栏不在屏幕上"
     assert page.ocr_hint_band.isVisible(), "一条没命中却没说为什么"
     line = page.ocr_hint_label.text()
     assert "2 份扫描件还没识别" in line, line
