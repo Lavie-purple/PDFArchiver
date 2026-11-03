@@ -1080,10 +1080,10 @@ collected **1,022**（轮五十七 1,012 ⇒ **+10**）：新写 11 条（6 条 
 
 **K · 临时文件与留删名单**：本轮起一次性脚本与读数若干，**被 `src/`／`tests/`／本册点名的都留着**（判据按轮五十八 更正后的口径：**仓里所有被点名的名字**算，不是只算代码注释）：`.probe_work/` 内保留 **11 个名字**（逐条现 grep 过 `src/`／`tests/`／`docs/`／`gates/` 的注释与正文）：`.probe_work/r59_badway.log`、`.probe_work/r59_alive_probe.log`、`.probe_work/r59_p21.log`、`.probe_work/r59_readings.log`、`.probe_work/r59_inject.py`、`.probe_work/r59_inject4.py`、`.probe_work/r59_inject5.py`、`.probe_work/r59_inject6.py`、`.probe_work/r59_inject7.py`、`.probe_work/r59_layout_probe.py` 与前轮的 `.probe_work/i53_guard_injection.log`（D-076 与本册点名它的逐字双击读数）；**没有被点名的** `.probe_work/r59_inject2.py`／`.probe_work/r59_inject3.py` 与本轮全部草稿、一次性写库脚本，本节写完即删；根 `.tmp_*` **0**。**这份名单第一次写错被守卫当场逮到**：那些 py 名当时用反引号包住、没带 `.probe_work/` 前缀 ⇒ `test_台账旧文件名不超过上限` 逐字红在 **`台账旧文件名 43 处 > 上限 37 处`**（多出来的 6 处全指本行），`PY_STALE_CAP` **一格没抬**，改法是把前缀写进反引号；同一族前科是轮五十八 返工点 ②（`38 > 37`，D-075 正文里一个第三方 py 名）。上面 E／F 两段那 19 档与 22 行的逐字读数**已抄进本册正文**，所以本册不指向任何会被删掉的临时文件名（`test_ui_hits.py:170` 那句「日志 `.tmp_r59_inj6.txt` 已随本轮清零」就是这么写的）。文档类三条守卫末场（本节写完、CHANGELOG／DECISIONS／交付报告都落笔之后）：同一条命令连跑三场 —— 填本行读数之前 **`23 passed in 5.03s`**、填完之后 **`23 passed in 5.18s`**、本行措辞改定之后 **`23 passed in 5.19s`**，**三场末行的判定与条数一致（23 passed，0 failed）**；秒数一格按轮五十六 的入册规矩**只记不判**（机器状态敏感），所以这里不写「逐字相同」，写的是「判定没被填数改动」。这三条守卫覆盖的文档面到此为止；**仓里全部**（含本册与代码注释）的收口验证走 `scripts.precheck` 那条命令，末行抄在下面 L 段。
 
-**L · 收尾预检**（仓里唯一的收口命令 `scripts.precheck`）：全量回归绿、本轮四份文档（CHANGELOG／DECISIONS／交付报告／本册）落笔、K 段那三条文档守卫三场之后跑的一场，整场输出逐字：
+**L · 收尾预检**（仓里唯一的收口命令 `scripts.precheck`）：全量回归绿、本轮四份文档（CHANGELOG／DECISIONS／交付报告／本册）落笔、K 段那三条文档守卫三场之后跑的一场，整场输出逐字（**首行含本机目录，按 R-003 遮成 `<仓根>`，其余一字未改**）：
 
 ```text
-收尾预检运行于 H:\AI project\demo19｜python 3.11.7
+收尾预检运行于 <仓根>｜python 3.11.7
   PASS  1/2  tests/guards（守卫全量）
         ....................................................................     [100%]
         68 passed in 17.73s
