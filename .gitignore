@@ -12,7 +12,7 @@ agents.md
 个人用的启动方式.md
 # 本机启动便利品：docs/USAGE.md §二 已写明源码运行命令
 # （.venv\Scripts\python.exe -m pdfarchiver.app），这个 .bat 只是同一件事的本机快捷方式
-start.bat
+启动PDF归档工具.bat
 # 过程与经验沉淀（需求契约 / 工时埋点 / AI 记忆文件）
 SPEC.md
 PROJECT_SPEC.md
