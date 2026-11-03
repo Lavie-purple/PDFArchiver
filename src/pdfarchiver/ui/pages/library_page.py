@@ -135,8 +135,8 @@ class LibraryPage(LibraryFilterMixin, LibraryBrowseMixin, LibraryHitsMixin,
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setPlaceholderText("输入检索内容...")
         self.search_input.returnPressed.connect(self._do_search)
-        # D-040 的浮层触发点原是"点搜索框"：轮四十二 ⑭ 起右栏不常驻、默认关，
-        # 点框就唤出一块空白浮层是又一种堆积 —— 触发点收进 `_show_hits`（有结果才开）。
+        # D-040 的浮层触发点原是"点搜索框"：浮层默认关，点框就唤出一块空白浮层盖在表格上
+        # 是又一种堆积 —— 触发点收进 `_show_hits`（**轮五十九 ①甲**：有正文命中才开）。
         search_lay.addWidget(self.search_input, 1)
 
         # 语义搜索切换

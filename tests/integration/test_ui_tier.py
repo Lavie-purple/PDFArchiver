@@ -2,11 +2,15 @@
 外加 **ISSUES I54** 的表格几何（行号列在不在场、视口随不随数据量漂）、
 **ISSUES I60** 的状态栏几何（口径那一行长什么样、折行之后顶不顶宽）、
 **D-051** 的状态栏接线（浅扫自报那句话有没有真的上屏），以及 `FloatablePanel`
-自己的两条形状账（宽档右栏是浮层而左栏是常驻列、「✕」不许漏成桌面顶层窗）。
-轮四十二 ⑭ 之后右栏不再常驻：两档都是浮层、默认关、搜索出结果才开；轮四十四 ⑮（**D-066**）
+自己的两条形状账（宽档两栏都是常驻列、「✕」不许漏成桌面顶层窗）。
+轮四十二 ⑭ 之后右栏曾两档都是浮层、默认关、搜索出结果才开；轮五十九 ②甲 把它改回**宽档贴边常驻**
+（浮层盖住的正好是它自己抄的那一列），代价是「轨 + 展开的树 + 中栏下限 + 右栏」= 1,124 > 默认档
+可用的 1,099 —— 三条地板下限一条没放宽，放不下时由 `sacrificial` 那一栏让位（**D-040**
+「必须且只牺牲右栏」从此按当下需求算，不再只看宽窄）。轮四十四 ⑮（**D-066**）
 又把左树在宽档也收成 48px 的条、轮四十五 乙 把那根条做成**标题轨**（整根可点 + 带分类计数）、
-丙 把 S8 从可收起里摘出去 —— `test_宽档左树默认收成条而右栏默认关`、
-`test_轨整根可点且带分类计数`、`test_地板档下_S8_的树侧栏收起而宽档常驻` 三条钉的是这三轮
+丙 把 S8 从可收起里摘出去 —— `test_宽档左树默认收成条而右栏贴边常驻`、
+`test_宽档展开左树时让位的是右栏_三条下限一条不放宽`、
+`test_轨整根可点且带分类计数`、`test_地板档下_S8_的树侧栏收起而宽档常驻` 四条钉的是这几轮
 叠在一起之后的契约。
 
 为什么单独成一个文件（`test_app_shell.py` 那一摊 2026-10-17 已按 **ISSUES I58** 丙 拆成四份，
@@ -80,17 +84,33 @@ def _seed_docs(ctx: AppContext, count: int = 3) -> list[int]:
     return ids
 
 
-def test_宽档左树默认收成条而右栏默认关(window, qapp) -> None:
-    """**D-066**（走查 ⑮）之后的宽档：左树起始是一条 48px 的条，点条才展开成 236px 常驻列。
+def _center(splitter: QtWidgets.QSplitter, page) -> QtWidgets.QWidget:
+    """中栏 = splitter 里唯一不是面板、也不是轨的那一槽。
 
-    这条改名自 `test_宽档左栏常驻而右栏默认关`（轮四十二 ⑭ 的契约，D-066 取消了它留给
-    左树的那条"宽档常驻"例外）。没动的两条读数：`narrow is False`（切档**真的跑过** ——
-    上一轮这里量到 [236, 481, 360] 看着对，其实那三个数来自 `__init__` 里手写的 `setSizes`，
-    切档代码在 Qt 虚函数里抛异常被吞了、从没跑过）；右栏 `docked=False` + 定宽 420 + 默认关。
+    不写死下标：槽序跟着形状变（收起时「条 + 中栏 + 右栏」，展开让位时「条 + 树 + 中栏」），
+    写死 `widget(1)` 的用例在形状变了那天就开始量错东西 —— 而量错的中栏照样是个正数，不会红。
+    """
+    skip = {id(widget) for panel in page._panels
+            for widget in (panel, panel.strip) if widget is not None}
+    for i in range(splitter.count()):
+        widget = splitter.widget(i)
+        if id(widget) not in skip:
+            return widget
+    raise AssertionError(f"用例前提：splitter 里没有中栏：{splitter.sizes()}")
+
+
+def test_宽档左树默认收成条而右栏贴边常驻(window, qapp) -> None:
+    """**D-066**（走查 ⑮）+ **轮五十九 ②甲** 之后的宽档：左树起始是 48px 的条，右栏贴边常驻。
+
+    这条改名自 `test_宽档左树默认收成条而右栏默认关`（轮四十二 ⑭ 那份"两档都是浮层"的契约由
+    ②甲 接替：浮层盖住的正好是它自己抄的那一列 —— 用户 2026-11-03 红框 #2 的"右侧和左侧一致"）。
+    没动的读数：`narrow is False`（切档**真的跑过** —— 上一轮这里量到 [236, 481, 360] 看着对，
+    其实那三个数来自 `__init__` 里手写的 `setSizes`，切档代码在 Qt 虚函数里抛异常被吞了、从没跑过）。
+    跟着形状一起改的只有右栏那几条：它现在**吃档位判定**，所以 `narrow` 不再是 None。
     """
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     assert page.width() == PAGE_WIDTH_AT_DEFAULT, f"页面可用宽不是 {PAGE_WIDTH_AT_DEFAULT}：{page.width()}"
-    assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下左树 + 中栏"
+    assert page.width() >= THREE_COLUMN_MIN_WIDTH, "用例前提：这一档应当放得下左树 + 中栏 + 右栏"
     tp = page.tree_panel
     assert tp.narrow is False, "切档没跑（还是 None）—— 异常被 Qt 的虚函数调用吞掉了"
     assert tp.collapsible and tp.collapsed, "⑮：带条的左树宽档起始就该收成条"
@@ -98,36 +118,96 @@ def test_宽档左树默认收成条而右栏默认关(window, qapp) -> None:
         "收成条时面板还留在 splitter 里占槽 —— 那一栏没真的让出来"
     assert tp.strip.isVisible() and tp.strip.width() == TREE_STRIP_WIDTH, \
         f"宽档没留出 {TREE_STRIP_WIDTH}px 的条：{tp.strip.width()}"
-    assert page.splitter.count() == 2, f"收起后该只剩「条 + 中栏」两槽：{page.splitter.sizes()}"
-    center = page.splitter.widget(1)
-    assert center.width() >= page.width() - TREE_STRIP_WIDTH - 2, \
-        f"收起的没把宽度还给中栏：中栏 {center.width()}px，可用 {page.width() - TREE_STRIP_WIDTH}px"
 
-    # 点条展开 = D-040 原本的宽档形状（236px 常驻列，不是 420px 浮层）。
+    # 右栏（②甲 改的就是这几条）：左树收成条时「轨 + 中栏下限 + 右栏」= 48+480+360 = 888
+    # ≤ 1,099，放得下，它就该在第三槽里贴边常驻（实测 sizes=[48, 689, 360]，
+    # `.probe_work/r59_readings.log`）。
+    rp = page.right_panel
+    assert rp.docked and rp.narrow is False, \
+        f"右栏现在吃档位判定了，narrow 必须是现成的读数而不是 None：{rp.narrow}"
+    assert rp.sacrificial, "右栏必须认领 D-040「必须且只牺牲右栏」—— 谁可以让位只许有这一个声明处"
+    assert rp.parent() is page.splitter and rp.isVisible() and rp.width() == RIGHT_COLUMN_WIDTH, \
+        f"宽档右栏没作为 {RIGHT_COLUMN_WIDTH}px 常驻列贴在右边：parent={rp.parent()} w={rp.width()}"
+    assert not rp.close_button.isVisible(), \
+        "常驻列不该有「✕」—— 关不掉的栏摆一颗按下去没反应的按钮，是假出口"
+    assert page.splitter.count() == 3, f"宽档该是「条 + 中栏 + 右栏」三槽：{page.splitter.sizes()}"
+    center = _center(page.splitter, page)
+    # 减掉的是两根 1px 把手（实测 689 = 1,099 − 48 − 360 − 2），不是"中栏自己缩了"。
+    assert center.width() >= page.width() - TREE_STRIP_WIDTH - RIGHT_COLUMN_WIDTH - 2, \
+        f"收起的左树没把宽度还给中栏：中栏 {center.width()}px"
+    assert center.width() >= CENTER_MIN_WIDTH, f"中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限"
+
+    # 收起态与展开态的常驻需求不同（48+360 vs 48+236+360），最低宽度因此**本来就会变**，
+    # 所以这里在起始形状取基准、走完一个来回再比 —— 比的仍是同一个形状。
+    hint = window.minimumSizeHint().width()
+    assert hint <= MIN_WINDOW_WIDTH, f"宽档常驻形状已经吃掉 D-039 的 {MIN_WINDOW_WIDTH}px 地板余量：{hint}"
+
+    # 点条展开 = 236px 常驻列（右栏因此放不下、让位成浮层，那一形状单独一条用例量）。
     tp.strip_button.click()
     _settle(qapp)
     assert tp.isVisible() and tp.parent() is page.splitter, "点条没把这一栏放回 splitter"
     assert tp.width() == LEFT_COLUMN_WIDTH, f"展开的左栏不是 D-040 的 {LEFT_COLUMN_WIDTH}px：{tp.width()}"
     assert tp.strip.isVisible(), "展开态条没了 ⇒ 这一栏收不回去（把手只有这一颗）"
     assert not tp.close_button.isVisible(), "常驻列不该有「✕」—— 浮层才用角标出口"
-    assert page.splitter.count() == 3 and center.width() >= CENTER_MIN_WIDTH, \
-        f"展开后中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限：{center.width()}"
+    assert page.splitter.count() == 3 and _center(page.splitter, page).width() >= CENTER_MIN_WIDTH, \
+        f"展开后中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限：{_center(page.splitter, page).width()}"
 
-    # 再点收回：两态可逆。展开态常驻列把窗口的最低宽度抬到 481（实测），收回成条后
-    # 必须**不增** —— 收起时漏清 `setFixedWidth(420)` 就是这一条先红。
-    hint = window.minimumSizeHint().width()
-    assert hint <= MIN_WINDOW_WIDTH, f"展开态已经吃掉 D-039 的 {MIN_WINDOW_WIDTH}px 地板余量：{hint}"
+    # 再点收回：两态可逆。收回时漏清 `setFixedWidth(420)` 就是最后这一条先红。
     tp.strip_button.click()
     _settle(qapp)
     assert not tp.isVisible() and tp.parent() is page, "再点条没收回成条"
     assert window.minimumSizeHint().width() <= hint, \
         f"收回成条反而把窗口最低宽度顶宽了：{hint} → {window.minimumSizeHint().width()}"
 
-    rp = page.right_panel
-    assert rp.docked is False and rp.narrow is None, "右栏不该吃档位判定（轮四十二 ⑭）"
-    assert rp.parent() is page and not rp.isVisible(), "右栏默认关、挂页面上当浮层"
-    assert (rp.minimumWidth(), rp.maximumWidth()) == (tier.OVERLAY_WIDTH, tier.OVERLAY_WIDTH), \
-        f"右栏定宽不是 {tier.OVERLAY_WIDTH}px"
+
+def test_宽档展开左树时让位的是右栏_三条下限一条不放宽(window, qapp) -> None:
+    """**D-040**「必须且只牺牲右栏」从"整档只看宽窄"精确成"按当下常驻需求算"（轮五十九 ②甲）。
+
+    算术（全部现量 `.probe_work/r59_readings.log`）：默认窗口 1,280 下页面可用 **1,099**，
+    而「轨 48 + 展开的树 236 + 中栏下限 480 + 右栏 360」= **1,124** > 1,099。
+    ②甲 把右栏放回第三槽之后，这个差值第一次真的会撞上车 —— 左树收起时放得下（888 ≤ 1,099，
+    中栏实测拿到 689），展开时放不下。**修法不是**把三条下限一起放宽（D-039/D-040 的地板一个
+    像素都没动），而是让声明了 `sacrificial` 的那一栏在算不下时变回浮层 —— 窄档的牺牲逻辑
+    本来就是这一味药，现在它按需求算，而不是按"宽窄"这一个布尔值算。
+
+    坏法注入实测（2026-11-03）：
+    ① 把 `library_hits` 构造里的 `sacrificial=True` 摘掉 ⇒ 红在「右栏没让位」那条
+       （它硬占 360px，中栏被压到 1,099−48−236−360=455 < 480）；
+    ② 把 `sync_tier` 那句 `tight = …` 硬改成 `False` ⇒ 同一条红，读数一样 —— 这两条注入
+       分不开，所以 ① 之外另钉 `rp.sacrificial`（声明处）与 ② 之外钉下面那档 1,440；
+    ③ 把 `set_tight` 里 `was_open` 那三行删掉 ⇒ 红在「让位把用户正在看的那一栏变没了」。
+       （2026-11-03 补做实测：第一次锚点出现 0 次没打上，那句话当时是空头账。按 CRLF 重锚后真跑
+       `2 failed, 18 passed` —— 逐字「让位不许把用户正在看的那一栏变没（set_tight 里 was_open 那一步）」
+       @ :193，另 :634 那条跟着红（它的前提就是"让位成了开着的浮层"）；还原后逐字节相同。）
+    """
+    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    tp, rp = page.tree_panel, page.right_panel
+    assert rp.parent() is page.splitter, "用例前提：左树收起时右栏是常驻列"
+    demand = TREE_STRIP_WIDTH + LEFT_COLUMN_WIDTH + CENTER_MIN_WIDTH + RIGHT_COLUMN_WIDTH
+    assert demand == 1124 and page.width() < demand, \
+        f"用例前提：这一档正好放不下四件常驻件（{page.width()} < {demand}）"
+
+    tp.expand()
+    _settle(qapp)
+    assert rp.tight is True and rp.parent() is page, \
+        f"放不下时右栏没让位（还在第三槽）：tight={rp.tight} parent={rp.parent()}"
+    assert rp.width() == tier.OVERLAY_WIDTH, \
+        f"让位后的右栏不是窄档那块浮层的 {tier.OVERLAY_WIDTH}px：{rp.width()}"
+    assert rp.isVisible(), "让位不许把用户正在看的那一栏变没（`set_tight` 里 `was_open` 那一步）"
+    assert rp.close_button.isVisible(), "让位后它是浮层形状，✕ 就必须在场（常驻列上没有）"
+    assert tp.width() == LEFT_COLUMN_WIDTH, "展开的左树被一起挤掉了 —— 让位只许发生在 sacrificial 那一栏"
+    assert _center(page.splitter, page).width() >= CENTER_MIN_WIDTH, \
+        f"让位之后中栏仍低于 D-040 的 {CENTER_MIN_WIDTH}px：{_center(page.splitter, page).width()}"
+
+    # 宽一档（1,440 → 页面 1,259 ≥ 1,124）四件常驻件同时放得下，右栏就该自己回到第三槽。
+    # 这一半挡住"把 tight 恒置 True"那类假修法：让位必须由需求算出来，不是形状写死。
+    window.resize(1440, DEFAULT_WINDOW_HEIGHT)
+    _settle(qapp)
+    assert page.width() >= demand, f"用例前提：这一档该放得下四件常驻件：{page.width()} < {demand}"
+    assert rp.tight is False and rp.parent() is page.splitter and rp.width() == RIGHT_COLUMN_WIDTH, \
+        f"放得下却没回到常驻列：tight={rp.tight} w={rp.width()}"
+    assert not rp.close_button.isVisible(), "常驻列上的 ✕ 没跟着形状收回去"
+    assert _center(page.splitter, page).width() >= CENTER_MIN_WIDTH
 
 
 def test_条上小圆点跟着分类关联走(window, ctx, qapp) -> None:
@@ -201,19 +281,21 @@ def test_窄档左栏收成_48px_的条而右栏同样不占槽(window, qapp) ->
 
     分类树在窄档换成一条 48px 的条，中栏吃掉剩余宽度（实测 843 档：[48, 794]，2026-11-03；
     导航仍是 200 时那一读是 823 档 [48, 774]）。
-    右栏非常驻，窄档它还是那块默认关的浮层 —— 窄档真正要降级的只有左栏。
+    轮五十九 ②甲 之后右栏是**常驻列**，窄档把它摘成那块默认关的 420px 浮层 —— 与左树同一味药，
+    所以它现在也吃档位判定（`narrow` 是真读数，不再是 None）。两栏一起让位，中栏才吃得到剩余宽度。
     """
     page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
     assert page.width() == PAGE_WIDTH_AT_FLOOR
     assert page.width() < THREE_COLUMN_MIN_WIDTH, "用例前提：这一档放不下三栏"
-    assert page.tree_panel.narrow is True and page.right_panel.narrow is None
+    assert page.tree_panel.narrow is True and page.right_panel.narrow is True, \
+        "两栏都该被判成窄档（右栏从 docked=False 改成常驻列之后，narrow 不再是 None）"
     assert page.tree_panel.parent() is page and page.right_panel.parent() is page, \
         "窄档两块面板都该从 splitter 里摘出来挂到页面上（不参与布局 ⇒ 顶不宽窗口）"
     assert page.splitter.count() == 2, f"窄档 splitter 该只剩「条 + 中栏」两槽：{page.splitter.sizes()}"
     strip = page.tree_panel.strip
     assert strip.isVisible() and strip.width() == TREE_STRIP_WIDTH, \
         f"左栏没收成 {TREE_STRIP_WIDTH}px 的条：{strip.width()}"
-    center = page.splitter.widget(1)
+    center = _center(page.splitter, page)
     assert center.width() >= page.width() - TREE_STRIP_WIDTH - 2, \
         f"中栏没吃掉剩余宽度：只占 {center.width()}px，可用 {page.width() - TREE_STRIP_WIDTH}px"
     assert center.width() >= CENTER_MIN_WIDTH, f"中栏低于 D-040 的 {CENTER_MIN_WIDTH}px 下限"
@@ -527,34 +609,43 @@ def test_浅扫自报要出现在状态栏标签上(window, ctx, qapp, monkeypat
 # 越界页码）在 `test_ui_hits.py`。
 
 
-def test_右栏两档都是浮层_宽档常驻树列关不掉(window, qapp) -> None:
-    """轮四十二 ⑭ 之后的不对称：右栏（docked=False）两档都是可关的浮层；
-    左树（docked=True）在宽档是常驻列，`close_overlay()` 必须早退 ——
-    常驻列被误收起后 `set_narrow()` 只在真的换档时才 `setVisible(True)`，
-    宽档一旦收起就**再也回不来**（2026-10-17 探针实测到了这个形状）。
+def test_常驻列关不掉_让位成浮层的那一栏才有出口(window, qapp) -> None:
+    """`close_overlay()` 的早退跟着**形状**走，不跟着"这一栏叫什么"走（轮五十九 ②甲 改的就是这里）。
+
+    原契约（轮四十二 ⑭ 那条同名用例）里右栏两档都是浮层、可关，只有左树是常驻列。现在右栏宽档
+    也是常驻列，两栏在同一档**共用同一条早退**：常驻列被误 `setVisible(False)` 之后
+    `set_narrow()` 只在真的换档时才 `setVisible(True)`，宽档一旦收起就**再也回不来**
+    （2026-10-17 探针实测到了这个形状）。右栏的浮层形状改由「让位」产生 —— 展开左树把它挤出
+    第三槽的那一刻，✕ 必须真的在、且真的关得掉。判据收在 `_is_overlay()` 一个出口上
+    （**D-040** 第三条后果那条纪律：`narrow or tight` 的合并写法散开就是第二个口径）。
     """
     page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
     rp = page.right_panel
-    assert not rp.isVisible()
+    assert rp.parent() is page.splitter and rp.isVisible(), "用例前提：宽档右栏是常驻列"
     rp.open_overlay()
     _settle(qapp)
-    assert rp.isVisible(), "宽档右栏也该能开（两档都是浮层）"
-    geo = rp.geometry()
-    assert geo.width() == tier.OVERLAY_WIDTH and geo.x() + geo.width() == page.width(), \
-        f"右栏没贴在页面右沿：{geo.getRect()}"
+    assert rp.parent() is page.splitter and rp.width() == RIGHT_COLUMN_WIDTH, \
+        "在常驻列上调 open_overlay() 却把它摘成了浮层 —— 开/关的出口必须只认 `_is_overlay()`"
+    rp.close_overlay()
+    _settle(qapp)
+    assert rp.isVisible() and rp.parent() is page.splitter, \
+        "宽档的常驻右栏被 close_overlay() 收走了 —— 这一档没有'关掉整栏'这回事，且再也回不来"
+
+    # 展开左树 ⇒ 右栏放不下 ⇒ 它是浮层形状了：✕ 在场、真的关得掉。
+    page.tree_panel.expand()
+    _settle(qapp)
+    assert rp.tight and rp.isVisible(), "用例前提：展开左树之后右栏让位成了开着浮层"
+    assert rp.close_button.isVisible(), "浮层形状却没有 ✕ = 开了关不掉"
     rp.close_button.click()
     _settle(qapp)
-    assert not rp.isVisible(), "右栏的「✕」没把浮层关掉"
+    assert not rp.isVisible(), "让位成浮层之后 ✕ 没把它关掉"
 
     tp = page.tree_panel
-    tp.expand()                        # D-066 之后宽档起始是条，先把它展开成常驻列
-    _settle(qapp)
-    assert tp.isVisible(), "用例前提：展开后的左栏是常驻列"
-    assert not tp.close_button.isVisible(), "宽档常驻列不该有「✕」"
+    assert tp.isVisible() and not tp.close_button.isVisible(), "宽档常驻列不该有「✕」"
     tp.close_overlay()
     _settle(qapp)
     assert tp.isVisible() and tp.parent() is page.splitter and tp.width() == LEFT_COLUMN_WIDTH, \
-        "宽档的常驻树列被 close_overlay() 收走了 —— 这一档没有'关掉整栏'这回事"
+        "宽档的常驻树列被 close_overlay() 收走了 —— 与右栏同一条早退，两栏都得守住"
 
 
 def test_浮层的关闭按钮不许成为无父孤儿(window, qapp) -> None:
@@ -603,34 +694,49 @@ def test_浮层覆盖区自己画底_不许透出底下的表格(window, ctx, qa
     判据取浮层覆盖区里**不属于任何子控件**的取样点（面板自己的边距环与控件间隙），
     逐点必须等于面板底色令牌 `card_bg`；只要有一个点不是，那就是底下的东西透上来了。
 
-    坏法注入实测（2026-11-03）：去掉 `ui/tier.py` 那行 `WA_StyledBackground` ⇒ 本条红，
+    【2026-11-03 追记（**轮五十九 ②甲**）】宽档右栏改回常驻列之后，"浮层"这一形状只剩两处入口：
+    窄档、以及宽档展开左树时的**让位**。让位是本轮新长出来的那条路径（`set_tight` → `_apply_shape`
+    的浮层支），它要是透明，透出来的正好是用户红框 #1 那一片，所以两种形状各取一遍样。
+    坏法注入实测（2026-11-03）：去掉 `ui/tier.py` 那行 `WA_StyledBackground` ⇒ 本条两档都红，
     红字报的是"不等于底色的点数"，而不是"面板不见了"（面板仍在场、几何仍对）。
     """
     _seed_docs(ctx, 12)
-    page = _page_at(window, qapp, "library", DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+    page = _page_at(window, qapp, "library", MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
     panel = page.right_panel
-    panel.open_overlay()
-    _settle(qapp)
-    assert panel.isVisible() and panel.width() == tier.OVERLAY_WIDTH, \
-        "用例前提：宽档的右栏是浮层且真的开着，否则量的是页面自己的底"
-
     expected = QtGui.QColor(window.theme.colors.card_bg)
-    image = page.grab().toImage()
-    ratio = image.width() / page.width()      # 高 DPI 下 grab 给的是设备像素
-    covered = [_logical_rect(page, child) for child in panel.findChildren(QtWidgets.QWidget)
-               if child.isVisible()]
-    rect = _logical_rect(page, panel)
-    samples = 0
-    mismatched: list[tuple[int, int, str]] = []
-    for y in range(rect.top() + 2, rect.bottom(), 7):
-        for x in range(rect.left() + 2, rect.right(), 7):
-            if any(box.contains(QtCore.QPoint(x, y)) for box in covered):
-                continue
-            samples += 1
-            color = image.pixelColor(int(x * ratio), int(y * ratio))
-            if color != expected:
-                mismatched.append((x, y, color.name()))
-    assert samples >= 200, f"取样点只有 {samples} 个 —— 这条已经空转，判据落不到面板自己的底上"
-    assert not mismatched, (
-        f"浮层覆盖区有 {len(mismatched)} / {samples} 个取样点不是面板底色 "
-        f"{expected.name()}，露出来的是底下表格的东西（前 3 个点：{mismatched[:3]}）")
+
+    for shape in ("窄档浮层", "宽档让位"):
+        if shape == "窄档浮层":
+            window.resize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        else:
+            window.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+            page.tree_panel.expand()      # 展开左树 ⇒ 四件常驻件放不下 ⇒ 右栏让位成浮层
+        _settle(qapp)
+        assert panel._is_overlay(), f"用例前提：{shape} 这一档右栏得是浮层形状，否则量的是页面自己的底"
+        panel.open_overlay()
+        _settle(qapp)
+        assert panel.isVisible() and panel.width() == tier.OVERLAY_WIDTH, \
+            f"用例前提：{shape} 下右栏真的开着：w={panel.width()}"
+
+        image = page.grab().toImage()
+        ratio = image.width() / page.width()      # 高 DPI 下 grab 给的是设备像素
+        covered = [_logical_rect(page, child) for child in panel.findChildren(QtWidgets.QWidget)
+                   if child.isVisible()]
+        rect = _logical_rect(page, panel)
+        samples = 0
+        mismatched: list[tuple[int, int, str]] = []
+        for y in range(rect.top() + 2, rect.bottom(), 7):
+            for x in range(rect.left() + 2, rect.right(), 7):
+                if any(box.contains(QtCore.QPoint(x, y)) for box in covered):
+                    continue
+                samples += 1
+                color = image.pixelColor(int(x * ratio), int(y * ratio))
+                if color != expected:
+                    mismatched.append((x, y, color.name()))
+        assert samples >= 200, \
+            f"{shape}：取样点只有 {samples} 个 —— 这条已经空转，判据落不到面板自己的底上"
+        assert not mismatched, (
+            f"{shape}：浮层覆盖区有 {len(mismatched)} / {samples} 个取样点不是面板底色 "
+            f"{expected.name()}，露出来的是底下表格的东西（前 3 个点：{mismatched[:3]}）")
+        panel.close_overlay()
+        _settle(qapp)

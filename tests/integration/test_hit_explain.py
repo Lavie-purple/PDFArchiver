@@ -221,7 +221,18 @@ def _body_row(page) -> int:
 
 def test_每条命中行尾挂的是后端后缀_界面不自己拼(window, corpus, qapp) -> None:
     """同一个数的第二个出处就是漂移的起点：每行必须逐字等于 `rows()` 那句 + `" · "` +
-    `SearchResult.suffix(hit)`，界面只做这一个拼接动作，不许另写一版措辞。"""
+    `SearchResult.suffix(hit)`，界面只做这一个拼接动作，不许另写一版措辞。
+
+    **轮五十九 ①甲** 之后比对的对象是「带证据的那一子集」：这一栏不再逐行列文件名 / 路径 /
+    元数据的命中，所以 `compared` 不再等于 `len(result.hits)`。谁该在场由
+    `test_ui_hits.py::test_右栏只列带页码与片段的命中_其余通道收成一行小结` 钉，这条只管
+    **在场的那几行有没有逐字等于后端出口** —— 两向都钉住才封得住"界面偷偷改措辞"。
+    子集取自后端属性 `Hit.carries_evidence`（与界面同一个判据，不在测试里另数一遍），
+    顺序仍可比：`hits` 按 `FIELD_WEIGHT[field]` 排（= `in_fields` 的分组顺序），过滤不改变相对次序。
+    坏法注入实测（2026-11-03，`.probe_work/r59_inject4.py`）：把界面那句拼接改成自己写的
+    「·（相关度 {score:.2f}）」⇒ 红在第 0 条文案比对（两边读数逐字并排印出来）；把 `_show_hits`
+    的过滤摘掉 ⇒ 红在「面板 4 行命中 vs 后端带证据的 2 条（全部命中 4 条）」那条计数。
+    """
     page = _page_at(window, qapp)
     page.search_input.setText("保留期限")
     _run_search(page, qapp)
@@ -231,19 +242,16 @@ def test_每条命中行尾挂的是后端后缀_界面不自己拼(window, corp
     assert [h.doc.id for h in result.hits], "用例前提：同一条查询在服务层也得有命中"
     # 界面的分组顺序与 `rows()` 一一对应（`_show_hits` 逐个 zip），所以按下标比即可。
     lines = result.rows()
-    hits = iter(result.hits)
-    compared = 0
-    for i in range(page.hit_list.count()):
-        item = page.hit_list.item(i)
-        if not (item.flags() & QtCore.Qt.ItemFlag.ItemIsSelectable):
-            continue                      # 分组标题，没有对应的 Hit
-        hit = next(hits)
-        expected = f"{lines[compared]} · {result.suffix(hit)}"
+    evidence = [(hit, line) for hit, line in zip(result.hits, lines) if hit.carries_evidence]
+    assert evidence, "用例前提：这批语料里得有一条带证据的命中，否则整条比对落在空表上"
+    rows = [page.hit_list.item(i) for i in range(page.hit_list.count())
+            if page.hit_list.item(i).flags() & QtCore.Qt.ItemFlag.ItemIsSelectable]
+    assert len(rows) == len(evidence), \
+        f"面板 {len(rows)} 行命中 vs 后端带证据的 {len(evidence)} 条（全部命中 {len(result.hits)} 条）"
+    for compared, (item, (hit, line)) in enumerate(zip(rows, evidence)):
+        expected = f"{line} · {result.suffix(hit)}"
         assert item.text() == expected, \
             f"第 {compared} 条命中的行文案与后端出口不一致：\n  面板 {item.text()!r}\n  后端 {expected!r}"
-        compared += 1
-    assert compared == len(result.hits), \
-        f"面板 {compared} 行命中 vs 后端 {len(result.hits)} 条 —— 有行没对上"
 
     # 后缀真的在场：正文那行必须以相关度读数收尾（真读数或「≈0」，不许只有 `rows()` 前半句）。
     text = page.hit_list.item(_body_row(page)).text()

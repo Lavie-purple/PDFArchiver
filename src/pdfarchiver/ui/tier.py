@@ -50,6 +50,17 @@ AGENTS.md「禁止同类问题逐个打补丁 —— 发现一类先问还有哪
 `objectName="floatPanel"`，底色交回 `theme.py`（与 `treeRail` 同族，取 `card_bg`）：
 **这一处不写 border** —— 轮四十二 ⑰ 已经定过"树常驻在 FloatablePanel 里，外面再描一圈就是双重框"，
 宽档的常驻列和窄档的浮层共用这一个 `QWidget`，描边就同时描给了常驻列。
+
+轮五十九 ②甲 把 S1 右栏改回**宽档贴边**（用户红框 #2 那句"右侧框选的内容和左侧的一致"背后
+是同一个形状问题：420px 的浮层盖在表格上，被盖住的正是它自己抄的那一列）。这一改撞上
+**D-040** 那条算式的账 —— 原式 `236 + 480 + 360 = 1076` 写在 **D-066** 之前，没数过后来那根
+48px 的轨：轨在展开态也留在场（它就是那颗收回的把手），所以"轨 + 树 + 中栏下限 + 右栏"
+真正要 1,124px，而默认窗口的页面只有 1,099。三条下限（480 / 360 / 236）一条都不许动，
+那就按 **D-040** 自己那句话办：**必须且只牺牲右栏**。实现是面板上的 `sacrificial` 身份 +
+`sync_tier` 里一次"常驻需求算不算得下"的核算（`_resident_demand`，宽度全部从面板现状读，
+不写第二个 1,124）：算不下时那一栏自己变成 420px 浮层（`tight`），算得下时贴边常驻。
+左树因此永远不让位 —— 它是 **D-039** 点名要在 1024 档收起的那一栏，收起的是它自己那根轨，
+不是它守的分类。
 """
 from __future__ import annotations
 
@@ -89,7 +100,11 @@ class FloatablePanel(QtWidgets.QWidget):
     只在 tooltip 里有字，却一直占着一格高 —— 用户红框 #1 的空带）。
 
     `collapsible=True`（**D-066** / ⑮，只对"带条的常驻列"生效）把宽档的起始形状改成条：
-    形状只有 `(narrow, collapsed)` 两个输入，全走 `_apply_shape()` 这一个出口。
+    形状只有 `(narrow, collapsed, tight)` 三个输入，全走 `_apply_shape()` 这一个出口。
+
+    `sacrificial=True`（**D-040**「必须且只牺牲右栏」那一栏）认领"页宽不够所有常驻件同时在场
+    时让位"这件事：`sync_tier` 每一次核算出来放不下，就把这一栏当窄档处理（`tight`），
+    别的栏不动。让位判定只有一个出口，不在每屏各写一遍"我这栏该不该贴边"。
     """
 
     closed = QtCore.Signal()
@@ -97,7 +112,8 @@ class FloatablePanel(QtWidgets.QWidget):
     def __init__(self, host: QtWidgets.QWidget, title: str, *,
                  column_width: int, strip_label: str = "",
                  overlay_width: int = OVERLAY_WIDTH,
-                 docked: bool = True, collapsible: bool = False) -> None:
+                 docked: bool = True, collapsible: bool = False,
+                 sacrificial: bool = False) -> None:
         super().__init__()
         self.host = host
         self._title = title
@@ -107,6 +123,9 @@ class FloatablePanel(QtWidgets.QWidget):
         # 收起态只在"带条的常驻列"上说得通：没有条就没有把手，非常驻列本来就是浮层。
         self.collapsible = bool(collapsible and docked and strip_label)
         self.collapsed = self.collapsible
+        # 只有本来就常驻的栏才谈得上"被牺牲"（非常驻栏两档都是浮层，没有可让的槽）。
+        self.sacrificial = bool(sacrificial and docked)
+        self.tight = False
         # `setFixedWidth` 同时改 min 和 max，回宽档要恢复的就是这两个默认值。这里记下构造时
         # 的默认上限，而不是硬写 `QWIDGETSIZE_MAX` —— PySide6 6.8 的 `QtWidgets` 里**没有**
         # 这个常量（实测 AttributeError），而它一旦被写进一个 Qt 虚函数调用链里，异常会被
@@ -180,11 +199,20 @@ class FloatablePanel(QtWidgets.QWidget):
         self.close_button.setVisible(on)
 
     def _is_overlay(self) -> bool:
-        """此刻是不是以浮层形状活着（非常驻列恒是；常驻列只在窄档是）。"""
-        return not self.docked or bool(self.narrow)
+        """此刻是不是以浮层形状活着（非常驻列恒是；常驻列只在窄档与让位时是）。
+
+        浮层判定只许有这一个出口：`narrow or tight` 的合并写法散进 `_apply_shape` /
+        `open_overlay` / `close_overlay` 就是 **D-040** 第三条后果（同一份判定抄两处），
+        漏改一处会出现"形状是浮层、出口却按常驻列早退"那种关不掉的面板。
+        """
+        return not self.docked or bool(self.narrow) or self.tight
 
     def _wants_strip(self) -> bool:
-        """条在不在场：窄档必须在（它是浮层唯一的入口）；宽档只有可收栏留着当把手。"""
+        """条在不在场：窄档必须在（它是浮层唯一的入口）；宽档只有可收栏留着当把手。
+
+        让位（`tight`）不算这里：那一栏没有条，让位时它是从常驻列直接变浮层的，
+        入口是页面上那排选中/命中，不是一根新的轨（**D-040**：只牺牲右栏，不再加一件东西）。
+        """
         return self.strip is not None and (bool(self.narrow) or self.collapsible)
 
     def _strip_hint(self) -> str:
@@ -225,9 +253,9 @@ class FloatablePanel(QtWidgets.QWidget):
             self._apply_shape()
 
     def _apply_shape(self) -> None:
-        """把 `(narrow, collapsed)` 这一对状态落成正好一种形状 —— 唯一出口。
+        """把 `(narrow, tight, collapsed)` 这一组状态落成正好一种形状 —— 唯一出口。
 
-        三个分支互斥，所以"切档"与"收/放"走的是同一段代码：各写一遍就是 **D-040**
+        三个分支互斥，所以"切档""让位"与"收/放"走的是同一段代码：各写一遍就是 **D-040**
         第三条后果（同一份读数抄两处）的老路，而且槽宽算式会跟着漂。
         """
         if self.strip is not None:
@@ -235,7 +263,8 @@ class FloatablePanel(QtWidgets.QWidget):
             self.strip_button.setToolTip(self._strip_hint())
             # 箭头跟着形状翻：收起/窄档朝右（点开它），宽档展开态朝左（点它收回）。
             self.strip_button.setText(self._rail_text())
-        if self.narrow:
+        if self._is_overlay():
+            # 窄档与"让位的右栏"共用这一支：都是摘出 splitter、定宽 420、默认关、带「✕」。
             # PySide6 6.8 的 QSplitter 没有 removeWidget；`setParent(host)` 本身就会经
             # ChildRemoved 把它从 splitter 里摘掉（实测 count 3→2）。
             if self.parent() is not self.host:
@@ -268,29 +297,56 @@ class FloatablePanel(QtWidgets.QWidget):
         self._apply_shape()
         return True
 
+    def set_tight(self, tight: bool) -> bool:
+        """让位（**D-040**「只牺牲右栏」）：宽档但常驻需求算不下 → 这一栏变浮层。
+
+        返回是否真的变了，与 `set_narrow` 同一套理由：没变就不该重推 splitter 尺寸。
+        只有 `sacrificial` 的栏会被调用；非让位栏即使被调也当场返回 False，
+        这样"谁可以让位"只有 `sacrificial` 一个声明处。
+
+        让位前就开着的那一栏**让位之后仍然开着**（收成浮层贴在右沿）：用户正在读它，
+        形状变了却把内容变没，等于"点一下别处的按钮，我看的这一栏蒸发了"。
+        与 `set_narrow` 的区别正在这里 —— 换档是窗口宽度的事（用户拖窗口，屏幕整体重排），
+        让位是这一栏自己的事（用户展开左树，只有这一栏受影响）。
+        """
+        if not self.sacrificial or tight == self.tight:
+            return False
+        was_open = self.isVisible()
+        self.tight = tight
+        self._apply_shape()
+        if tight and was_open:
+            self.open_overlay()
+        return True
+
     def expand(self) -> None:
         """宽档把这一栏放回 splitter 当 236px 常驻列（**D-040** 原本的宽档形状）。"""
-        if not self.collapsible or self.narrow or not self.collapsed:
+        if not self.collapsible or self._is_overlay() or not self.collapsed:
             return
         self.collapsed = False
         self._apply_shape()
         self._push_sizes()
 
     def collapse(self) -> None:
-        if not self.collapsible or self.narrow or self.collapsed:
+        if not self.collapsible or self._is_overlay() or self.collapsed:
             return
         self.collapsed = True
         self._apply_shape()
         self._push_sizes()
 
     def _push_sizes(self) -> None:
-        """收/放之后把 splitter 各槽推回这一档该有的宽度。
+        """收/放之后把这一档该有的形状重算一遍 —— 走的是 `sync_tier` 那同一个出口。
 
-        面板自己推：槽宽算式在 `_tier_sizes` 一处，让每屏再连一个信号去调它 = 第二个口径。
+        面板自己推：槽宽与"谁该让位"的算式各只有一处（`_tier_sizes` / `_resident_demand`），
+        让每屏再连一个信号去调它们 = 第二个口径。收/放会改变常驻需求（236 与 0 之差），
+        所以这里必须连让位判定一起重跑，不能只推尺寸 —— 否则"展开左树之后右栏还占着
+        一槽"会把中栏压到 **D-040** 的 480px 下限以下。
         """
         if self._splitter is None or self.host.width() <= 0:
             return
         panels = [p for p in self.host.findChildren(FloatablePanel) if p.docked]
+        sync_tier(self._splitter, panels, self.host.width())
+        # 收/放本身还要再推一次：`sync_tier` 只在**真的换档/换让位状态**时推尺寸，
+        # 那是为了让用户手工拖过的 splitter 比例不被每一次 resize 盖掉。
         self._splitter.setSizes(_tier_sizes(self._splitter, panels, self.host.width()))
 
     def set_strip_dot(self, has_content: bool) -> None:
@@ -332,7 +388,7 @@ class FloatablePanel(QtWidgets.QWidget):
         """条上那颗按钮：窄档仍是浮层入口（D-040 原样，出口是浮层自己的「✕」）；
         宽档的可收栏拿它当"收/放"把手 —— 点一下展开成常驻列，再点收回成条（**D-066**）。
         """
-        if self.docked and not self.narrow:
+        if not self._is_overlay():
             if self.collapsed:
                 self.expand()
             else:
@@ -341,9 +397,9 @@ class FloatablePanel(QtWidgets.QWidget):
         self.open_overlay()
 
     def open_overlay(self) -> None:
-        if self.docked and not self.narrow:
-            # 宽档没有"浮层"这一说：可收栏的"开"就是展开成常驻列，不可收的常驻列
-            # 本来就开着 —— 与原来的早退等价。
+        if not self._is_overlay():
+            # 宽档的常驻列没有"浮层"这一说：可收栏的"开"就是展开成常驻列，
+            # 不可收的常驻列本来就开着 —— 与原来的早退等价。让位的那一栏走下面（它是浮层）。
             self.expand()
             return
         # findChildren 只找得到已经挂到 host 上的浮层（常驻宽档时它们是 splitter 的子），
@@ -359,11 +415,12 @@ class FloatablePanel(QtWidgets.QWidget):
         """常驻列不可关（与 `open_overlay()` 对称地早退）：误调用一次就把常驻列收起且
         **再也回不来** —— `set_narrow()` 只在真的换档时才 `setVisible(True)`。
         宽档要收这一栏走的是条上那颗按钮（`collapse()`），不是这颗「✕」。
+        让位（`tight`）的那一栏不在此列：它已经是浮层形状，「✕」就是它的出口。
 
         真正关掉浮层时发 `closed`：调用方（S1 右栏）据此记住"用户亲手关了"，
         后续选中文档不再自动把它唤出来。
         """
-        if self.docked and not self.narrow:
+        if not self._is_overlay():
             return
         self.setVisible(False)
         self.closed.emit()
@@ -377,15 +434,41 @@ def sync_tier(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],
     常驻栏凭空摘走（实测过：窗口没 resize 前页面就布局了一轮 0 宽）。
     `docked=False` 的面板不吃档位（`set_narrow` 恒 False），但 `place()` 照走 ——
     它开着的时候窗口变宽变窄都得跟着贴右沿。
+
+    档位之外还有第二次核算（**D-040**「必须且只牺牲右栏」，轮五十九 ②甲）：宽档里如果
+    所有常驻件同时在场会把中栏压到 `CENTER_MIN_WIDTH` 以下，那让位的就是 `sacrificial`
+    那一栏 —— 左树永远不让（**D-039** 点名收起的是它自己，收起的方式是收成那根轨）。
     """
     if host_width <= 0:
         return
     narrow = host_width < THREE_COLUMN_MIN_WIDTH
     switched = [panel.set_narrow(narrow) for panel in panels]
+    tight = not narrow and host_width < _resident_demand(panels) + CENTER_MIN_WIDTH
+    for panel in panels:
+        if panel.sacrificial:
+            switched.append(panel.set_tight(tight))
     if any(switched):
         splitter.setSizes(_tier_sizes(splitter, panels, host_width))
     for panel in panels:
         panel.place()
+
+
+def _resident_demand(panels: list[FloatablePanel]) -> int:
+    """所有常驻件同时在场要吃掉的宽度（不含中栏）：在场的轨 + 每一栏展开时的定宽。
+
+    宽度全从面板自己读（`collapsible` / `collapsed` / `column_width`），这里不写死一个
+    "1,124" —— 那种数一旦与 `LEFT_COLUMN_WIDTH` 分家就是第二个口径，改一处漏一处。
+    已收成条的栏只贡献那根轨（48px），展开的栏贡献整列（236 / 360）。
+    """
+    total = 0
+    for panel in panels:
+        if not panel.docked:
+            continue
+        if panel.strip is not None and panel.collapsible:
+            total += TREE_STRIP_WIDTH
+        if not panel.collapsed:
+            total += panel.column_width
+    return total
 
 
 def _tier_sizes(splitter: QtWidgets.QSplitter, panels: list[FloatablePanel],

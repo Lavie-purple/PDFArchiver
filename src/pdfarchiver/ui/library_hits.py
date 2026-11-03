@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from pdfarchiver.ui.empty_state import make_hint, sync_hint
 from pdfarchiver.ui.library_rows import DOC_ID_COLUMN, detail_lines
 from pdfarchiver.ui.semantic_state import absent_or_original, apply_state
 from pdfarchiver.ui.tier import RIGHT_COLUMN_WIDTH, FloatablePanel
@@ -60,12 +61,14 @@ class LibraryHitsMixin:
         # 不复制内容**。原先独占这一栏的文档详情留在**同一栏的下半部**：它是全站唯一显示
         # 单文档四种状态（解析/正文/OCR/索引）的地方，而 §S2 甲的顶栏与底栏没有元数据区，
         # 没有一个"已确认的位置"可搬 —— 这条差量与理由记在 **D-052**。
-        # 轮四十二 ⑭：右栏不再常驻占一栏（docked=False），两档都是浮层、默认关 ——
-        # 搜索命中或选中文档时才唤出；用户按 ✕ 关掉后，选中文档不再自动唤出
-        # （`_right_dismissed`），下一次搜索出新内容才重开。`_panels` 里仍留它：
-        # `sync_tier` 对它只走 `place()`（贴右沿），不吃档位。
+        # 轮四十二 ⑭ 把它改成两档都是浮层；轮五十九 ②甲 改回**宽档贴边**：浮层盖住的正好
+        # 是它自己抄的那一列（用户红框 #2 那处"右侧和左侧一致"）。`sacrificial=True` 认领
+        # **D-040**「必须且只牺牲右栏」—— 页宽不够"轨 + 展开的树 + 中栏下限 + 右栏"同时在场
+        # 时（默认窗口 1,099 < 1,124），是这一栏变浮层，不是把三条下限一起放宽。
+        # 内容上它也不再是第二个结果列表：只有带页码与片段的命中（正文 / 语义）才列在这里，
+        # 其余通道归成后端的一行小结（`SearchResult.collapsed_counts_line()`，轮五十九 ①甲）。
         self.right_panel = FloatablePanel(self, "命中面板（当前查询）",
-                                          column_width=RIGHT_COLUMN_WIDTH, docked=False)
+                                          column_width=RIGHT_COLUMN_WIDTH, sacrificial=True)
         self._right_dismissed = False
         self.right_panel.closed.connect(self._on_right_closed)
 
@@ -88,6 +91,23 @@ class LibraryHitsMixin:
         # 默认不占位：建来是隐藏的，`_update_ocr_hint` 决定它出不出现。
         self.ocr_hint_band.setVisible(False)
         self.right_panel.body.addWidget(self.ocr_hint_band)
+
+        # 栏目标题（轮五十九 ①甲）：把这一栏的**内容契约**写在屏幕上 ——
+        # 「表格里看不到的东西才进这一栏」。用户问的正是"这块区域显示什么内容"。
+        hit_title = QtWidgets.QLabel("命中证据")
+        hit_title.setObjectName("sectionTitle")
+        hit_title.setToolTip(
+            "只列带页码与正文片段的命中（正文 / 语义）—— 中栏表格里看不到的那三样。\n"
+            "只按文件名 / 路径 / 元数据命中的那几路收成下面一行小结，不逐行重抄表格。")
+        self.right_panel.body.addWidget(hit_title)
+
+        # ⑱ 全站空态规则（**D-066**）的唯一出口。这一栏以前不归它管 —— 两档都是浮层、默认关着，
+        # 「隐藏的列表」按定义不在场；轮五十九 ②甲 把它改成宽档常驻之后它**开局就在屏幕上且是空的**，
+        # 于是当场归管（全量回归 2026-11-03 逐字红在「文档库（library）的 hit_list」）。
+        self.hit_hint = make_hint(
+            "还没有命中：在上方输入关键词后点「搜索」，这里列的是带页码与正文片段的那些"
+            "（只按文件名 / 路径命中的那几路收成一行小结，不重抄表格）。", self.right_panel)
+        self.right_panel.body.addWidget(self.hit_hint)
 
         self.hit_list = QtWidgets.QListWidget()
         # 命中行是"整句片段"，必须折行；折行就意味着行高不齐 —— 这**不打犯** D-040 的
@@ -173,6 +193,7 @@ class LibraryHitsMixin:
         self.hit_list.clear()
         self.jump_btn.setEnabled(False)
         self.jump_btn.setText("跳到该页 → S2")
+        sync_hint(self.hit_list)
 
     # ---- 情境提示条（轮三十六 甲 · 乙）---------------------------------------
 
@@ -188,32 +209,49 @@ class LibraryHitsMixin:
         self.ocr_hint_band.setVisible(show)
 
     def _show_hits(self, result) -> None:
-        """§S1 甲 那一栏：把**当前查询**的命中按通道分组列出来，每条带页码与片段。
+        """右栏只列**带增量的命中**：有页码、有正文片段的那几路（正文 / 语义）。
 
-        每行的文案取后端出口 `SearchResult.rows()`，界面不重拼一遍 —— **ISSUES I60**
+        判据是后端的一个属性 `Hit.carries_evidence`，界面不复述它（**轮五十九 ①甲**）：
+        文件名 / 路径 / 元数据三路的行文案就是中栏那一格自己（`rows()` 对非正文通道
+        退回 `hit.doc.path`），逐行列进右栏等于把同一份数据画两遍 —— 用户 2026-11-03
+        红框 #2 点名的"右侧和左侧一致"正是这里。这三路收成
+        `SearchResult.collapsed_counts_line()` 的**一行**小结，计数与状态栏同源。
+
+        每行文案取后端出口 `SearchResult.rows()`，界面不重拼一遍 —— **ISSUES I60**
         那条"格式化只有后端一个 owner"在这里同样成立（`rows()` 里已经写好了
-        「第 N 页」/ 无页码时改显通道名 / 正文命中带出处，正是线框点名的三样）。
+        「第 N 页」/ 正文命中带出处，正是线框点名的三样）。
         分组顺序按 `criteria.in_fields`（用户勾的那几条），空组不占一行 ——
         未装模型时语义那一组因此整组不在场，符合线框「不是灰掉、不是空表」。
         组头不写数字：计数是状态栏那一行的口径（`counts_by_field`），这里再写一份
         就是同一个数的第二个出处。
 
         「为什么被找到」的**行内后缀**同样取后端出口 `SearchResult.suffix(hit)`（轮三十七 甲）：
-        接在 `rows()` 那句的行尾、一个「 · 」分隔 —— 界面只做拼接，不自己拼一句"为什么"
-        （**ISSUES I60** 那族：格式化只有后端一个 owner）。页码与出处 `rows()` 行首已带，
-        后缀不重复，所以这条拼接就是全部。
+        接在 `rows()` 那句的行尾、一个「 · 」分隔 —— 界面只做拼接，不自己拼一句"为什么"。
+        页码与出处 `rows()` 行首已带，后缀不重复，所以这条拼接就是全部。
+
+        唤出条件从"有结果就开"收紧成「**有正文命中才开**」：只命中文件名时这一栏没有证据
+        可列，把一块空面板盖在表格上没有道理；选中文档行照样出详情（`_on_doc_selected`），
+        用户按过 ✕ 就不再自动唤出（`_right_dismissed`）。"开"只管浮层那一档 —— 宽档这一栏
+        是常驻的（②甲），空着的时候由 ⑱ 那句引导在场，不留一块空框。
         """
         lines = result.rows()
         self._clear_hits()
+        evidence = [(hit, line) for hit, line in zip(result.hits, lines)
+                    if hit.carries_evidence]
         for name in result.criteria.in_fields:
-            group = [(hit, line) for hit, line in zip(result.hits, lines) if hit.field == name]
+            group = [(hit, line) for hit, line in evidence if hit.field == name]
             if not group:
                 continue
             self._add_group(group[0][0].field_label, name in result.truncated_fields)
             for hit, line in group:
                 self._add_hit_row(f"{line} · {result.suffix(hit)}",
                                   int(hit.doc.id or 0), hit.page_no, hit.doc.path)
-        self._open_right_panel()
+        summary = result.collapsed_counts_line()
+        if summary:
+            self._add_info_row(summary)
+        sync_hint(self.hit_list)
+        if evidence:
+            self._open_right_panel()
 
     def _show_semantic_hits(self, results: list[tuple[int, int, float]]) -> None:
         """语义命中进同一栏、同一套跳转。
@@ -235,10 +273,14 @@ class LibraryHitsMixin:
         self._open_right_panel()
 
     def _add_group(self, label: str, truncated: bool) -> None:
-        header = QtWidgets.QListWidgetItem(label + ("（已截断）" if truncated else ""))
-        # 只留 Enabled、去掉 Selectable：分组标题不是命中，点它不该让跳转按钮亮起来。
-        header.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-        self.hit_list.addItem(header)
+        self._add_info_row(label + ("（已截断）" if truncated else ""))
+
+    def _add_info_row(self, text: str) -> None:
+        """一行"不是命中"的说明（组头、通道小结共用）：不可选中，点它不该让跳转按钮亮。"""
+        item = QtWidgets.QListWidgetItem(text)
+        # 只留 Enabled、去掉 Selectable：说明行不是命中，点它不该让跳转按钮亮起来。
+        item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+        self.hit_list.addItem(item)
 
     def _add_hit_row(self, text: str, doc_id: int, page_no: int | None, path: str) -> None:
         item = QtWidgets.QListWidgetItem(text)

@@ -292,11 +292,20 @@ def test_压到地板宽度时归档表仍保住文件名与路径(window, ctx, 
 # S1 文档表视口 758／1014／2294，列宽 780 全定宽 → 文件名 454 → 文件名 1734；
 # S3 计划表视口 807／1063／2343，列宽 890 全定宽 → 目标路径 433 → 1713；
 # S4 详情表视口 807／1063／2343，列宽 966 全定宽 → 错误 337 → 1617。三档死宽都归 0。
+# **上面那三档 S1 的视口数已过期**（轮五十九 ②甲 之后右栏常驻吃掉 360）：今天同一张表实测
+# 1,024／1,280／2,560 三档视口 **778／673／1,953**，其中 1,280 那一档进了「全定宽 + 横滚」
+# （673 < 780）。S3／S4 那两张表不在 S1 那一屏，不受影响。
 STRETCHED_BY_VIEWPORT = {
     "library": ("doc_table", "文件名"),
     "archive": ("preview_table", "目标路径"),
     "operations": ("item_table", "错误"),
 }
+
+# 逐档走过的采样点（每一档都用 `resize_stepped` 步进过去，不是一次跳）：地板 → 窄档里已经有
+# 富余的那一档 → 默认设计档 → ②甲 之后 S1 重新有富余的那一档 → 再宽一档。
+# 1,120 与 1,440 不是凑数：S1 文档表（定宽合计 780）实测 1,120 视口 874（有富余）、
+# 1,360 视口 753（没有）、1,400 视口 793（有了），这两档把"同一张表在两种形状之间来回"真的走了一遍。
+ABSORB_SWEEP_WIDTHS = (MIN_WINDOW_WIDTH, 1120, DEFAULT_WINDOW_WIDTH, 1440, 1600)
 
 
 def _column_index(table: QtWidgets.QTableWidget, label: str) -> int:
@@ -320,16 +329,40 @@ def _section_sizes(table: QtWidgets.QTableWidget) -> list[int]:
 
 @pytest.mark.parametrize("page_id", sorted(STRETCHED_BY_VIEWPORT))
 def test_吸收列按视口宽运行时决定且地板档退回全定宽(window, ctx, page_id, qapp) -> None:
-    """两半各钉一头，中间一档一档走过去。
+    """两半各钉一头，中间一档一档走过去 —— **「有富余就必须吃掉富余、没富余就必须退回全定宽」
+    这一条不变量在每一档上都成立**，不是只在两头各验一次。
+
+    **轮五十九 ②甲 之后为什么改成逐档**：中栏有没有富余，从今往后不再只由窗口宽决定 ——
+    右栏贴边常驻时它吃掉 360。今天实测（空库、左树收成条、`.probe_work/r59_layout_probe.py`）：
+    1,280 档页面 1,099 = 轨 48 + 中栏 689 + 右栏 360，S1 文档表**视口 673 < 定宽合计 780**；
+    1,360 档视口 753 仍然不够，**1,400 档视口 793 才重新有富余**（吸收列回到「文件名」233px）。
+    原先这条只采两点（地板 1,024 与设计档 1,280），1,280 那一档当时必然有富余，所以它把
+    「吸收列在场」写成了那一档的常量 —— ②甲 一改就在 1,280 当场红（逐字
+    `设计档 1280px 下吸收列该落在「文件名」（第 0 列），实际吸收列是 []`）。
+    **判据一条没删、也没把 1,280 那一档摘掉**：改成按视口判形状，量的档从 2 档变 5 档。
+    这段「默认窗口里中栏要横滚」是 ②甲 的代价，记在 **ISSUES I133** 等勾选，不在这里悄悄改成绿。
 
     步进不是仪式：实测从 1000 直接 resize 到 356 时 `QHeaderView` **不重排 Stretch 列**，
     读数留着改尺寸之前的值，守卫会假绿（见上面那条归档表守卫里的同一条教训）。
 
-    - **地板档（D-039 的 1024）**：这张表一张吸收列都不许有 —— 全定宽 + 横向滚动，
-      也就是 D-040 写明的既定降级。③甲 要钉的就是这一半，防它被后续顺手消掉。
-      滚到底最后一列必须真的进视口：全定宽的前提是"滚得过去"，不是"被裁掉"。
-    - **设计档（1280）**：吸收列出现、**其余列逐列等于地板档那串宽度**（定宽列不许随拉宽漂），
-      且列宽合计吃满视口 —— 「右侧空了一块」就是这一条的反面。
+    - **有富余（视口装得下全表定宽）**：吸收列出现、**其余列逐列等于地板档那串宽度**（定宽列
+      不许随拉宽漂），且列宽合计吃满视口 —— 「右侧空了一块」就是这一条的反面。
+    - **没富余**：一张吸收列都不许有，也就是 **D-040** 写明的既定降级（**③甲** 要钉的就是这一半，
+      防它被后续顺手消掉）；且横向滚动条真的可用、滚到底最后一列真的进视口。
+    - **两种形状共用的底线**：内容列（`CONTENT_COLUMNS` 那几列）在任何一档都不许低于
+      `MIN_CONTENT_WIDTH` —— 判据「视口够不够」本身要能被坏法骗过，这一条就是被骗过时红的那条。
+    - 两种形状各至少走过一档，否则另一半的判据在空转（末尾单独钉）。
+
+    坏法注入实测（2026-11-03，`.probe_work/r59_inject7.py`，三向都在 `-k 吸收列` 上红，
+    逐字节还原校验通过）：
+    A 恒不给 Stretch（`_ViewportStretchPolicy._apply` 写死 Interactive）⇒ 三张表全红在
+      「装得下全表却没有吸收列」，逐字 `library 在窗口 1120px：视口 874px … 实际是 []`；
+    B 恒给 Stretch ⇒ library 红在「装不下全表却还挂着吸收列（列 [0]）」且读数把被压成缝的那一列
+      写在现场（`列宽 [113, 200, 86, 163, 111]`，文件名 113px），archive 红在内容列地板
+      （`目标路径 197 < 200`）—— 这一向同时证明"新增那条地板判据"不是装饰；
+    C 采样档换成 `(1120, 1440, 1600)` ⇒ archive/library 红在末尾反空转那条
+      （`这一趟 3 档只走了一种形状：有富余 [1120, 1440, 1600]／没富余 []`），operations 仍绿
+      （它那三档本来两种形状都出现）—— 所以这条守卫是**按表各算各的形状**，不是一句全局宽窄。
     """
     attr, label = STRETCHED_BY_VIEWPORT[page_id]
     # 先压到地板档，再**头一回**切进这一屏：这一趟走的是"用户把窗口缩到 1024 之后才第一次
@@ -346,39 +379,56 @@ def test_吸收列按视口宽运行时决定且地板档退回全定宽(window,
 
     table = getattr(page, attr)
     col = _column_index(table, label)
+    content_cols = [c for c in range(table.columnCount())
+                    if table.horizontalHeaderItem(c).text() in CONTENT_COLUMNS]
     floors = _section_sizes(table)
+    fixed_sum = sum(floors)
     bar = table.horizontalScrollBar()
-    assert _stretch_columns(table) == [], (
-        f"{page_id} 的表在地板档 {MIN_WINDOW_WIDTH}px 还留着吸收列（列 {_stretch_columns(table)}，"
-        f"各列宽 {floors}，视口 {table.viewport().width()}px）—— 判据没按视口算，"
-        "定宽列一旦被吃掉，被压成缝的就是内容列（ISSUES I52 那一类）")
-    assert table.viewport().width() < sum(floors), (
-        f"用例前提没了：地板档视口 {table.viewport().width()}px 已经装得下全表 {sum(floors)}px，"
-        "这条该改去量别的（D-040 的既定降级在这一档不再成立）")
-    assert bar.maximum() >= 1 and bar.isVisible(), (
-        f"1024 档超出 {sum(floors) - table.viewport().width()}px 却没有可用的横向滚动条"
-        f"（maximum={bar.maximum()}，可见={bar.isVisible()}）—— 超出部分等于被裁掉")
-    bar.setValue(bar.maximum())
-    _settle(qapp)
-    assert table.columnViewportPosition(table.columnCount() - 1) < table.viewport().width(), (
-        "滚到底也到不了最后一列 —— 全定宽不等于把那列藏起来")
+    slack_at: list[int] = []
+    tight_at: list[int] = []
 
-    _resize_stepped(window, qapp, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-    bar.setValue(0)
-    _settle(qapp)
-    wide = _section_sizes(table)
-    assert _stretch_columns(table) == [col], (
-        f"设计档 {DEFAULT_WINDOW_WIDTH}px 下吸收列该落在「{label}」（第 {col} 列），"
-        f"实际吸收列是 {_stretch_columns(table)}，各列宽 {wide}，视口 {table.viewport().width()}px")
-    kept = [(c, w) for c, w in enumerate(wide) if c != col]
-    assert kept == [(c, w) for c, w in enumerate(floors) if c != col], (
-        f"拉宽之后定宽列漂了：地板档 {floors} → 设计档 {wide} —— 吸收列之外谁也不该动")
-    assert wide[col] >= floors[col], (
-        f"「{label}」在宽档反而比地板档窄（{wide[col]} < {floors[col]}）—— 吸收列吃负数")
-    dead = table.viewport().width() - sum(wide)
-    assert dead <= 2, (
-        f"表内右侧仍空 {dead}px（视口 {table.viewport().width()}，列宽合计 {sum(wide)}）"
-        "—— 这就是用户红框点出来的那块空")
+    for width in ABSORB_SWEEP_WIDTHS:
+        _resize_stepped(window, qapp, width, MIN_WINDOW_HEIGHT)
+        bar.setValue(0)
+        _settle(qapp)
+        sizes = _section_sizes(table)
+        viewport = table.viewport().width()
+        here = (f"{page_id} 在窗口 {window.width()}px：视口 {viewport}px、列宽 {sizes}"
+                f"（地板档那串 {floors}，合计 {fixed_sum}）")
+        if viewport >= fixed_sum:
+            slack_at.append(window.width())
+            assert _stretch_columns(table) == [col], (
+                here + f" 装得下全表却没有吸收列（实际是 {_stretch_columns(table)}）—— "
+                       f"「{label}」该吃掉这段富余，右侧那块空就是这么来的")
+            kept = [(c, w) for c, w in enumerate(sizes) if c != col]
+            assert kept == [(c, w) for c, w in enumerate(floors) if c != col], (
+                here + " —— 吸收列之外谁也不该动")
+            assert sizes[col] >= floors[col], (
+                here + f"「{label}」在宽档反而比地板档窄（{sizes[col]} < {floors[col]}）—— 吸收列吃负数")
+            dead = viewport - sum(sizes)
+            assert dead <= 2, (
+                here + f" 表内右侧仍空 {dead}px —— 这就是用户红框点出来的那块空")
+        else:
+            tight_at.append(window.width())
+            assert _stretch_columns(table) == [], (
+                here + f" 装不下全表却还挂着吸收列（列 {_stretch_columns(table)}）—— 判据没按视口算，"
+                       "定宽列一旦被吃掉，被压成缝的就是内容列（ISSUES I52 那一类）")
+            assert sizes == floors, here + " 没有富余时每一列都该保持定宽，不许漂"
+            assert bar.maximum() >= 1 and bar.isVisible(), (
+                here + f" 超出 {fixed_sum - viewport}px 却没有可用的横向滚动条"
+                       f"（maximum={bar.maximum()}，可见={bar.isVisible()}）—— 超出部分等于被裁掉")
+            bar.setValue(bar.maximum())
+            _settle(qapp)
+            assert table.columnViewportPosition(table.columnCount() - 1) < viewport, (
+                here + " 滚到底也到不了最后一列 —— 全定宽不等于把那列藏起来")
+        squeezed = [(table.horizontalHeaderItem(c).text(), sizes[c])
+                    for c in content_cols if sizes[c] < MIN_CONTENT_WIDTH]
+        assert not squeezed, here + f" 内容列被压瘪（地板 {MIN_CONTENT_WIDTH}px）：{squeezed}"
+
+    assert slack_at and tight_at, (
+        f"这一趟 {len(ABSORB_SWEEP_WIDTHS)} 档只走了一种形状："
+        f"有富余 {slack_at}／没富余 {tight_at} —— 另一半的判据在空转，"
+        "采样档要换成能同时覆盖两种形状的那几档")
 
 
 # ---------------------------------------------------------------------------

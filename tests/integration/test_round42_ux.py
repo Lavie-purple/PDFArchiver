@@ -21,7 +21,9 @@ from PySide6 import QtCore, QtWidgets
 from pdfarchiver.db.models import Document
 from pdfarchiver.fs.identity import identity_key
 from pdfarchiver.services.bootstrap import AppContext
-from pdfarchiver.ui.main_window import DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT
+from pdfarchiver.ui.main_window import (
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+)
 from pdfarchiver.ui.pages.library_page import SEARCHING_TEXT
 from tests.conftest import (
     run_search as _run_search, settle as _settle, wait_search as _wait_search,
@@ -105,22 +107,36 @@ def test_筛选区默认收起_加条件自动展开_手动收放有效(window, 
 
 # —— 标题行乙：浮层标题行整行删除 ——————————————————————————————————————————
 
-def test_浮层没有标题行_关闭键是角标(window) -> None:
+def test_浮层没有标题行_关闭键是角标(window, qapp) -> None:
     """标题行乙：`FloatablePanel` 不再有那条从没 setText 的 `sectionTitle` 行，
     出口收成右上角一颗「✕」角标（浮层形状下才可见）。
 
     判据只认**空文本**的 sectionTitle：正文里的「文档详情」等小节标题也用同一个
     objectName，但它们有字 —— 删掉的是那条从不 setText 的头部空行。
+
+    ✕ 那半条从 **轮五十九 ②甲** 起改成"两档都过"：宽档右栏是贴边常驻列（没有"关掉整栏"
+    这回事 ⇒ 不该有出口），窄档才是浮层（必须有出口）。所以判据是
+    `close_button.isVisibleTo(panel) == panel._is_overlay()`，而不是恒为真。
+    `isVisibleTo` 只看形状（父链到面板这一段），面板自己关着不影响读数。
+    坏法注入实测（2026-11-03）：把 `_apply_overlay_style` 里那句 `setVisible(on)` 改成恒
+    `setVisible(True)` ⇒ 本条红在宽档那一档（常驻列上冒出一颗没有出口的「✕」）。
+    反过来把 `docked` 改回 `False`（②甲 摘掉）**不**红本条 —— 那种形状下「✕ 在场」与
+    `_is_overlay()` 同时为真，等式仍成立；这一条只钉"出口跟着形状走"，形状本身归
+    `test_ui_tier.py` 那四条（实测红在那边）。
     """
-    panel = window._pages["library"].right_panel
+    page = _page_at(window, qapp, "library")
+    panel = page.right_panel
     empty = [w for w in panel.findChildren(QtWidgets.QLabel)
              if w.objectName() == "sectionTitle" and not w.text().strip()]
     assert empty == [], "浮层里不该再有没字的标题行 —— 留一条空行就是留一条空带"
     assert panel.close_button.text() == "✕"
-    # docked=False 的面板是**永久浮层形状**：✕ 角标常挂（`_apply_overlay_style(True)`），
-    # `isVisibleTo(panel)` 只回答"面板可见时它可不可见"——答案必须是"是"，整条链在
-    # `open_overlay()` 时才真正上屏（Qt 的 isVisible 要逐级 parent 都在显示才为真）。
-    assert panel.close_button.isVisibleTo(panel), "浮层形状下 ✕ 该随面板可见（isVisibleTo 只看形状）"
+    for shape, width in (("窄档浮层", MIN_WINDOW_WIDTH), ("宽档常驻", DEFAULT_WINDOW_WIDTH)):
+        window.resize(width, MIN_WINDOW_HEIGHT)
+        _settle(qapp)
+        shown = panel.close_button.isVisibleTo(panel)
+        assert shown == panel._is_overlay(), \
+            f"{shape}：「✕」在场={shown}，这一档的形状却是 overlay={panel._is_overlay()}" \
+            " —— 常驻列不该有出口，浮层不该没有出口"
 
 
 # —— ①② 跳转兜底 + 详情占位 ————————————————————————————————————————————

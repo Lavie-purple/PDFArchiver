@@ -225,6 +225,18 @@ class Hit:
         """正文命中的出处标签。非正文通道返回空串 —— 只有正文有两个来源可说。"""
         return BODY_SOURCE_LABELS.get(self.body_source, "") if self.field == FIELD_BODY else ""
 
+    @property
+    def carries_evidence(self) -> bool:
+        """这一条命中带不带**中栏那张表给不出**的东西（**轮五十九 ①甲** 的唯一判据）。
+
+        只有正文通道带：页码（表格五列里没有页码列）、正文片段（表格没有正文）、相关度。
+        文件名 / 路径两路的 `snippet` 就是**被匹配的那一列自己**（`_from_docs` 传的是
+        `d.name` / `d.path`），把它列进右栏等于把表格里那一格再抄一遍；元数据那路多出的
+        只有「按哪一列命中」这一句，整路归进 `SearchResult.collapsed_counts_line()` 一处，
+        不逐行重复。界面上「这一栏该不该出现」从此也只问这一个属性，不在界面里再定一次。
+        """
+        return self.field == FIELD_BODY and bool(self.page_no or self.snippet)
+
     def highlight(self) -> tuple[int, int] | None:
         """片段内的高亮区间（界面据此把片段切成 前文/命中/后文 三段）。
         定位不到时返回 None —— 不高亮，不编一个位置出来。"""
@@ -257,6 +269,33 @@ class SearchResult:
         return "、".join(f"{FIELD_LABELS[name]} {n} 行"
                          for name, n in sorted(self.counts_by_field.items(),
                                                key=lambda kv: FIELD_WEIGHT[kv[0]])) or "0 行"
+
+    def collapsed_counts_line(self) -> str:
+        """①甲（轮五十九）：不带增量的那几路收成**一行**，而不是逐行把表格抄进右栏。
+
+        判据不在这条里再定一次 —— 用的是 `Hit.carries_evidence`：一路里没有任何一条命中
+        带增量，这一整路就归进这句小结。计数取 `counts_by_field`（与状态栏那句同源，
+        界面一个新数都不算）；顺序同 `_counts_text`（按 `FIELD_WEIGHT`），两句不会各排各的。
+        元数据那路补上**命中了哪几列**（author / title 这类列名中栏没有列，但逐行显示就是
+        把手写的一格抄两遍，整路只留一处才既不失信息、也不重复）；
+        浏览（`FIELD_BROWSE`）不归这句 —— 它没有查询词，也就没有"命中理由"要说。
+        """
+        evidence = {hit.field for hit in self.hits if hit.carries_evidence}
+        parts: list[str] = []
+        # 排序键用 `.get`：`FIELD_BROWSE` 不在 `FIELD_WEIGHT` 里（它不参与"哪个通道优先"的
+        # 那套权重），拿它排一次就会当场 KeyError，而它下一行就被跳过。
+        for name, count in sorted(self.counts_by_field.items(),
+                                  key=lambda kv: FIELD_WEIGHT.get(kv[0], 0)):
+            if name == FIELD_BROWSE or name in evidence:
+                continue
+            label = FIELD_LABELS[name]
+            if name == FIELD_METADATA:
+                cols = sorted({hit.field_detail for hit in self.hits
+                               if hit.field == name and hit.field_detail})
+                if cols:
+                    label += f"（{'、'.join(cols)}）"
+            parts.append(f"{label} {count} 行")
+        return "、".join(parts) + (" —— 就在上面表格里" if parts else "")
 
     @property
     def _truncation_text(self) -> str:
